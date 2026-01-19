@@ -1,0 +1,27 @@
+[project]
+name = "slide-agent"
+version = "0.1.0"
+description = "WSI"
+requires-python = ">=3.10"
+
+dependencies = [
+    "fastapi",
+    "python-dotenv",
+    "uvicorn[standard]",
+    "openslide-python",
+    "openslide-bin",
+    "openai",
+    "openai-agents"
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "httpx",
+    "ruff",
+    "black",
+]
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
