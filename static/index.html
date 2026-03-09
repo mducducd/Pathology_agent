@@ -4,135 +4,198 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>WSI Agent Prototype</title>
-  <link rel="stylesheet" href="/static/styles.css" />
+  <link rel="icon" type="image/svg+xml" href="/static/assets/STAMP_logo.svg?v=1" />
+  <link rel="shortcut icon" href="/static/assets/STAMP_logo.svg?v=1" />
+  <link rel="stylesheet" href="/static/styles.css?v=39" />
 </head>
 <body>
   <header class="topbar">
-    <div class="title">
-      <h1>Pathology Agent</h1>
-      <div class="subtitle">Drag & drop a slide (or MIRAX folder/zip), upload with progress, then watch navigation & ROIs.</div>
+    <div class="title brand-title">
+      <img class="brand-logo" src="/static/assets/STAMP_logo.svg" alt="STAMP logo" />
+      <h1>
+        <span class="brand-word">Pathology</span>
+        <span class="brand-accent">Agent</span>
+      </h1>
     </div>
   </header>
 
   <main class="wrap">
-    <section class="card">
-      <div class="card-head">
-        <h2>1) Upload</h2>
-        <div id="mode-pill" class="pill pill-idle">No files</div>
-      </div>
-
-      <div id="dropzone" class="dropzone" tabindex="0" aria-label="Drop files here">
-        <div class="dropzone-inner">
-          <div class="dz-title">Drop files or folders here</div>
-          <div class="dz-hint">
-            <b>Standard slides</b>: .svs / .tif / .tiff / .ndpi (single file)<br/>
-            <b>MIRAX</b>: either drop/select the MIRAX folder (Chrome/Edge), or upload a .zip containing .mrxs/.mrsx + data directory
+    <section class="workbench">
+      <aside class="panel panel-left">
+        <div class="card panel-card sticky-card">
+          <div class="card-head">
+            <h2>Upload & Run</h2>
+            <div id="mode-pill" class="pill pill-idle">No files</div>
           </div>
 
-          <div class="dz-actions">
-            <button id="btn-pick-files" type="button">Choose file(s)</button>
-            <button id="btn-pick-folder" type="button">Choose folder (MIRAX)</button>
-            <button id="btn-pick-zip" type="button">Choose zip (MIRAX)</button>
-            <button id="btn-clear" type="button" class="ghost">Clear</button>
+          <div id="dropzone" class="dropzone" tabindex="0" aria-label="Drop files here">
+            <div class="dropzone-inner">
+              <div class="dz-title">Drop files or folders here</div>
+              <div class="dz-actions">
+                <div class="dz-actions-picker">
+                  <div class="upload-action-shell">
+                    <button id="upload-action-trigger" type="button" class="picker-list upload-action-trigger" aria-haspopup="listbox" aria-expanded="false">
+                      Select upload action
+                    </button>
+                    <div id="upload-action-menu" class="upload-action-menu" role="listbox" hidden>
+                      <button type="button" class="upload-action-option" data-upload-action="files">Choose file(s)</button>
+                      <button type="button" class="upload-action-option" data-upload-action="folder">Choose folder (MIRAX)</button>
+                      <button type="button" class="upload-action-option" data-upload-action="zip">Choose zip (MIRAX)</button>
+                    </div>
+                  </div>
+                  <button id="btn-clear" type="button" class="ghost icon-btn icon-clear" aria-label="Clear selected files" title="Clear selected files">
+                    <span aria-hidden="true">×</span>
+                  </button>
+                </div>
+              </div>
+              <div id="upload-action-tip" class="upload-action-tip" hidden></div>
+
+              <input id="file-input" type="file" multiple
+                     accept=".svs,.tif,.tiff,.ndpi,.mrxs,.mrsx,.zip" hidden />
+              <input id="folder-input" type="file" multiple webkitdirectory hidden />
+              <input id="zip-input" type="file" accept=".zip" hidden />
+            </div>
           </div>
 
-          <input id="file-input" type="file" multiple
-                 accept=".svs,.tif,.tiff,.ndpi,.mrxs,.mrsx,.zip" hidden />
-          <input id="folder-input" type="file" multiple webkitdirectory hidden />
-          <input id="zip-input" type="file" accept=".zip" hidden />
-        </div>
-      </div>
+          <div class="filelist-wrap">
+            <div class="filelist-head">
+              <div class="filelist-title">Selected files</div>
+              <div id="filelist-meta" class="muted filelist-meta">—</div>
+            </div>
+            <ul id="filelist" class="filelist"></ul>
+            <div id="validation" class="validation"></div>
+          </div>
 
-      <div class="filelist-wrap">
-        <div class="filelist-head">
-          <div class="filelist-title">Selected files</div>
-          <div id="filelist-meta" class="muted">—</div>
-        </div>
-        <ul id="filelist" class="filelist"></ul>
-        <div id="validation" class="validation"></div>
-      </div>
+          <div class="formgrid">
+            <div class="field">
+              <label>Agent</label>
+              <select id="agent-select" class="picker-list agent-picker" aria-label="Agent selector">
+                <option value="tile">Tile Selector</option>
+                <option value="aml">AML Detector</option>
+                <option value="wsi" selected>General WSI Agent</option>
+              </select>
+            </div>
 
-      <div class="formgrid">
-        <div class="field">
-          <label>Agent</label>
-          <div class="radio-row">
-            <label class="radio"><input type="radio" name="agent_type" value="msi" checked /> MSI Screener</label>
-            <label class="radio"><input type="radio" name="agent_type" value="wsi" /> General WSI Agent</label>
+            <div class="field">
+              <label>Model</label>
+              <select id="model-select" class="picker-list model-picker" aria-label="Model selector">
+                <option value="GPT-OSS-120B" selected>GPT-OSS-120B</option>
+                <option value="GLM-4.6V-FP8">GLM-4.6V-FP8</option>
+                <option value="qwen3.5-35b-a3b">qwen3.5-35b-a3b</option>
+                <option value="Qwen3.5-397B-A17B-FP8">Qwen3.5-397B-A17B-FP8</option>
+              </select>
+            </div>
+
+            <div class="field prompt-field">
+              <label>Prompt</label>
+              <textarea id="prompt" spellcheck="false"></textarea>
+              <div class="muted small">Tip: switch agent to auto-load the default prompt.</div>
+            </div>
+
+            <div class="field actions run-actions">
+              <button id="btn-start" type="button" class="primary" disabled>Upload & Start run</button>
+              <div id="run-label" class="muted small"></div>
+            </div>
+          </div>
+
+          <div class="progress-wrap" id="progress-wrap" aria-hidden="true">
+            <div class="upload-anim">
+              <span class="spinner spinner-upload" aria-hidden="true"></span>
+              <div class="progress-title">Uploading slide bundle…</div>
+            </div>
+            <div id="progress-detail" class="muted small"></div>
           </div>
         </div>
+      </aside>
 
-        <div class="field">
-          <label>Prompt</label>
-          <textarea id="prompt" spellcheck="false"></textarea>
-          <div class="muted small">Tip: switch agent to auto-load the default prompt.</div>
+      <div class="col-resizer" id="resizer-left-main" role="separator" aria-label="Resize upload and slide columns" aria-orientation="vertical" tabindex="0"></div>
+
+      <section class="panel panel-main">
+        <div class="card panel-card">
+          <div class="card-head">
+            <h2>Slide Viewer</h2>
+          </div>
+
+          <div class="viewer-grid">
+            <div class="viewer-col viewer-main-left">
+              <div class="overview-head">
+                <h3>Overview</h3>
+                <span id="btn-dark-toggle" class="dark-toggle-link" role="button" tabindex="0" aria-label="Toggle dark regions" aria-pressed="false">Show dark regions</span>
+              </div>
+              <div class="muted small">Darker orange dashed box = live search. Finished ROIs stay on overview with different colors.</div>
+              <div class="img-stack">
+                <img id="overview-img" class="img" alt="Overview" hidden />
+                <canvas id="overview-canvas" class="overlay-canvas" aria-hidden="true"></canvas>
+              </div>
+              <div id="overview-empty" class="empty-state">No overview yet. Upload a slide and start a run.</div>
+              <div class="img-stack">
+                <img id="dark-img" class="img" alt="Dark regions overview" hidden />
+                <canvas id="dark-canvas" class="overlay-canvas" aria-hidden="true"></canvas>
+              </div>
+            </div>
+
+            <div class="subcol-resizer" id="resizer-viewer-split" role="separator" aria-label="Resize overview and ROIs" aria-orientation="vertical" tabindex="0"></div>
+
+            <div class="viewer-col viewer-main-right">
+              <h3>ROIs</h3>
+              <ul id="rois" class="loglist viewer-rois"></ul>
+            </div>
+          </div>
         </div>
+      </section>
 
-        <div class="field actions">
-          <button id="btn-start" type="button" class="primary" disabled>Upload & Start run</button>
-          <div id="run-label" class="muted small"></div>
-        </div>
-      </div>
+      <div class="col-resizer" id="resizer-main-right" role="separator" aria-label="Resize slide and status columns" aria-orientation="vertical" tabindex="0"></div>
 
-      <div class="progress-wrap" id="progress-wrap" aria-hidden="true">
-        <div class="progress-row">
-          <div class="progress-title">Uploading…</div>
-          <div id="progress-pct" class="muted">0%</div>
-        </div>
-        <div class="progress-bar">
-          <div id="progress-fill" class="progress-fill" style="width: 0%"></div>
-        </div>
-        <div id="progress-detail" class="muted small"></div>
-      </div>
-    </section>
+      <aside class="panel panel-right">
+        <div class="card panel-card sticky-card">
+          <div class="card-head">
+            <h2>Run Status</h2>
+            <div class="status-head-right">
+              <div id="run-loading" class="run-loading model-warn" hidden>
+                <span class="flag-dot" aria-hidden="true"></span>
+                <span id="run-state-text">Running</span>
+                <span class="spinner spinner-inline" aria-hidden="true"></span>
+              </div>
+              <div class="status-actions">
+                <button id="btn-actions" type="button" class="ghost tiny-btn actions-trigger" aria-label="Run actions" aria-haspopup="menu" aria-expanded="false">⋯</button>
+                <div id="status-actions-menu" class="status-actions-menu" role="menu" hidden>
+                  <button id="btn-restart" type="button" class="ghost tiny-btn menu-item" role="menuitem" disabled>Restart</button>
+                  <button id="btn-clear-outputs" type="button" class="ghost tiny-btn menu-item" role="menuitem" disabled>Clear outputs</button>
+                  <button id="btn-terminate" type="button" class="ghost tiny-btn terminate-btn menu-item" role="menuitem" disabled>Terminate</button>
+                </div>
+              </div>
+            </div>
+          </div>
 
-    <section class="card">
-      <div class="card-head">
-        <h2>2) Run status</h2>
-        <div id="status-pill" class="pill pill-idle">Idle</div>
-      </div>
+          <div class="status-row">
+            <div><span class="muted">Run ID:</span> <span id="run-id">—</span></div>
+            <div><span class="muted">Slide:</span> <span id="slide-name">—</span></div>
+          </div>
 
-      <div class="status-row">
-        <div><span class="muted">Run ID:</span> <span id="run-id">—</span></div>
-        <div><span class="muted">Slide:</span> <span id="slide-name">—</span></div>
-      </div>
-
-      <div class="error-box" id="error-box" hidden>
-        <div class="error-title">Error</div>
-        <pre id="error-text"></pre>
-      </div>
-
-      <div class="grid2">
-        <div>
-          <h3>Overview</h3>
-          <div class="muted small">Red box = current view (if available)</div>
-          <img id="overview-img" class="img" alt="Overview" hidden />
-          <div id="overview-empty" class="muted small">—</div>
-
-          <h3>Current view</h3>
-          <div id="current-meta" class="muted small">—</div>
-          <img id="current-img" class="img" alt="Current view" hidden />
-          <div id="current-empty" class="muted small">—</div>
+          <div class="error-box" id="error-box" hidden>
+            <div class="error-title">Error</div>
+            <pre id="error-text"></pre>
+          </div>
 
           <h3>Final report</h3>
-          <pre id="final-text" class="pre"></pre>
+          <div id="final-text" class="pre markdown-report"></div>
 
-          <h3>Reasoning</h3>
-          <pre id="reasoning-text" class="pre"></pre>
+          <div id="reasoning-section" hidden>
+            <h3>Reasoning</h3>
+            <pre id="reasoning-text" class="pre"></pre>
+          </div>
 
           <div id="report-link" class="muted small"></div>
-        </div>
 
-        <div>
-          <h3>Navigation steps</h3>
-          <ul id="steps" class="loglist"></ul>
-
-          <h3>ROIs</h3>
-          <ul id="rois" class="loglist"></ul>
+          <div class="steps-dock">
+            <h3>Navigation steps</h3>
+            <ul id="steps" class="loglist steps-log"></ul>
+          </div>
         </div>
-      </div>
+      </aside>
     </section>
   </main>
 
-  <script src="/static/app.js"></script>
+  <script src="/static/app.js?v=65"></script>
 </body>
 </html>

@@ -9,6 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, Optional, Tuple, List
 
+import openslide
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -16,9 +17,13 @@ from pydantic import BaseModel
 
 from wsi_core import (
     run_wsi_agent_for_web,
+    clear_wsi_outputs_state,
     get_public_state_snapshot,
+    OUTPUTS_ROOT_DIR,
     DEBUG_ROOT_DIR,
     REPORT_ROOT_DIR,
+    detect_dark_regions,
+    MODEL_NAME,
 )
 
 # Primary slide types OpenSlide can open directly, plus MIRAX zip bundle
@@ -26,11 +31,19 @@ ALLOWED_SLIDE_EXTS = {".svs", ".tif", ".tiff", ".ndpi", ".mrxs", ".mrsx", ".zip"
 SUPPORTED_PRIMARY_EXTS = {".svs", ".tif", ".tiff", ".ndpi", ".mrxs", ".mrsx"}
 MIRAX_EXTS = {".mrxs", ".mrsx"}
 STD_EXTS = {".svs", ".tif", ".tiff", ".ndpi"}
+ALLOWED_MODEL_NAMES = {
+    "GLM-4.6V-FP8",
+    "GPT-OSS-120B",
+    "qwen3.5-35b-a3b",
+    "Qwen3.5-397B-A17B-FP8",
+}
 
 app = FastAPI(title="WSI Agent Prototype")
 
-BASE_RUN_DIR = Path("./runs")
-BASE_RUN_DIR.mkdir(exist_ok=True)
+OUTPUTS_ROOT = Path("./outputs")
+OUTPUTS_ROOT.mkdir(exist_ok=True)
+
+BASE_RUN_DIR = OUTPUTS_ROOT
 
 STATIC_DIR = Path("./static").resolve()
 if not STATIC_DIR.exists():
@@ -39,11 +52,13 @@ if not STATIC_DIR.exists():
 
 class RunStatus(BaseModel):
     run_id: str
-    status: str               # created | uploading | pending | running | done | error
+    status: str               # created | uploading | pending | running | done | error | terminated
     created_at: datetime
     agent_type: str
+    model_name: str
     prompt: Optional[str]
     slide_filename: str       # filled after finalize
+    slide_path: Optional[str] = None
     final_output: Optional[str] = None
     reasoning_content: Optional[str] = None
     report_path: Optional[str] = None
@@ -57,6 +72,8 @@ class RunStatus(BaseModel):
 
 
 RUNS: Dict[str, RunStatus] = {}
+RUN_TERMINATE_FLAGS: Dict[str, threading.Event] = {}
+RUN_THREADS: Dict[str, threading.Thread] = {}
 
 # --- Auto-cleanup config ---
 DELETE_UPLOADS_AFTER_RUN = os.getenv("DELETE_UPLOADS_AFTER_RUN", "1").strip().lower() in {"1", "true", "yes", "y"}
@@ -64,11 +81,11 @@ DELETE_UPLOADS_AFTER_RUN = os.getenv("DELETE_UPLOADS_AFTER_RUN", "1").strip().lo
 
 def _safe_cleanup_run_upload_dir(run_id: str) -> None:
     """
-    Deletes ./runs/<run_id>/ (uploaded slide data + extracted bundles, etc.)
-    Does NOT touch REPORT_ROOT_DIR or DEBUG_ROOT_DIR.
+    Deletes ./outputs/<run_id>/uploads (uploaded slide data + extracted bundles, etc.)
+    Does NOT touch report/debug/tile folders.
     """
     try:
-        run_dir = (BASE_RUN_DIR / run_id).resolve()
+        run_dir = (BASE_RUN_DIR / run_id / "uploads").resolve()
         base_dir = BASE_RUN_DIR.resolve()
 
         # Safety: ensure run_dir is inside BASE_RUN_DIR and exists
@@ -82,6 +99,29 @@ def _safe_cleanup_run_upload_dir(run_id: str) -> None:
     except Exception as exc:
         # Never fail the run because cleanup failed
         print(f"[CLEANUP] Failed to delete upload dir for run={run_id}: {exc}")
+
+
+def _safe_cleanup_run_generated_outputs(run_id: str) -> None:
+    """
+    Delete generated output artifacts for a run, keeping uploads untouched.
+    """
+    try:
+        run_dir = (BASE_RUN_DIR / run_id).resolve()
+        base_dir = BASE_RUN_DIR.resolve()
+
+        if not str(run_dir).startswith(str(base_dir) + os.sep):
+            print(f"[CLEANUP] Refusing to delete outside base dir: {run_dir}")
+            return
+        if not run_dir.exists() or not run_dir.is_dir():
+            return
+
+        for sub in ("wsi_reports", "wsi_debug", "dark", "traces", "Selected_Tiles"):
+            p = run_dir / sub
+            if p.exists() and p.is_dir():
+                shutil.rmtree(p, ignore_errors=False)
+                print(f"[CLEANUP] Deleted generated dir for run={run_id}: {p}")
+    except Exception as exc:
+        print(f"[CLEANUP] Failed to delete generated outputs for run={run_id}: {exc}")
 
 
 def _is_safe_relpath(p: Path) -> bool:
@@ -286,9 +326,46 @@ def _validate_final_bundle(run_dir: Path) -> Tuple[Path, str]:
     return m, m.name
 
 
+def _assert_slide_openable(slide_path: Path) -> None:
+    """
+    Quick sanity check before starting the background run.
+    """
+    try:
+        slide = openslide.OpenSlide(str(slide_path))
+        try:
+            _ = slide.level_count
+            _ = slide.level_dimensions
+        finally:
+            slide.close()
+    except openslide.lowlevel.OpenSlideUnsupportedFormatError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported or missing image file: {slide_path.name}",
+        ) from exc
+    except openslide.OpenSlideError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Failed to open slide '{slide_path.name}': {exc}",
+        ) from exc
 
-def run_worker(run_id: str, slide_path: str, prompt: Optional[str], agent_type: str) -> None:
-    run = RUNS[run_id]
+
+
+def run_worker(
+    run_id: str,
+    slide_path: str,
+    prompt: Optional[str],
+    agent_type: str,
+    model_name: str,
+    terminate_event: threading.Event,
+) -> None:
+    run = RUNS.get(run_id)
+    if run is None:
+        return
+    if terminate_event.is_set() or run.status == "terminated":
+        run.status = "terminated"
+        if not run.error_message:
+            run.error_message = "Run terminated by user."
+        return
     run.status = "running"
 
     loop = asyncio.new_event_loop()
@@ -300,21 +377,48 @@ def run_worker(run_id: str, slide_path: str, prompt: Optional[str], agent_type: 
             prompt=prompt,
             agent_type=agent_type,
             run_id=run_id,
+            model_name=model_name,
         )
-        run.status = "done"
-        run.final_output = result["final_output"]
-        run.reasoning_content = result.get("reasoning_content")
-        run.report_path = result.get("report_path")
+        fatal_error: Optional[str] = None
+        if isinstance(result, dict):
+            st = result.get("state")
+            if isinstance(st, dict) and st.get("has_fatal_error"):
+                fatal_error = str(st.get("last_fatal_error") or "Unsupported or missing image file")
+            final_output = result.get("final_output")
+            if not fatal_error and isinstance(final_output, str):
+                final_output_lc = final_output.lower()
+                if (
+                    "unsupported or missing image file" in final_output_lc
+                    or "openslideunsupportedformaterror" in final_output_lc
+                ):
+                    fatal_error = "Unsupported or missing image file"
+        if fatal_error:
+            raise RuntimeError(fatal_error)
+        if terminate_event.is_set() or run.status == "terminated":
+            run.status = "terminated"
+            if not run.error_message:
+                run.error_message = "Run terminated by user."
+        else:
+            run.status = "done"
+            run.final_output = result["final_output"]
+            run.reasoning_content = result.get("reasoning_content")
+            run.report_path = result.get("report_path")
 
     except Exception as exc:
-        run.status = "error"
-        run.error_message = str(exc)
-        run.traceback = traceback.format_exc()
-        print("=== RUN ERROR ===")
-        print(run.error_message)
-        print(run.traceback)
+        if terminate_event.is_set() or run.status == "terminated":
+            run.status = "terminated"
+            if not run.error_message:
+                run.error_message = "Run terminated by user."
+        else:
+            run.status = "error"
+            run.error_message = str(exc)
+            run.traceback = traceback.format_exc()
+            print("=== RUN ERROR ===")
+            print(run.error_message)
+            print(run.traceback)
 
     finally:
+        RUN_THREADS.pop(run_id, None)
         try:
             loop.close()
         except Exception:
@@ -346,14 +450,20 @@ def make_debug_image_url(abs_path: Optional[str]) -> Optional[str]:
 @app.post("/api/runs/create")
 async def create_run(
     prompt: str = Form(""),
-    agent_type: str = Form("msi"),
+    agent_type: str = Form("wsi"),
+    model_name: str = Form(MODEL_NAME),
 ):
     agent_type_lower = agent_type.lower()
-    if agent_type_lower not in {"msi", "wsi"}:
-        raise HTTPException(status_code=400, detail="agent_type must be 'msi' or 'wsi'")
+    if agent_type_lower not in {"tile", "wsi", "aml"}:
+        raise HTTPException(status_code=400, detail="agent_type must be 'tile', 'wsi', or 'aml'")
+    if model_name not in ALLOWED_MODEL_NAMES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"model_name must be one of: {', '.join(sorted(ALLOWED_MODEL_NAMES))}",
+        )
 
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S_") + uuid.uuid4().hex[:6]
-    run_dir = BASE_RUN_DIR / run_id
+    run_dir = BASE_RUN_DIR / run_id / "uploads"
     run_dir.mkdir(parents=True, exist_ok=True)
 
     run_status = RunStatus(
@@ -361,14 +471,17 @@ async def create_run(
         status="created",
         created_at=datetime.utcnow(),
         agent_type=agent_type_lower,
+        model_name=model_name,
         prompt=prompt or None,
         slide_filename="(upload pending)",
+        slide_path=None,
         upload_count=0,
         upload_bytes=0,
         uploaded_files=[],
     )
     RUNS[run_id] = run_status
-    return {"run_id": run_id}
+    RUN_TERMINATE_FLAGS[run_id] = threading.Event()
+    return {"run_id": run_id, "model_name": model_name}
 
 
 @app.post("/api/runs/{run_id}/upload")
@@ -381,12 +494,12 @@ async def upload_one_file(
     if run is None:
         raise HTTPException(status_code=404, detail="Run not found")
 
-    if run.status in {"running", "done"}:
+    if run.status in {"pending", "running", "done", "terminated"}:
         raise HTTPException(status_code=400, detail=f"Run is already {run.status}; uploads are closed.")
     if run.status == "error":
         raise HTTPException(status_code=400, detail="Run is in error state; create a new run.")
 
-    run_dir = BASE_RUN_DIR / run_id
+    run_dir = BASE_RUN_DIR / run_id / "uploads"
     run_dir.mkdir(parents=True, exist_ok=True)
 
     raw_name = relpath.strip() or (file.filename or "upload")
@@ -417,29 +530,79 @@ async def finalize_and_start(run_id: str):
     run = RUNS.get(run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="Run not found")
-    if run.status in {"running", "done"}:
+    if run.status in {"pending", "running", "done", "terminated"}:
         raise HTTPException(status_code=400, detail=f"Run is already {run.status}.")
     if run.status == "error":
         raise HTTPException(status_code=400, detail="Run is in error state; create a new run.")
 
-    run_dir = BASE_RUN_DIR / run_id
+    run_dir = BASE_RUN_DIR / run_id / "uploads"
     if not run_dir.exists():
         raise HTTPException(status_code=400, detail="Run directory missing; nothing to finalize.")
 
     slide_path, slide_filename = _validate_final_bundle(run_dir)
+    try:
+        _assert_slide_openable(slide_path)
+    except HTTPException as exc:
+        run.status = "error"
+        run.error_message = str(exc.detail)
+        run.traceback = None
+        raise
 
     run.slide_filename = slide_filename
+    run.slide_path = str(slide_path)
     run.status = "pending"
+    terminate_event = RUN_TERMINATE_FLAGS.setdefault(run_id, threading.Event())
+    terminate_event.clear()
 
     thread = threading.Thread(
         target=run_worker,
-        args=(run_id, str(slide_path), run.prompt or None, run.agent_type),
+        args=(run_id, str(slide_path), run.prompt or None, run.agent_type, run.model_name, terminate_event),
         daemon=True,
     )
+    RUN_THREADS[run_id] = thread
     thread.start()
 
     print(f"[FINALIZE] run={run_id} primary={slide_path}")
     return {"ok": True, "run_id": run_id, "primary": slide_filename}
+
+
+@app.post("/api/runs/{run_id}/terminate")
+async def terminate_run(run_id: str):
+    run = RUNS.get(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    if run.status in {"done", "error", "terminated"}:
+        return {"ok": True, "run_id": run_id, "status": run.status}
+
+    terminate_event = RUN_TERMINATE_FLAGS.setdefault(run_id, threading.Event())
+    terminate_event.set()
+    run.status = "terminated"
+    run.error_message = "Run terminated by user."
+    run.traceback = None
+    return {"ok": True, "run_id": run_id, "status": run.status}
+
+
+@app.post("/api/runs/{run_id}/clear_outputs")
+async def clear_run_outputs(run_id: str):
+    run = RUNS.get(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    if run.status != "done":
+        raise HTTPException(status_code=400, detail="Clear outputs is only available when run is done.")
+
+    RUN_THREADS.pop(run_id, None)
+    _safe_cleanup_run_generated_outputs(run_id)
+    clear_wsi_outputs_state()
+
+    run.final_output = None
+    run.reasoning_content = None
+    run.report_path = None
+    run.error_message = None
+    run.traceback = None
+
+    return {"ok": True, "run_id": run_id, "status": run.status}
 
 
 # -----------------------------
@@ -475,10 +638,43 @@ def get_run(run_id: str):
     return {"run": run, "wsi_state": wsi_state}
 
 
+@app.get("/api/runs/{run_id}/dark_regions")
+def get_dark_regions(
+    run_id: str,
+    max_regions: int = 30,
+    threshold_pct: int = 85,
+    min_area: int = 800,
+    max_dim: int = 1024,
+):
+    run = RUNS.get(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    if not run.slide_path:
+        raise HTTPException(status_code=400, detail="Slide path not available for this run.")
+    if not os.path.exists(run.slide_path):
+        raise HTTPException(status_code=400, detail="Slide file not found (maybe cleaned up).")
+
+    result = detect_dark_regions(
+        slide_path=run.slide_path,
+        run_id=run_id,
+        max_dim=max_dim,
+        threshold_pct=threshold_pct,
+        min_area=min_area,
+        max_regions=max_regions,
+    )
+    result["image_url"] = make_debug_image_url(result.get("image_path"))
+    return result
+
+
 # Static mounts
 app.mount("/debug", StaticFiles(directory=DEBUG_ROOT_DIR), name="debug")
 app.mount("/reports", StaticFiles(directory=REPORT_ROOT_DIR), name="reports")
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+
+@app.get("/healthz")
+def healthz():
+    return {"ok": True, "service": "wsi-agent-web", "model_name": MODEL_NAME}
 
 
 @app.get("/")
@@ -488,4 +684,11 @@ def index():
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=3007, reload=True)
+    reload_enabled = os.getenv("UVICORN_RELOAD", "0").strip().lower() in {"1", "true", "yes", "y"}
+    uvicorn.run(
+        "main:app",
+        host="0.0.0.0",
+        port=3008,
+        reload=reload_enabled,
+        reload_excludes=["outputs/*", "wsi_debug/*", "wsi_reports/*"],
+    )
