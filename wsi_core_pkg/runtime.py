@@ -23,20 +23,22 @@ def run_wsi_agent_for_web(
     model_name: Optional[str] = None,
     max_turns: int = MAX_TURNS,
 ) -> Dict[str, Any]:
+    agent_type_l = (agent_type or "wsi").lower()
     set_slide_path(slide_path)
     reset_wsi_state(run_id)
+    state.AGENT_TYPE = agent_type_l
 
     if not prompt:
-        if agent_type.lower() == "tile":
+        if agent_type_l == "tile":
             prompt = DEFAULT_TILE_PROMPT
-        elif agent_type.lower() == "aml":
+        elif agent_type_l == "aml":
             prompt = DEFAULT_AML_PROMPT
         else:
             prompt = DEFAULT_WSI_PROMPT
 
-    if agent_type.lower() == "tile":
+    if agent_type_l == "tile":
         base_agent = WSITileSelectorAgent
-    elif agent_type.lower() == "aml":
+    elif agent_type_l == "aml":
         base_agent = WSIAmlDetectorAgent
     else:
         base_agent = WSIPathologyAgent

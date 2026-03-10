@@ -43,7 +43,7 @@ MAX_TURNS = 200
 ROI_TARGET_SIDE_PX = 1500
 
 TILE_SIZE_UM = 256.0
-TILE_PX = 512
+TILE_PX = 224
 MAX_GOOD_TILES = 200
 MAX_BAD_TILES = 50
 DEFAULT_MPP_UM = 0.25
@@ -60,12 +60,12 @@ os.makedirs(REPORT_ROOT_DIR, exist_ok=True)
 SELECTED_TILES_ROOT = OUTPUTS_ROOT_DIR
 os.makedirs(SELECTED_TILES_ROOT, exist_ok=True)
 
-EXAMPLE_TILES_ROOT = "/Users/narmin/Documents/Slide-Agent/Selected_Tiles"
+EXAMPLE_TILES_ROOT = os.path.abspath(os.getenv("EXAMPLE_TILES_ROOT", "./Selected_Tiles"))
 EXAMPLE_TILES_GOOD_DIR = os.path.join(EXAMPLE_TILES_ROOT, "Good_Tiles")
 EXAMPLE_TILES_BAD_DIR = os.path.join(EXAMPLE_TILES_ROOT, "Bad_Tiles")
 EXAMPLE_TILES_MAX_PER_CLASS = 7
 
-EXAMPLE_ROIS_ROOT = "/Users/narmin/Documents/Slide-Agent/Example_ROIs"
+EXAMPLE_ROIS_ROOT = os.path.abspath(os.getenv("EXAMPLE_ROIS_ROOT", "./Example_ROIs"))
 EXAMPLE_ROIS_POS_DIR = os.path.join(EXAMPLE_ROIS_ROOT, "ROI")
 EXAMPLE_ROIS_NEG_DIR = os.path.join(EXAMPLE_ROIS_ROOT, "Non_ROI")
 EXAMPLE_ROIS_MAX_PER_CLASS = 7

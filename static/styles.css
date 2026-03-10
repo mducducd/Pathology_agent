@@ -631,23 +631,6 @@ textarea:focus{
   background: linear-gradient(180deg, rgba(18,25,35,0), rgba(18,25,35,1) 36%);
 }
 
-.progress-wrap{
-  margin-top: 12px;
-  border:1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 8px 10px;
-  background: rgba(255,255,255,.02);
-}
-.upload-anim{
-  display:flex;
-  align-items:center;
-  gap:8px;
-}
-.progress-title{
-  font-size:12px;
-  color:var(--text);
-}
-
 .status-row{
   display:flex;
   gap:16px;
@@ -1035,6 +1018,20 @@ textarea:focus{
 }
 .live-roi-item .logtitle{
   color: var(--warn);
+}
+.live-step-item{
+  position: sticky;
+  bottom: 0;
+  z-index: 3;
+  border-left: 4px solid #ff7a00;
+  background: var(--bg);
+  box-shadow: none;
+}
+.live-step-item .logtitle{
+  color: #ff9f3d;
+}
+.live-step-item .logsub{
+  color: #ffbe87;
 }
 .roi-item{
   position: relative;

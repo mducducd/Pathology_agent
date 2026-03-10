@@ -45,6 +45,8 @@ DEFAULT_AML_PROMPT = (
     "Use the example GOOD tiles as guidance for where to search (dark, tissue-dense regions).\n"
     "Examine only diagnostically relevant regions with good focus and staining. Avoid pale/empty or artifact regions.\n"
     "You MUST search for high-density cellular regions. Zoom in repeatedly until you reach true high-power views with clear cellular detail.\n"
+    "Navigation outputs may include roi_candidates with quality_hint and bad_likelihood from good-vs-bad reference-tile matching; "
+    "prioritize bad_like candidates first and treat mostly good_like candidates as weaker AML evidence.\n"
     "Inspect multiple ROIs at high power. Estimate blast percentage across ROIs.\n"
     "\n"
     "Normal marrow features:\n"

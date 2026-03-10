@@ -2,7 +2,6 @@ import base64
 import json
 import mimetypes
 import os
-import random
 from copy import deepcopy
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -68,9 +67,8 @@ def _collect_example_tiles(dir_path: str, max_count: int) -> List[str]:
     for name in os.listdir(dir_path):
         if os.path.splitext(name)[1].lower() in exts:
             paths.append(os.path.join(dir_path, name))
-    if len(paths) <= max_count:
-        return paths
-    return random.sample(paths, max_count)
+    paths = sorted(paths)
+    return paths[:max_count]
 
 
 def _inject_example_tiles(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -193,6 +191,54 @@ def _inject_wsi_images(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             ],
         }
         new_messages.insert(insert_pos, current_view_msg)
+        insert_pos += 1
+
+    if state._last_roi_candidates:
+        source = state._last_roi_candidate_source or "unknown"
+        cand_lines = []
+        for c in state._last_roi_candidates[:8]:
+            rank = c.get("rank")
+            center = c.get("center_norm", [0, 0])
+            score = c.get("score")
+            score_txt = f"{float(score):.3f}" if isinstance(score, (int, float)) else "n/a"
+            quality_hint = c.get("quality_hint")
+            bad_like = c.get("bad_likelihood")
+            extras = []
+            if isinstance(quality_hint, str) and quality_hint:
+                extras.append(f"hint={quality_hint}")
+            if isinstance(bad_like, (int, float)):
+                extras.append(f"bad_like={float(bad_like):.2f}")
+            suffix = f", {', '.join(extras)}" if extras else ""
+            cand_lines.append(f"#{rank}: center=({int(center[0])},{int(center[1])}), score={score_txt}{suffix}")
+        aml_meta_line = ""
+        meta = state._roi_ranker_meta if isinstance(state._roi_ranker_meta, dict) else {}
+        ref_stats = meta.get("reference_stats") if isinstance(meta.get("reference_stats"), dict) else None
+        if ref_stats and str(getattr(state, "AGENT_TYPE", "") or "").lower() == "aml":
+            mode = ref_stats.get("reference_mode")
+            bad_frac = ref_stats.get("wsi_bad_like_fraction")
+            strong_bad_frac = ref_stats.get("wsi_bad_like_strong_fraction")
+            parts = []
+            if mode:
+                parts.append(f"mode={mode}")
+            if isinstance(bad_frac, (int, float)):
+                parts.append(f"bad_like_fraction={float(bad_frac):.2f}")
+            if isinstance(strong_bad_frac, (int, float)):
+                parts.append(f"strong_bad_like_fraction={float(strong_bad_frac):.2f}")
+            if parts:
+                aml_meta_line = "\nAML quality summary: " + ", ".join(parts)
+        cand_text = (
+            "Top ROI candidates for CURRENT VIEW (normalized 0-999 coordinates). "
+            f"Candidate source: {source}. "
+            "Expected source is 'uni2_knn' from UNI2 tile embeddings + kNN ranking. "
+            "For wsi_mark_roi_norm, choose one of these candidate centers/bboxes; arbitrary ROI coords are rejected:\n"
+            + "\n".join(cand_lines)
+            + aml_meta_line
+        )
+        candidate_content = [{"type": "text", "text": cand_text}]
+        cand_overlay_url = _encode_image_as_data_url(state._last_roi_candidate_overlay_path or "")
+        if cand_overlay_url:
+            candidate_content.append({"type": "image_url", "image_url": {"url": cand_overlay_url}})
+        new_messages.insert(insert_pos, {"role": "user", "content": candidate_content})
         insert_pos += 1
 
     if state._last_overview_with_box_path:

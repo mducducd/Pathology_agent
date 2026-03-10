@@ -15,6 +15,11 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from wsi_core_pkg.embeddings import (
+    extract_wsi_features_by_tiles,
+    save_tile_features_npz,
+    uni2,
+)
 from wsi_core import (
     run_wsi_agent_for_web,
     clear_wsi_outputs_state,
@@ -37,6 +42,7 @@ ALLOWED_MODEL_NAMES = {
     "qwen3.5-35b-a3b",
     "Qwen3.5-397B-A17B-FP8",
 }
+ALLOWED_EMBEDDING_EXTRACTORS = {"uni2"}
 
 app = FastAPI(title="WSI Agent Prototype")
 
@@ -74,6 +80,8 @@ class RunStatus(BaseModel):
 RUNS: Dict[str, RunStatus] = {}
 RUN_TERMINATE_FLAGS: Dict[str, threading.Event] = {}
 RUN_THREADS: Dict[str, threading.Thread] = {}
+_EMBEDDING_EXTRACTOR_CACHE: Dict[str, object] = {}
+_EMBEDDING_EXTRACTOR_LOCK = threading.Lock()
 
 # --- Auto-cleanup config ---
 DELETE_UPLOADS_AFTER_RUN = os.getenv("DELETE_UPLOADS_AFTER_RUN", "1").strip().lower() in {"1", "true", "yes", "y"}
@@ -115,7 +123,7 @@ def _safe_cleanup_run_generated_outputs(run_id: str) -> None:
         if not run_dir.exists() or not run_dir.is_dir():
             return
 
-        for sub in ("wsi_reports", "wsi_debug", "dark", "traces", "Selected_Tiles"):
+        for sub in ("wsi_reports", "wsi_debug", "dark", "traces", "Selected_Tiles", "embeddings", "tile_cache"):
             p = run_dir / sub
             if p.exists() and p.is_dir():
                 shutil.rmtree(p, ignore_errors=False)
@@ -130,6 +138,36 @@ def _is_safe_relpath(p: Path) -> bool:
     if ".." in p.parts:
         return False
     return True
+
+
+def _get_embedding_extractor(extractor_name: str):
+    key = (extractor_name or "").strip().lower()
+    if key not in ALLOWED_EMBEDDING_EXTRACTORS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"extractor_name must be one of: {', '.join(sorted(ALLOWED_EMBEDDING_EXTRACTORS))}",
+        )
+
+    with _EMBEDDING_EXTRACTOR_LOCK:
+        cached = _EMBEDDING_EXTRACTOR_CACHE.get(key)
+        if cached is not None:
+            return cached
+
+        try:
+            if key == "uni2":
+                extractor = uni2()
+            else:
+                raise HTTPException(status_code=400, detail=f"Unsupported extractor: {extractor_name}")
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to load embedding extractor '{extractor_name}': {type(exc).__name__}: {exc}",
+            ) from exc
+
+        _EMBEDDING_EXTRACTOR_CACHE[key] = extractor
+        return extractor
 
 
 async def _save_uploadfile_to_path(up: UploadFile, out_path: Path, chunk_size: int = 8 * 1024 * 1024) -> int:
@@ -330,8 +368,13 @@ def _assert_slide_openable(slide_path: Path) -> None:
     """
     Quick sanity check before starting the background run.
     """
+    slide_path = slide_path.resolve()
+    if not slide_path.exists():
+        raise HTTPException(status_code=400, detail=f"Slide file not found: {slide_path}")
+
     try:
-        slide = openslide.OpenSlide(str(slide_path))
+        # Use open_slide() (not OpenSlide()) so single-resolution TIFFs can fall back to ImageSlide.
+        slide = openslide.open_slide(str(slide_path))
         try:
             _ = slide.level_count
             _ = slide.level_dimensions
@@ -346,6 +389,11 @@ def _assert_slide_openable(slide_path: Path) -> None:
         raise HTTPException(
             status_code=400,
             detail=f"Failed to open slide '{slide_path.name}': {exc}",
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Failed to open slide '{slide_path.name}': {type(exc).__name__}: {exc}",
         ) from exc
 
 
@@ -548,6 +596,7 @@ async def finalize_and_start(run_id: str):
         run.traceback = None
         raise
 
+    slide_path = slide_path.resolve()
     run.slide_filename = slide_filename
     run.slide_path = str(slide_path)
     run.status = "pending"
@@ -635,6 +684,12 @@ def get_run(run_id: str):
     elif wsi_state is not None:
         wsi_state["overview_image_url"] = None
 
+    if wsi_state and wsi_state.get("last_roi_candidate_overlay_path"):
+        candidate_path = wsi_state["last_roi_candidate_overlay_path"]
+        wsi_state["roi_candidates_image_url"] = make_debug_image_url(candidate_path)
+    elif wsi_state is not None:
+        wsi_state["roi_candidates_image_url"] = None
+
     return {"run": run, "wsi_state": wsi_state}
 
 
@@ -664,6 +719,104 @@ def get_dark_regions(
     )
     result["image_url"] = make_debug_image_url(result.get("image_path"))
     return result
+
+
+@app.post("/api/runs/{run_id}/embed_wsi")
+def embed_wsi(
+    run_id: str,
+    extractor_name: str = "uni2",
+    tile_size_um: float = 256.0,
+    patch_size_px: int = 512,
+    tile_size_px: Optional[int] = None,
+    batch_size: int = 32,
+    device: Optional[str] = None,
+    use_tile_cache: bool = True,
+    cache_tiles_ext: str = "jpg",
+    max_supertile_size_slide_px: int = 4096,
+    max_workers: int = 4,
+    brightness_cutoff: Optional[int] = 240,
+    canny_cutoff: Optional[float] = 0.02,
+    default_slide_mpp: Optional[float] = None,
+):
+    run = RUNS.get(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    if not run.slide_path:
+        raise HTTPException(status_code=400, detail="Slide path not available for this run.")
+
+    slide_path = Path(run.slide_path).resolve()
+    if not slide_path.exists():
+        raise HTTPException(status_code=400, detail=f"Slide file not found: {slide_path}")
+
+    cache_tiles_ext_l = cache_tiles_ext.strip().lower()
+    if cache_tiles_ext_l not in {"jpg", "png"}:
+        raise HTTPException(status_code=400, detail="cache_tiles_ext must be 'jpg' or 'png'.")
+    if tile_size_um <= 0:
+        raise HTTPException(status_code=400, detail="tile_size_um must be > 0.")
+    effective_tile_size_px = int(tile_size_px if tile_size_px is not None else patch_size_px)
+    if effective_tile_size_px <= 0:
+        raise HTTPException(status_code=400, detail="patch_size_px/tile_size_px must be > 0.")
+    if batch_size <= 0:
+        raise HTTPException(status_code=400, detail="batch_size must be > 0.")
+    if max_supertile_size_slide_px <= 0:
+        raise HTTPException(status_code=400, detail="max_supertile_size_slide_px must be > 0.")
+    if max_workers <= 0:
+        raise HTTPException(status_code=400, detail="max_workers must be > 0.")
+
+    # Sanity-check with the same slide opening path used by the WSI runtime.
+    _assert_slide_openable(slide_path)
+
+    extractor = _get_embedding_extractor(extractor_name)
+    tile_cache_dir = (BASE_RUN_DIR / run_id / "tile_cache") if use_tile_cache else None
+
+    try:
+        result = extract_wsi_features_by_tiles(
+            slide_path=slide_path,
+            extractor=extractor,
+            tile_size_um=tile_size_um,
+            tile_size_px=effective_tile_size_px,
+            batch_size=batch_size,
+            device=(device.strip() if device else None),
+            cache_dir=tile_cache_dir,
+            cache_tiles_ext=cache_tiles_ext_l,  # type: ignore[arg-type]
+            max_supertile_size_slide_px=max_supertile_size_slide_px,
+            max_workers=max_workers,
+            brightness_cutoff=brightness_cutoff,
+            canny_cutoff=canny_cutoff,
+            default_slide_mpp=default_slide_mpp,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"WSI embedding failed: {type(exc).__name__}: {exc}",
+        ) from exc
+
+    embed_dir = BASE_RUN_DIR / run_id / "embeddings"
+    ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    out_path = embed_dir / f"{slide_path.stem}_{extractor_name}_{ts}.npz"
+    save_tile_features_npz(result, out_path)
+
+    feature_shape = list(result.features.shape)
+    num_tiles = int(feature_shape[0]) if len(feature_shape) > 0 else 0
+    feature_dim = int(feature_shape[1]) if len(feature_shape) > 1 else 0
+
+    return {
+        "ok": True,
+        "run_id": run_id,
+        "slide_path": str(slide_path),
+        "extractor_name": extractor_name,
+        "extractor_id": result.extractor_id,
+        "tile_size_um": result.tile_size_um,
+        "tile_size_px": result.tile_size_px,
+        "patch_size_px": result.tile_size_px,
+        "features_shape": feature_shape,
+        "coordinates_shape": list(result.coordinates_um.shape),
+        "num_tiles": num_tiles,
+        "feature_dim": feature_dim,
+        "output_path": str(out_path.resolve()),
+    }
 
 
 # Static mounts

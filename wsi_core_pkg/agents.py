@@ -1,6 +1,7 @@
+import os
 from typing import Optional
 
-from agents import Agent
+from agents import Agent, ModelSettings
 
 from .config import MODEL_NAME
 from .tools import (
@@ -14,9 +15,13 @@ from .tools import (
     wsi_zoom_full_norm,
 )
 
+WSI_AGENT_TEMPERATURE = float(os.getenv("WSI_AGENT_TEMPERATURE", "0.0"))
+_MODEL_SETTINGS = ModelSettings(temperature=WSI_AGENT_TEMPERATURE)
+
 WSIPathologyAgent = Agent(
     name="WSIPathologyAgent",
     model=MODEL_NAME,
+    model_settings=_MODEL_SETTINGS,
     instructions=(
         "You are a whole-slide image (WSI) exploration agent, acting like an experienced pathologist "
         "using a digital slide viewer.\n"
@@ -45,6 +50,11 @@ WSIPathologyAgent = Agent(
         "- Tools also expose a tissue_fraction estimate; if tissue_fraction is low (<0.15), the view is mostly background and you should pan/zoom towards tissue.\n"
         "\n"
         "NAVIGATION STRATEGY (APPLIES TO ALL TASKS):\n"
+        "0) Understand the automatic ROI-candidate pipeline used by this system:\n"
+        "   - The backend extracts UNI2 tile embeddings from tissue tiles.\n"
+        "   - It builds a kNN similarity index on those embeddings.\n"
+        "   - It computes novelty scores and returns top-K roi_candidates for the CURRENT VIEW.\n"
+        "   - These candidates are the primary coordinates you should use for ROI marking.\n"
         "1) Start with wsi_get_overview_view to see the entire slide.\n"
         "   - Identify where tissue fragments are and how they are distributed.\n"
         "   - If the task involves tumor assessment, roughly locate suspected tumor regions at low power.\n"
@@ -58,6 +68,8 @@ WSIPathologyAgent = Agent(
         "\n"
         "ROIs AND SELF-CHECK:\n"
         "- When you find diagnostically significant tissue (for ANY task), call wsi_mark_roi_norm on that area.\n"
+        "- Navigation/view tools return top-K ROI candidates (roi_candidates). "
+        "For wsi_mark_roi_norm, choose coordinates from these candidates; arbitrary ROI centers are rejected.\n"
         "- This will create a fixed-size high-power field (width reported in µm), centered on your selected region.\n"
         "- After each wsi_mark_roi_norm, a NEW ROI image is shown as the CURRENT VIEW. Carefully inspect it:\n"
         "  * If it is mostly background, out of focus, or uninformative, your very next step should be wsi_discard_last_roi.\n"
@@ -111,6 +123,7 @@ WSIPathologyAgent = Agent(
 WSITileSelectorAgent = Agent(
     name="WSITileSelectorAgent",
     model=MODEL_NAME,
+    model_settings=_MODEL_SETTINGS,
     instructions=(
         "You are a tile-selection agent. Your only goal is to navigate a WSI and save "
         "good tiles for diagnostic marrow analysis using wsi_save_tile_norm.\n"
@@ -132,11 +145,17 @@ WSITileSelectorAgent = Agent(
 WSIAmlDetectorAgent = Agent(
     name="WSIAmlDetectorAgent",
     model=MODEL_NAME,
+    model_settings=_MODEL_SETTINGS,
     instructions=(
         "You are an AML detector. Focus on diagnostically relevant regions and "
         "ignore non-informative areas. Use the example GOOD tiles as guidance for "
         "where to search (dark, tissue-dense regions). You MUST search for the most "
         "cellular, high-density regions by zooming in repeatedly to high power. "
+        "Use the provided roi_candidates from navigation/view outputs when marking ROIs; "
+        "ROI coordinates outside candidates are rejected. "
+        "For AML runs, roi_candidates may include quality_hint (bad_like/good_like/uncertain) "
+        "and bad_likelihood from reference good/bad tiles. Prioritize bad_like candidates first. "
+        "If candidates are mostly good_like, treat this as weak evidence for malignant morphology. "
         "Estimate blast percentage across ROIs and make a final decision. "
         "You MUST save exactly 10 key tiles with wsi_save_tile_norm."
     ),
@@ -157,6 +176,7 @@ def _agent_with_model(base_agent: Agent, model_name: Optional[str]) -> Agent:
     return Agent(
         name=base_agent.name,
         model=selected_model,
+        model_settings=base_agent.model_settings,
         instructions=base_agent.instructions,
         tools=list(base_agent.tools),
     )

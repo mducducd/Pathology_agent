@@ -15,12 +15,13 @@ from .config import MAX_IMG_DIM, MAX_NATIVE_VIEW_DIM
 # ---------------------------------------------------------------------
 
 
-def _load_slide() -> openslide.OpenSlide:
+def _load_slide() -> openslide.AbstractSlide:
     if state._slide is None:
         print(f"[WSI] Loading slide from: {state.SLIDE_PATH}")
         if not os.path.exists(state.SLIDE_PATH):
             raise FileNotFoundError(f"Slide not found at: {state.SLIDE_PATH}")
-        state._slide = openslide.OpenSlide(state.SLIDE_PATH)
+        # open_slide() supports OpenSlide formats and falls back to ImageSlide for simple images.
+        state._slide = openslide.open_slide(state.SLIDE_PATH)
         print(
             f"[WSI] Slide loaded. "
             f"levels={state._slide.level_count}, "
@@ -30,7 +31,7 @@ def _load_slide() -> openslide.OpenSlide:
     return state._slide
 
 
-def _get_mpp_um(slide: openslide.OpenSlide) -> Optional[float]:
+def _get_mpp_um(slide: openslide.AbstractSlide) -> Optional[float]:
     props = slide.properties
     for key in ("openslide.mpp-x", "openslide.mpp-y", "aperio.MPP"):
         v = props.get(key)
@@ -100,7 +101,7 @@ def _safe(fn, **kwargs) -> str:
 
 
 def _read_region_rgb(
-    slide: openslide.OpenSlide, x: int, y: int, level: int, size: Tuple[int, int]
+    slide: openslide.AbstractSlide, x: int, y: int, level: int, size: Tuple[int, int]
 ) -> Image.Image:
     region = slide.read_region((x, y), level, size)
     if region.mode == "RGBA":
@@ -120,7 +121,7 @@ def _resize_to_max_dim(region: Image.Image, max_dim: int) -> Tuple[Image.Image, 
     return region, out_w, out_h
 
 
-def _choose_level_for_bbox(base_w: int, base_h: int, slide: openslide.OpenSlide) -> int:
+def _choose_level_for_bbox(base_w: int, base_h: int, slide: openslide.AbstractSlide) -> int:
     side0 = max(base_w, base_h)
     for level in range(slide.level_count):
         ds = float(slide.level_downsamples[level])
@@ -343,6 +344,13 @@ def _log_step(tool_name: str, nav_reason: str, info: Dict[str, Any]) -> None:
         "field_width_um": info.get("field_width_um"),
         "field_height_um": info.get("field_height_um"),
         "tissue_fraction": info.get("tissue_fraction"),
+        "roi_candidate_count": info.get("roi_candidate_count"),
+        "roi_candidate_source": info.get("roi_candidate_source"),
+        "roi_candidate_warning": info.get("roi_candidate_warning"),
+        "roi_candidate_stage": info.get("roi_candidate_stage"),
+        "roi_candidate_pipeline": info.get("roi_candidate_pipeline"),
+        "roi_candidate_index_meta": info.get("roi_candidate_index_meta"),
+        "aml_reference_stats": info.get("aml_reference_stats"),
     }
     state._step_log.append(entry)
     print(f"[WSI][STEP_LOG] Step {step_idx}: {tool_name}, nav_reason='{nav_reason}'")

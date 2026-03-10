@@ -92,7 +92,7 @@ def detect_dark_regions(
     min_area: int = 800,
     max_regions: int = 30,
 ) -> Dict[str, Any]:
-    slide = openslide.OpenSlide(slide_path)
+    slide = openslide.open_slide(slide_path)
     try:
         level = slide.level_count - 1
         level_w, level_h = slide.level_dimensions[level]

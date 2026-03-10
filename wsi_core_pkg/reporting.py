@@ -138,6 +138,12 @@ def write_markdown_report(
             field_w = step.get("field_width_um")
             field_h = step.get("field_height_um")
             tf = step.get("tissue_fraction")
+            roi_candidate_count = step.get("roi_candidate_count")
+            roi_candidate_source = step.get("roi_candidate_source")
+            roi_candidate_warning = step.get("roi_candidate_warning")
+            roi_candidate_stage = step.get("roi_candidate_stage")
+            roi_candidate_pipeline = step.get("roi_candidate_pipeline")
+            roi_candidate_index_meta = step.get("roi_candidate_index_meta")
 
             lines.append(f"### Step {idx}: `{tool}`\n")
             lines.append(f"- **Reason**: {nav_reason}")
@@ -152,6 +158,24 @@ def write_markdown_report(
                 )
             if tf is not None:
                 lines.append(f"- **Tissue fraction**: {tf:.2f}")
+            if roi_candidate_stage:
+                lines.append(f"- **ROI candidate stage**: {roi_candidate_stage}")
+            if roi_candidate_pipeline:
+                lines.append(f"- **ROI candidate pipeline**: {roi_candidate_pipeline}")
+            if roi_candidate_count is not None:
+                lines.append(f"- **Top-K candidates in this view**: {roi_candidate_count}")
+            if roi_candidate_source:
+                lines.append(f"- **Candidate source**: {roi_candidate_source}")
+            if roi_candidate_warning:
+                lines.append(f"- **Candidate warning**: {roi_candidate_warning}")
+            if isinstance(roi_candidate_index_meta, dict):
+                nt = roi_candidate_index_meta.get("num_tiles")
+                fd = roi_candidate_index_meta.get("feature_dim")
+                ex = roi_candidate_index_meta.get("extractor_id")
+                if nt is not None or fd is not None or ex:
+                    lines.append(
+                        f"- **Candidate index meta**: extractor={ex}, tiles={nt}, feature_dim={fd}"
+                    )
             if dims is not None:
                 lines.append(f"- **View image size**: {dims[0]}×{dims[1]} px")
 

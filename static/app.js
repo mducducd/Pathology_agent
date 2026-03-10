@@ -20,9 +20,6 @@
   const agentSelect = document.getElementById("agent-select");
   const modelSelect = document.getElementById("model-select");
 
-  const progressWrap = document.getElementById("progress-wrap");
-  const progressDetail = document.getElementById("progress-detail");
-
   const statusPill = document.getElementById("status-pill");
   const btnActions = document.getElementById("btn-actions");
   const statusActionsMenu = document.getElementById("status-actions-menu");
@@ -1106,12 +1103,46 @@ If you cannot find a suspicious lesion after exploring representative areas at a
     render();
   }
 
-  function showProgress(show) {
-    progressWrap.style.display = show ? "block" : "none";
-    progressWrap.setAttribute("aria-hidden", show ? "false" : "true");
-    if (!show) {
-      progressDetail.textContent = "";
+  function upsertLiveStep(stepId, title, subText) {
+    if (!stepsEl) return;
+    const existing = document.getElementById(stepId);
+    if (!title) {
+      if (existing) existing.remove();
+      return;
     }
+
+    let li = existing;
+    if (!li) {
+      li = document.createElement("li");
+      li.id = stepId;
+    }
+    // Re-apply class every update so stale DOM from older versions still gets LIVE styling.
+    li.className = "logitem live-step-item";
+    // Inline fallback so LIVE remains orange even if CSS is cached/stale.
+    li.style.borderLeft = "4px solid #ff7a00";
+    li.style.background = "var(--bg)";
+    li.style.boxShadow = "none";
+
+    li.innerHTML = "";
+    const t = document.createElement("div");
+    t.className = "logtitle";
+    t.textContent = `LIVE. ${title}`;
+    t.style.color = "#ff9f3d";
+    li.appendChild(t);
+
+    if (subText) {
+      const s = document.createElement("div");
+      s.className = "logsub";
+      s.textContent = subText;
+      s.style.color = "#ffbe87";
+      li.appendChild(s);
+    }
+
+    stepsEl.appendChild(li);
+  }
+
+  function upsertLiveStatusStep(title, subText) {
+    upsertLiveStep("step-live-status", title, subText);
   }
 
   function resetRunUI() {
@@ -1616,6 +1647,77 @@ If you cannot find a suspicious lesion after exploring representative areas at a
     runLoadingEl.hidden = true;
   }
 
+  function updateLivePrepProgress(run, st) {
+    if (!run) return;
+    const status = String(run.status || "");
+    const prep = (st && st.roi_candidate_prep && typeof st.roi_candidate_prep === "object")
+      ? st.roi_candidate_prep
+      : null;
+
+    const busy = isRunBusyStatus(status);
+    if (!busy) {
+      return;
+    }
+
+    if (status === "running" && prep && (prep.active || prep.status === "starting" || prep.status === "running")) {
+      const parts = [];
+      if (prep.message) parts.push(String(prep.message));
+      if (prep.phase) parts.push(`phase=${prep.phase}`);
+      if (prep.processed_tiles !== undefined && prep.processed_tiles !== null) {
+        parts.push(`tiles=${prep.processed_tiles}`);
+      }
+      if (prep.processed_batches !== undefined && prep.processed_batches !== null) {
+        parts.push(`batches=${prep.processed_batches}`);
+      }
+      upsertLiveStatusStep("Preparing ROI candidates", parts.join(" · "));
+      return;
+    }
+
+    if (status === "running" && prep && (prep.status === "done" || prep.status === "failed")) {
+      upsertLiveStatusStep(
+        prep.status === "done" ? "ROI candidates ready" : "ROI candidate prep failed",
+        String(prep.message || "")
+      );
+      return;
+    }
+  }
+
+  function syncLiveRunStatusStep(status, details) {
+    const state = String(status || "").toLowerCase();
+    if (!state) return;
+    if (state === "created") {
+      upsertLiveStatusStep("Creating run", details || "Preparing upload session.");
+      return;
+    }
+    if (state === "uploading") {
+      upsertLiveStatusStep("Uploading slide bundle", details || "");
+      return;
+    }
+    if (state === "pending") {
+      upsertLiveStatusStep("Run pending", details || "Waiting for worker.");
+      return;
+    }
+    if (state === "running") {
+      upsertLiveStatusStep("Run running", details || "Agent is exploring the slide.");
+      return;
+    }
+    if (state === "done") {
+      upsertLiveStatusStep("Run done", details || "All steps completed.");
+      return;
+    }
+    if (state === "done-warn") {
+      upsertLiveStatusStep("Run done (failed)", details || "Model finished with failure output.");
+      return;
+    }
+    if (state === "terminated") {
+      upsertLiveStatusStep("Run terminated", details || "Terminated by user.");
+      return;
+    }
+    if (state === "error") {
+      upsertLiveStatusStep("Run error", details || "Run stopped due to an error.");
+    }
+  }
+
   async function fetchServiceModelName() {
     try {
       const res = await fetch("/healthz", { cache: "no-store" });
@@ -1725,8 +1827,9 @@ If you cannot find a suspicious lesion after exploring representative areas at a
         currentReportHref = null;
       }
 
+      let incomingSteps = [];
       if (st && Array.isArray(st.step_log)) {
-        const incomingSteps = st.step_log
+        incomingSteps = st.step_log
           .filter((step) => step && Number.isFinite(Number(step.step_index)))
           .sort((a, b) => Number(a.step_index) - Number(b.step_index));
         const maxIncomingStep = incomingSteps.length
@@ -1742,12 +1845,32 @@ If you cannot find a suspicious lesion after exploring representative areas at a
             if (step.nav_reason) parts.push(step.nav_reason);
             if (step.field_width_um && step.field_height_um) parts.push(`Field ~${step.field_width_um.toFixed(0)}×${step.field_height_um.toFixed(0)} µm`);
             if (step.tissue_fraction !== undefined && step.tissue_fraction !== null) parts.push(`Tissue ${step.tissue_fraction.toFixed(2)}`);
+            if (step.roi_candidate_stage) parts.push(`ROI stage: ${step.roi_candidate_stage}`);
+            if (step.roi_candidate_source) parts.push(`Source: ${step.roi_candidate_source}`);
+            if (step.roi_candidate_count !== undefined && step.roi_candidate_count !== null) {
+              parts.push(`Top-K: ${step.roi_candidate_count}`);
+            }
+            if (step.roi_candidate_pipeline) parts.push(step.roi_candidate_pipeline);
+            if (step.roi_candidate_warning) parts.push(`Warning: ${step.roi_candidate_warning}`);
+            if (step.roi_candidate_index_meta && typeof step.roi_candidate_index_meta === "object") {
+              const meta = step.roi_candidate_index_meta;
+              const extractor = meta.extractor_id ? String(meta.extractor_id) : null;
+              const tiles = Number.isFinite(Number(meta.num_tiles)) ? Number(meta.num_tiles) : null;
+              const dim = Number.isFinite(Number(meta.feature_dim)) ? Number(meta.feature_dim) : null;
+              const bits = [];
+              if (extractor) bits.push(`extractor=${extractor}`);
+              if (tiles !== null) bits.push(`tiles=${tiles}`);
+              if (dim !== null) bits.push(`dim=${dim}`);
+              if (bits.length) parts.push(bits.join(", "));
+            }
             appendLogItem(stepsEl, `S${step.step_index}. ${String(step.tool || "")}`, parts.join(" · "), step.image_url || null);
             lastRenderedStep = step.step_index;
           }
         }
       }
-
+      syncLiveRunStatusStep(effectiveStatus);
+      updateLivePrepProgress(run, st);
+      upsertLiveStep("step-live-prep", "", "");
       const incomingRois = (st && Array.isArray(st.roi_marks))
         ? st.roi_marks.filter((roi) => roi && Number.isFinite(Number(roi.roi_id)))
         : [];
@@ -1932,7 +2055,10 @@ If you cannot find a suspicious lesion after exploring representative areas at a
       const fileSize = it.file.size || 0;
 
       setPill(statusPill, "run", `Uploading ${i + 1}/${items.length}…`);
-      progressDetail.textContent = `${i + 1}/${items.length} · ${it.relPath} (${bytesToHuman(fileSize)})`;
+      upsertLiveStatusStep(
+        "Uploading slide bundle",
+        `${i + 1}/${items.length} · ${it.relPath} (${bytesToHuman(fileSize)})`
+      );
 
       let lastLoaded = 0;
       await xhrUploadSingle(`/api/runs/${encodeURIComponent(runId)}/upload`, fd, (loaded, total) => {
@@ -1943,14 +2069,20 @@ If you cannot find a suspicious lesion after exploring representative areas at a
         uploadedBytes += delta;
 
         const overallPct = totalBytes > 0 ? Math.round((uploadedBytes / totalBytes) * 100) : 0;
-        progressDetail.textContent = `${i + 1}/${items.length} · ${it.relPath} · ${Math.max(0, Math.min(100, overallPct))}%`;
+        upsertLiveStatusStep(
+          "Uploading slide bundle",
+          `${i + 1}/${items.length} · ${it.relPath} · ${Math.max(0, Math.min(100, overallPct))}%`
+        );
       });
 
       // Ensure we count full file even if progress events were weird
       if (lastLoaded < fileSize) {
         uploadedBytes += (fileSize - lastLoaded);
         const overallPct = totalBytes > 0 ? Math.round((uploadedBytes / totalBytes) * 100) : 0;
-        progressDetail.textContent = `${i + 1}/${items.length} · ${it.relPath} · ${Math.max(0, Math.min(100, overallPct))}%`;
+        upsertLiveStatusStep(
+          "Uploading slide bundle",
+          `${i + 1}/${items.length} · ${it.relPath} · ${Math.max(0, Math.min(100, overallPct))}%`
+        );
       }
       if (terminateRequested) throw new Error("Run terminated by user.");
     }
@@ -1967,7 +2099,7 @@ If you cannot find a suspicious lesion after exploring representative areas at a
     currentModelName = runRequestedModel;
     activeRunStatus = "created";
     syncStatusPillVisibility("created");
-    showProgress(true);
+    upsertLiveStatusStep("Creating run", "Initializing run metadata…");
     syncStartButtonState(v);
     errorBox.hidden = true;
     errorText.textContent = "";
@@ -1988,42 +2120,44 @@ If you cannot find a suspicious lesion after exploring representative areas at a
 
       // Upload files one by one
       setPill(statusPill, "run", "Uploading…");
-      progressDetail.textContent = "";
+      syncLiveRunStatusStep("uploading");
 
       await uploadAllFilesPerRequest(currentRunId);
       if (terminateRequested) throw new Error("Run terminated by user.");
 
       // Finalize + start
       setPill(statusPill, "run", "Finalizing…");
-      progressDetail.textContent = "Validating bundle and starting agent…";
+      upsertLiveStatusStep("Finalizing run", "Validating bundle and starting agent…");
       setModelStatus("pending", currentModelName);
 
       await apiFinalize(currentRunId);
       if (terminateRequested) throw new Error("Run terminated by user.");
 
-      showProgress(false);
       setPill(statusPill, "run", "Pending");
       runLabelEl.textContent = `Run started.`;
       activeRunStatus = "pending";
+      syncLiveRunStatusStep("pending", "Run started.");
       syncStartButtonState(v);
 
       if (pollingTimer) clearInterval(pollingTimer);
-      pollingTimer = setInterval(pollRun, 1000);
+      pollingTimer = setInterval(pollRun, 500);
       pollRun();
 
     } catch (e) {
-      showProgress(false);
       if (terminateRequested) {
         setPill(statusPill, "bad", "Terminated");
         setModelStatus("terminated", currentModelName);
         activeRunStatus = "terminated";
         syncStatusPillVisibility("terminated");
         runLabelEl.textContent = "Run terminated by user.";
+        syncLiveRunStatusStep("terminated", "Run terminated by user.");
       } else {
         setPill(statusPill, "bad", "Error");
         setModelStatus("error", currentModelName);
         activeRunStatus = "error";
         syncStatusPillVisibility("error");
+        const errMsg = String(e && e.message ? e.message : e);
+        syncLiveRunStatusStep("error", errMsg);
       }
       runRequestedModel = null;
       syncStartButtonState(v);
@@ -2050,7 +2184,7 @@ If you cannot find a suspicious lesion after exploring representative areas at a
       }
     }
     runLabelEl.textContent = "Terminating run…";
-    showProgress(false);
+    upsertLiveStatusStep("Terminating run", "Sending terminate request…");
     syncTerminateButtonState();
     try {
       await apiTerminate(currentRunId);
@@ -2060,6 +2194,7 @@ If you cannot find a suspicious lesion after exploring representative areas at a
       setModelStatus("terminated", currentModelName);
       syncStatusPillVisibility("terminated");
       runLabelEl.textContent = "Run terminated by user.";
+      syncLiveRunStatusStep("terminated", "Run terminated by user.");
       if (pollingTimer) {
         clearInterval(pollingTimer);
         pollingTimer = null;
@@ -2067,6 +2202,7 @@ If you cannot find a suspicious lesion after exploring representative areas at a
       await pollRun();
     } catch (e) {
       runLabelEl.textContent = `Terminate failed: ${String(e && e.message ? e.message : e)}`;
+      syncLiveRunStatusStep("error", runLabelEl.textContent);
     } finally {
       syncStartButtonState();
       syncTerminateButtonState();

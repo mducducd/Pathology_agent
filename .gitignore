@@ -1,6 +1,8 @@
 .env
 
 runs/
+.claude
+outputs/
 wsi_debug/
 wsi_reports/
 *.egg-info
