@@ -1,5 +1,6 @@
 # Slide Agent
 
+![Slide Agent overview](static/assets/overview.png)
 
 ## Install:
 
@@ -20,7 +21,7 @@ cp .env.example .env
 
 ### Configure Model Name:
 
-In the `wsi_core.py` file, set the `MODEL_NAME` variable to your desired model name.
+In the `wsi_core.py` and `amin.py` file, set the `MODEL_NAME` and `ALLOWED_MODEL_NAMES` variable to your desired model name.
 
 
 ### Run:
