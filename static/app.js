@@ -85,9 +85,13 @@ Reject areas dominated by fat, background, damaged tissue, or poor stain/focus.`
 - Call for more diagnostics (if blast % is between 5% and 20%).
 
 Use the example GOOD tiles as guidance for where to search (dark, tissue-dense regions).
+Be efficient: inspect only a small number of diagnostically meaningful high-power ROIs, not an exhaustive survey.
 Examine only diagnostically relevant regions with good focus and staining. Avoid pale/empty or artifact regions.
 You MUST search for high-density cellular regions. Zoom in repeatedly until you reach true high-power views with clear cellular detail.
-Inspect multiple ROIs at high power. Estimate blast percentage across ROIs.
+Inspect a few high-value ROIs at high power. Estimate blast percentage across them.
+After each wsi_mark_roi_norm, if the ROI is background, low-cellularity, out of focus, or redundant, immediately call wsi_discard_last_roi.
+If the evidence you already have is enough for a stable final AML category, stop immediately instead of searching for extra confirmation.
+Once you have 2-3 informative ROIs and a stable blast estimate, stop calling tools and report.
 
 Normal marrow features:
 - ~60% granulocytic precursors, ~20% erythroid precursors, ~15% lymphocytes/plasma cells/monocytes/megakaryocytes.
@@ -105,7 +109,7 @@ Diagnostic thresholds:
 - Normal marrow: blasts <5%.
 - Call for more diagnostics: blasts 5–20%.
 
-You MUST save exactly 10 key tiles from the most cellular, high-density regions using wsi_save_tile_norm(..., quality="good", label="aml_key").
+Save up to 4 key tiles from the most informative high-density regions using wsi_save_tile_norm(..., quality="good", label="aml_key"). Do not keep searching only to fill a tile quota.
 Output:
 - Brief morphology summary.
 - Estimated blast percentage range.
@@ -255,10 +259,13 @@ If you cannot find a suspicious lesion after exploring representative areas at a
   let searchPulse = 0;
   let searchDashOffset = 0;
   let overlayRafId = null;
+  let roiListPinnedToBottom = true;
+  let imageRevealSeq = 0;
   const ROI_BOX_COLORS = [
     "#0072B2", "#D55E00", "#009E73", "#332288", "#CC79A7", "#117733",
     "#56B4E9", "#AA4499", "#E69F00", "#44AA99", "#88CCEE", "#1F77B4",
   ];
+  const ROI_LIST_AUTOSCROLL_THRESHOLD_PX = 36;
   const LAYOUT_STORAGE_KEYS = {
     version: "layout.version",
     leftColPx: "layout.leftColPx",
@@ -539,6 +546,24 @@ If you cannot find a suspicious lesion after exploring representative areas at a
     return ROI_BOX_COLORS[idx];
   }
 
+  function isListNearBottom(listEl, thresholdPx = ROI_LIST_AUTOSCROLL_THRESHOLD_PX) {
+    if (!listEl) return true;
+    const remaining = listEl.scrollHeight - listEl.clientHeight - listEl.scrollTop;
+    return remaining <= thresholdPx;
+  }
+
+  function syncRoiListPinnedState() {
+    roiListPinnedToBottom = isListNearBottom(roisEl);
+  }
+
+  function maybeScrollRoiListToBottom(force = false) {
+    if (!roisEl) return;
+    const shouldStick = force || roiListPinnedToBottom || isListNearBottom(roisEl);
+    if (!shouldStick) return;
+    roisEl.scrollTop = roisEl.scrollHeight;
+    roiListPinnedToBottom = true;
+  }
+
   function escapeHtml(s) {
     return String(s)
       .replace(/&/g, "&amp;")
@@ -801,7 +826,7 @@ If you cannot find a suspicious lesion after exploring representative areas at a
 
     if (!nextSrc) {
       overviewImg.hidden = true;
-      overviewImg.src = "";
+      setImageSrcWithReveal(overviewImg, "");
       setOverviewEmptyState(OVERVIEW_EMPTY_TEXT);
       if (overviewCanvas) {
         const ctx = overviewCanvas.getContext("2d");
@@ -811,9 +836,7 @@ If you cannot find a suspicious lesion after exploring representative areas at a
     }
 
     overviewImg.hidden = false;
-    if (overviewImg.src !== nextSrc) {
-      overviewImg.src = nextSrc;
-    }
+    setImageSrcWithReveal(overviewImg, nextSrc);
     setOverviewEmptyState("");
     renderOverviewRoiOverlay();
   }
@@ -1215,9 +1238,9 @@ If you cannot find a suspicious lesion after exploring representative areas at a
     if (imgUrl) {
       const img = document.createElement("img");
       img.className = "logimg";
-      img.src = imgUrl;
       img.alt = title;
       li.appendChild(img);
+      setImageSrcWithReveal(img, imgUrl, { revealItem: true });
     }
 
     listEl.appendChild(li);
@@ -1235,17 +1258,86 @@ If you cannot find a suspicious lesion after exploring representative areas at a
     return badge;
   }
 
-  function _bindRoiImageLoading(li, img) {
+  function _bindRoiImageLoading(li, img, keepListPinned = false) {
     _ensureRoiLoadingBadge(li);
     li.classList.add("roi-loading");
 
-    const done = () => li.classList.remove("roi-loading");
+    const done = () => {
+      li.classList.remove("roi-loading");
+      if (keepListPinned && li.parentElement === roisEl) {
+        maybeScrollRoiListToBottom();
+      }
+    };
     if (img.complete && img.naturalWidth > 0) {
       done();
       return;
     }
     img.addEventListener("load", done, { once: true });
     img.addEventListener("error", done, { once: true });
+  }
+
+  function _finishImageReveal(img, token, item) {
+    if (!img) return;
+    if (token && img.dataset.revealToken !== token) return;
+    requestAnimationFrame(() => {
+      if (token && img.dataset.revealToken !== token) return;
+      img.classList.remove("is-revealing");
+      if (item) item.classList.remove("is-revealing");
+    });
+  }
+
+  function setImageSrcWithReveal(img, src, options = {}) {
+    if (!img) return;
+    const nextSrc = String(src || "");
+    const item = options.revealItem ? img.closest(".logitem") : null;
+
+    if (!nextSrc) {
+      img.dataset.revealSrc = "";
+      img.dataset.revealToken = "";
+      img.classList.remove("is-revealing");
+      if (item) item.classList.remove("is-revealing");
+      img.removeAttribute("src");
+      return;
+    }
+
+    const prevSrc = img.dataset.revealSrc || "";
+    const currentSrc = img.getAttribute("src") || "";
+    const shouldAnimate = !prevSrc && !currentSrc;
+    if (prevSrc === nextSrc && currentSrc === nextSrc) {
+      if (img.complete && img.naturalWidth > 0) {
+        img.classList.remove("is-revealing");
+        if (item) item.classList.remove("is-revealing");
+      }
+      return;
+    }
+
+    img.dataset.revealSrc = nextSrc;
+    if (!shouldAnimate) {
+      img.dataset.revealToken = "";
+      img.classList.remove("is-revealing");
+      if (item) item.classList.remove("is-revealing");
+      img.src = nextSrc;
+      return;
+    }
+
+    const token = `reveal-${++imageRevealSeq}`;
+    img.dataset.revealToken = token;
+    img.classList.add("is-revealing");
+
+    if (item) {
+      item.classList.remove("is-revealing");
+      void item.offsetWidth;
+      item.classList.add("is-revealing");
+    }
+
+    const done = () => _finishImageReveal(img, token, item);
+    img.addEventListener("load", done, { once: true });
+    img.addEventListener("error", done, { once: true });
+    img.src = nextSrc;
+
+    if (img.complete && img.naturalWidth > 0) {
+      done();
+    }
   }
 
   function appendRoiItem(roi, title, subText, imgUrl) {
@@ -1274,12 +1366,12 @@ If you cannot find a suspicious lesion after exploring representative areas at a
       img.className = "logimg";
       img.alt = title;
       li.appendChild(img);
-      _bindRoiImageLoading(li, img);
-      img.src = imgUrl;
+      _bindRoiImageLoading(li, img, true);
+      setImageSrcWithReveal(img, imgUrl, { revealItem: true });
     }
 
     roisEl.appendChild(li);
-    roisEl.scrollTop = roisEl.scrollHeight;
+    maybeScrollRoiListToBottom();
   }
 
   function clearRoiItemsFromList() {
@@ -1552,25 +1644,38 @@ If you cannot find a suspicious lesion after exploring representative areas at a
     // Keep the live preview as the active/latest ROI slot.
     roisEl.appendChild(li);
 
-    li.innerHTML = "";
-    const t = document.createElement("div");
-    t.className = "logtitle";
+    let t = li.querySelector(".logtitle");
+    if (!t) {
+      t = document.createElement("div");
+      t.className = "logtitle";
+      li.appendChild(t);
+    }
     t.textContent = title;
-    li.appendChild(t);
 
     if (subText) {
-      const s = document.createElement("div");
-      s.className = "logsub";
+      let s = li.querySelector(".logsub");
+      if (!s) {
+        s = document.createElement("div");
+        s.className = "logsub";
+        li.appendChild(s);
+      }
       s.textContent = subText;
-      li.appendChild(s);
+    } else {
+      const s = li.querySelector(".logsub");
+      if (s) s.remove();
     }
 
-    const img = document.createElement("img");
-    img.className = "logimg";
+    let img = li.querySelector(".logimg");
+    if (!img) {
+      img = document.createElement("img");
+      img.className = "logimg";
+      li.appendChild(img);
+    }
     img.alt = title;
-    li.appendChild(img);
-    _bindRoiImageLoading(li, img);
-    img.src = currentView.image_url;
+    if ((img.dataset.revealSrc || "") !== String(currentView.image_url || "")) {
+      _bindRoiImageLoading(li, img);
+      setImageSrcWithReveal(img, currentView.image_url, { revealItem: true });
+    }
     roisEl.scrollTop = roisEl.scrollHeight;
   }
 

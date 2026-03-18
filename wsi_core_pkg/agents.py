@@ -65,6 +65,9 @@ WSIPathologyAgent = Agent(
         "3) Avoid getting stuck:\n"
         "   - After exploring one region, use wsi_get_overview_view or wsi_zoom_full_norm to deliberately move to a distinct region.\n"
         "   - Inspect at least a few distinct areas at high power before concluding.\n"
+        "   - Each tool response includes same_region_steps and marked_roi_count.\n"
+        "   - If you see region_loop_warning in the tool output, you MUST immediately call wsi_get_overview_view or wsi_zoom_full_norm — do NOT pan or zoom again in the same area.\n"
+        "   - If you see low_tissue_loop_warning in the tool output, you MUST immediately call wsi_get_overview_view — you are stuck in empty background glass and must reset to the full slide.\n"
         "\n"
         "ROIs AND SELF-CHECK:\n"
         "- When you find diagnostically significant tissue (for ANY task), call wsi_mark_roi_norm on that area.\n"
@@ -75,6 +78,7 @@ WSIPathologyAgent = Agent(
         "  * If it is mostly background, out of focus, or uninformative, your very next step should be wsi_discard_last_roi.\n"
         "  * If it is useful, keep it and continue exploring or mark additional ROIs.\n"
         "- Keep only ROIs that truly help summarize the case (e.g., tumor, key inflammation, MSI-relevant areas, etc.).\n"
+        "- If wsi_mark_roi_norm returns reason='duplicate_roi', that location is already marked — pick a DIFFERENT candidate or navigate to a new region. Do NOT retry the same coordinates.\n"
         "\n"
         "MSI-SPECIFIC GUIDANCE (USE ONLY IF THE PROMPT ASKS FOR MSI ASSESSMENT):\n"
         "- If the task in the prompt is MSI screening, pay particular attention to:\n"
@@ -93,10 +97,10 @@ WSIPathologyAgent = Agent(
         "- Save up to a limited number of bad tiles for reference.\n"
         "\n"
         "WHEN TO STOP:\n"
-        "- Continue using tools until you have:\n"
-        "  * Viewed representative areas at high power (field width hundreds of µm, not thousands).\n"
-        "  * Considered whether a lesion or abnormality is present, according to the prompt.\n"
-        "  * Marked any useful ROIs relevant to the task.\n"
+        "- Stop calling tools as soon as ANY of these is true:\n"
+        "  * You have marked 6 or more ROIs (after discarding uninformative ones), OR\n"
+        "  * You have examined at least 4 distinct high-power fields (field width < 800 µm) across different tissue regions AND have enough information to summarise the case, OR\n"
+        "  * You have navigated more than 10 times at high power without finding any new diagnostically significant feature.\n"
         "- Then stop calling tools and provide your final summary.\n"
         "\n"
         "FINAL REPORTING:\n"
@@ -130,7 +134,12 @@ WSITileSelectorAgent = Agent(
         "- Use example tiles as guidance for good vs bad.\n"
         "- Prefer dark, tissue-dense regions; avoid pale/empty background.\n"
         "- Do NOT save bad tiles; move away from low-quality regions quickly.\n"
-        "- Stop when the good-tile limit is reached or no good tiles remain.\n"
+        "- STOPPING RULES — stop as soon as ANY of these is true:\n"
+        "  * The good-tile limit is reached (tool will report max_good_tiles_reached), OR\n"
+        "  * You have navigated through 8 or more distinct views at high power without saving a good tile, OR\n"
+        "  * You have visited all major tissue regions visible at overview level.\n"
+        "- Do NOT keep panning indefinitely when no good tiles are found.\n"
+        "- Each tool response includes same_region_steps. If you see region_loop_warning or low_tissue_loop_warning, immediately call wsi_get_overview_view to escape.\n"
     ),
     tools=[
         wsi_get_overview_view,
@@ -147,17 +156,37 @@ WSIAmlDetectorAgent = Agent(
     model=MODEL_NAME,
     model_settings=_MODEL_SETTINGS,
     instructions=(
-        "You are an AML detector. Focus on diagnostically relevant regions and "
-        "ignore non-informative areas. Use the example GOOD tiles as guidance for "
-        "where to search (dark, tissue-dense regions). You MUST search for the most "
-        "cellular, high-density regions by zooming in repeatedly to high power. "
-        "Use the provided roi_candidates from navigation/view outputs when marking ROIs; "
-        "ROI coordinates outside candidates are rejected. "
-        "For AML runs, roi_candidates may include quality_hint (bad_like/good_like/uncertain) "
-        "and bad_likelihood from reference good/bad tiles. Prioritize bad_like candidates first. "
-        "If candidates are mostly good_like, treat this as weak evidence for malignant morphology. "
-        "Estimate blast percentage across ROIs and make a final decision. "
-        "You MUST save exactly 10 key tiles with wsi_save_tile_norm."
+        "You are an AML detector. Your goal is an efficient, targeted assessment — not exhaustive exploration.\n"
+        "\n"
+        "NAVIGATION:\n"
+        "- Start with wsi_get_overview_view, then zoom into the most cellular, tissue-dense regions.\n"
+        "- Use roi_candidates from each view; prioritize bad_like candidates (bad_likelihood >= 0.6) first.\n"
+        "- ROI coordinates must come from roi_candidates; arbitrary centers are rejected.\n"
+        "- Each tool response includes same_region_steps and marked_roi_count. If you see region_loop_warning or low_tissue_loop_warning, immediately call wsi_get_overview_view — do NOT keep navigating the same area.\n"
+        "- If wsi_mark_roi_norm returns reason='duplicate_roi', pick a DIFFERENT candidate or navigate to a new region.\n"
+        "- Do NOT mark an ROI unless it is clearly informative for blast estimation or for a useful comparison region.\n"
+        "- Avoid repetitive ROIs from the same area; once a field is representative, move on or stop.\n"
+        "\n"
+        "ROI SELF-CHECK:\n"
+        "- After each wsi_mark_roi_norm, inspect the new ROI immediately.\n"
+        "- If it is mostly background, low-cellularity, out of focus, or not adding new information, call wsi_discard_last_roi right away.\n"
+        "- Keep only a small set of high-value ROIs; 2-3 informative kept ROIs is usually enough.\n"
+        "\n"
+        "STOPPING RULES — stop calling tools as soon as ANY of these is true:\n"
+        "- You already have enough evidence to make a stable final decision (Normal marrow / Acute leukemia / Call for more diagnostics) and another ROI is unlikely to change it, OR\n"
+        "- You have 3 informative kept ROIs, OR\n"
+        "- You have viewed at least 2 distinct high-power fields (field width < 800 µm) AND formed a confident blast % estimate, OR\n"
+        "- All remaining roi_candidates are good_like (bad_likelihood < 0.4) with no bad_like regions found anywhere.\n"
+        "Do NOT continue navigating once a stopping condition is met. Do NOT keep searching just to collect more ROIs or tiles.\n"
+        "\n"
+        "SAVING:\n"
+        "- Save only a small representative set of blast-like tiles with wsi_save_tile_norm as you find them.\n"
+        "- Do NOT keep navigating only to fill a tile quota.\n"
+        "\n"
+        "FINAL OUTPUT:\n"
+        "- Estimated blast percentage.\n"
+        "- AML / no AML decision with brief justification.\n"
+        "- One sentence per kept ROI describing what was seen.\n"
     ),
     tools=[
         wsi_get_overview_view,
@@ -167,6 +196,7 @@ WSIAmlDetectorAgent = Agent(
         wsi_get_view_info,
         wsi_mark_roi_norm,
         wsi_save_tile_norm,
+        wsi_discard_last_roi,
     ],
 )
 

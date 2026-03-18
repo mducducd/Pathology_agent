@@ -37,6 +37,8 @@ _roi_candidate_prep: Dict[str, Any] = {}
 _last_roi_candidates: List[Dict[str, Any]] = []
 _last_roi_candidate_source: Optional[str] = None
 _last_roi_candidate_overlay_path: Optional[str] = None
+_last_roi_candidate_view_key: Optional[Any] = None
+_last_roi_candidate_top_k: Optional[int] = None
 
 TRACE_DIR: Optional[str] = None
 TRACE_FILE_PATH: Optional[str] = None
@@ -55,6 +57,7 @@ def reset_wsi_state(run_id: str) -> None:
     global _slide, _saved_good_tiles, _saved_bad_tiles, _example_tiles_injected, _example_rois_injected
     global _roi_ranker_index, _roi_ranker_meta, _roi_candidate_prep
     global _last_roi_candidates, _last_roi_candidate_source, _last_roi_candidate_overlay_path
+    global _last_roi_candidate_view_key, _last_roi_candidate_top_k
     global TRACE_DIR, TRACE_FILE_PATH
     global HAS_FATAL_ERROR, LAST_FATAL_ERROR
 
@@ -86,6 +89,8 @@ def reset_wsi_state(run_id: str) -> None:
     _last_roi_candidates = []
     _last_roi_candidate_source = None
     _last_roi_candidate_overlay_path = None
+    _last_roi_candidate_view_key = None
+    _last_roi_candidate_top_k = None
     HAS_FATAL_ERROR = False
     LAST_FATAL_ERROR = None
 
@@ -111,6 +116,7 @@ def clear_wsi_outputs_state() -> None:
     global _saved_good_tiles, _saved_bad_tiles, _example_tiles_injected, _example_rois_injected
     global _roi_ranker_index, _roi_ranker_meta, _roi_candidate_prep
     global _last_roi_candidates, _last_roi_candidate_source, _last_roi_candidate_overlay_path
+    global _last_roi_candidate_view_key, _last_roi_candidate_top_k
     global HAS_FATAL_ERROR, LAST_FATAL_ERROR
 
     _step_log = []
@@ -131,6 +137,8 @@ def clear_wsi_outputs_state() -> None:
     _last_roi_candidates = []
     _last_roi_candidate_source = None
     _last_roi_candidate_overlay_path = None
+    _last_roi_candidate_view_key = None
+    _last_roi_candidate_top_k = None
     HAS_FATAL_ERROR = False
     LAST_FATAL_ERROR = None
 

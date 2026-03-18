@@ -845,6 +845,14 @@ textarea:focus{
   border: 1px solid var(--border);
   margin-top: 8px;
   background: rgba(255,255,255,.02);
+  opacity: 1;
+  transform: translateY(0) scale(1);
+  filter: blur(0);
+  will-change: opacity, transform, filter;
+  transition:
+    opacity .26s ease,
+    transform .42s cubic-bezier(.22, 1, .36, 1),
+    filter .42s cubic-bezier(.22, 1, .36, 1);
 }
 .img-stack{
   position:relative;
@@ -1012,6 +1020,9 @@ textarea:focus{
   border-bottom: 1px solid rgba(255,255,255,.06);
 }
 .logitem:last-child{border-bottom:none}
+.logitem.is-revealing{
+  animation: logitem-rise .4s cubic-bezier(.22, 1, .36, 1);
+}
 .live-roi-item{
   border-left: 2px solid rgba(255,209,102,.75);
   background: rgba(255,209,102,.08);
@@ -1080,6 +1091,21 @@ textarea:focus{
   max-width: 260px;
   width: 100%;
   display:block;
+  opacity: 1;
+  transform: translateY(0) scale(1);
+  filter: blur(0);
+  will-change: opacity, transform, filter;
+  transition:
+    opacity .26s ease,
+    transform .42s cubic-bezier(.22, 1, .36, 1),
+    filter .42s cubic-bezier(.22, 1, .36, 1);
+}
+
+.img.is-revealing,
+.logimg.is-revealing{
+  opacity: 0;
+  transform: translateY(12px) scale(.985);
+  filter: blur(10px);
 }
 
 /* Finalized ROIs: keep original image aspect/size behavior. */
@@ -1101,6 +1127,17 @@ textarea:focus{
   object-fit: contain;
   object-position: center;
   background: rgba(255,255,255,.02);
+}
+
+@keyframes logitem-rise{
+  from{
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to{
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .error-box{
@@ -1167,5 +1204,23 @@ textarea:focus{
   .viewer-rois{
     max-height: 520px;
     min-height: 280px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce){
+  .img,
+  .logimg{
+    transition: none;
+  }
+
+  .logitem.is-revealing{
+    animation: none;
+  }
+
+  .img.is-revealing,
+  .logimg.is-revealing{
+    opacity: 1;
+    transform: none;
+    filter: none;
   }
 }

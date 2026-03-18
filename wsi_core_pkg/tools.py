@@ -41,6 +41,12 @@ ROI_CANDIDATE_TOP_K = int(os.getenv("ROI_CANDIDATE_TOP_K", "12"))
 ROI_CANDIDATE_MIN_SEPARATION_PX = int(os.getenv("ROI_CANDIDATE_MIN_SEPARATION_PX", "512"))
 ROI_MARK_CANDIDATE_TOLERANCE_NORM = int(os.getenv("ROI_MARK_CANDIDATE_TOLERANCE_NORM", "170"))
 ROI_CANDIDATE_ALLOW_FALLBACK = os.getenv("ROI_CANDIDATE_ALLOW_FALLBACK", "0").strip().lower() in {"1", "true", "yes", "y"}
+# In AML mode, only show candidates whose bad_likelihood meets this floor.
+# Tiles below the threshold are excluded from the candidate list entirely, producing
+# a shorter, higher-confidence list without touching top-k.
+ROI_CANDIDATE_AML_BAD_LIKELIHOOD_MIN = float(os.getenv("ROI_CANDIDATE_AML_BAD_LIKELIHOOD_MIN", "0.55"))
+# Hard cap on how many candidates the VLM sees in AML mode (applied after bad_likelihood filter).
+ROI_CANDIDATE_TOP_K_AML = int(os.getenv("ROI_CANDIDATE_TOP_K_AML", "3"))
 ROI_RANKER_BATCH_SIZE = int(os.getenv("ROI_RANKER_BATCH_SIZE", "32"))
 ROI_RANKER_MAX_WORKERS = int(os.getenv("ROI_RANKER_MAX_WORKERS", "4"))
 ROI_TILE_CACHE_DIR = os.getenv("ROI_TILE_CACHE_DIR", "").strip()
@@ -362,14 +368,38 @@ def _build_roi_candidate_overlay(candidates: List[Dict[str, Any]]) -> Optional[s
     return _save_debug_image(img, tag="roi_candidates")
 
 
+def _current_view_cache_key() -> Optional[tuple[Any, ...]]:
+    if not state._current_view:
+        return None
+    cv = state._current_view
+    return (
+        state.SLIDE_PATH,
+        str(getattr(state, "AGENT_TYPE", "") or "").lower(),
+        int(cv["x0"]),
+        int(cv["y0"]),
+        int(cv["w"]),
+        int(cv["h"]),
+    )
+
+
 def _refresh_roi_candidates_for_current_view(top_k: int = ROI_CANDIDATE_TOP_K) -> List[Dict[str, Any]]:
     if not state._current_view:
         state._last_roi_candidates = []
         state._last_roi_candidate_source = None
         state._last_roi_candidate_overlay_path = None
+        state._last_roi_candidate_view_key = None
+        state._last_roi_candidate_top_k = None
         return []
 
     top_k = max(1, int(top_k))
+    view_key = _current_view_cache_key()
+    if (
+        view_key is not None
+        and state._last_roi_candidate_view_key == view_key
+        and state._last_roi_candidate_top_k == top_k
+    ):
+        return list(state._last_roi_candidates)
+
     candidates: List[Dict[str, Any]] = []
     source: Optional[str] = None
 
@@ -397,14 +427,107 @@ def _refresh_roi_candidates_for_current_view(top_k: int = ROI_CANDIDATE_TOP_K) -
     state._last_roi_candidates = candidates
     state._last_roi_candidate_source = source
     state._last_roi_candidate_overlay_path = _build_roi_candidate_overlay(candidates)
+    state._last_roi_candidate_view_key = view_key
+    state._last_roi_candidate_top_k = top_k
     return candidates
 
 
 def _attach_roi_candidates(info: Dict[str, Any], top_k: int = ROI_CANDIDATE_TOP_K) -> Dict[str, Any]:
     candidates = _refresh_roi_candidates_for_current_view(top_k=top_k)
     aml_mode = str(getattr(state, "AGENT_TYPE", "") or "").lower() == "aml"
+
+    # Strip candidates that overlap an already-marked ROI so the VLM is not tempted
+    # to re-navigate to or re-mark the same location.
+    if candidates and state._roi_marks:
+        marked_centers = []
+        for roi in state._roi_marks:
+            bbox = roi.get("view_bbox_level0")
+            if bbox:
+                marked_centers.append((bbox[0] + bbox[2] // 2, bbox[1] + bbox[3] // 2))
+        if marked_centers:
+            min_sep_sq = (ROI_TARGET_SIDE_PX * 0.5) ** 2
+            def _not_marked(c: Dict[str, Any]) -> bool:
+                cl = c.get("center_level0")
+                if not cl:
+                    return True
+                cx, cy = cl[0], cl[1]
+                return all((cx - mx) ** 2 + (cy - my) ** 2 >= min_sep_sq for mx, my in marked_centers)
+            candidates = [c for c in candidates if _not_marked(c)]
+
+    if aml_mode and candidates:
+        # Keep only tiles that are genuinely blast-like. The full list stays in
+        # state._last_roi_candidates so wsi_mark_roi_norm validation still accepts
+        # any of these coordinates.
+        filtered = [c for c in candidates if c.get("bad_likelihood", 0.5) >= ROI_CANDIDATE_AML_BAD_LIKELIHOOD_MIN]
+        if filtered:
+            # Re-sort by bad_likelihood descending so the strongest signals appear first.
+            candidates = sorted(filtered, key=lambda c: c["bad_likelihood"], reverse=True)
+        # else: nothing passes the threshold (all good-like view) — keep full list
+        # so the VLM can observe the good_like evidence and apply the stopping rule.
+        # Final hard cap: show at most ROI_CANDIDATE_TOP_K_AML candidates.
+        candidates = candidates[:ROI_CANDIDATE_TOP_K_AML]
     info["roi_candidates"] = candidates
     info["roi_candidate_count"] = len(candidates)
+    info["marked_roi_count"] = len(state._roi_marks)
+    info["marked_roi_labels"] = [r.get("label", "") for r in state._roi_marks]
+    if aml_mode:
+        kept_roi_count = len(state._roi_marks)
+        if kept_roi_count >= 2:
+            info["aml_stop_hint"] = (
+                "If the evidence you already have is enough for a stable final AML decision "
+                "(Normal marrow / Acute leukemia / Call for more diagnostics), stop now and give the final answer. "
+                f"You already have {kept_roi_count} kept ROI(s); do not explore another ROI unless it could materially change the decision."
+            )
+        else:
+            info["aml_stop_hint"] = (
+                "Stop as soon as the current evidence is enough for a stable final AML decision. "
+                "Do not keep exploring for extra confirmation once another ROI is unlikely to change the final category."
+            )
+
+    # Detect how many consecutive recent steps have stayed in the same slide region.
+    # Uses level-0 view centers from the step log; if the last N centers all cluster
+    # within 1.5× the current view width of each other, the agent is stuck.
+    same_region_steps = 0
+    if state._step_log and state._current_view:
+        cur_cx = state._current_view["x0"] + state._current_view["w"] / 2.0
+        cur_cy = state._current_view["y0"] + state._current_view["h"] / 2.0
+        radius_sq = (state._current_view["w"] * 1.5) ** 2
+        for entry in reversed(state._step_log[-8:]):
+            bbox = entry.get("view_bbox_level0")
+            if not bbox:
+                break
+            ecx = bbox[0] + bbox[2] / 2.0
+            ecy = bbox[1] + bbox[3] / 2.0
+            if (ecx - cur_cx) ** 2 + (ecy - cur_cy) ** 2 <= radius_sq:
+                same_region_steps += 1
+            else:
+                break
+    info["same_region_steps"] = same_region_steps
+    if same_region_steps >= 3:
+        info["region_loop_warning"] = (
+            f"You have taken {same_region_steps} consecutive steps in the same slide region. "
+            "Call wsi_get_overview_view or wsi_zoom_full_norm NOW to move to a completely different area."
+        )
+
+    # Count consecutive recent steps with very low tissue content (white/background views).
+    # If the agent has been stuck in empty/background territory for 2+ steps, force an escape.
+    _LOW_TISSUE_THRESHOLD = 0.10
+    low_tissue_steps = 0
+    for entry in reversed(state._step_log[-6:]):
+        tf = entry.get("tissue_fraction")
+        if tf is not None and float(tf) < _LOW_TISSUE_THRESHOLD:
+            low_tissue_steps += 1
+        else:
+            break
+    info["low_tissue_steps"] = low_tissue_steps
+    if low_tissue_steps >= 2:
+        info["low_tissue_loop_warning"] = (
+            f"ALERT: {low_tissue_steps} consecutive views have been mostly empty background "
+            "(tissue_fraction < 0.10). You are zoomed into empty glass. "
+            "You MUST call wsi_get_overview_view RIGHT NOW to reset to the full slide, "
+            "then navigate to a region with visible tissue (pink/purple staining)."
+        )
+
     info["roi_candidate_source"] = state._last_roi_candidate_source
     info["roi_candidate_prep"] = dict(state._roi_candidate_prep) if state._roi_candidate_prep else None
     info["roi_candidate_overlay_path"] = state._last_roi_candidate_overlay_path
@@ -825,6 +948,27 @@ def wsi_mark_roi_norm(
 
         x0_new = max(0, min(x0_new, slide_w0 - w_new))
         y0_new = max(0, min(y0_new, slide_h0 - h_new))
+
+        # Duplicate guard: reject if an existing ROI center is within half a tile-width.
+        new_cx = x0_new + w_new // 2
+        new_cy = y0_new + h_new // 2
+        min_sep = w_new * 0.5  # half the ROI side in level-0 pixels
+        for existing in state._roi_marks:
+            ex_bbox = existing.get("view_bbox_level0")
+            if ex_bbox:
+                ex_cx = ex_bbox[0] + ex_bbox[2] // 2
+                ex_cy = ex_bbox[1] + ex_bbox[3] // 2
+                dist_sq = (new_cx - ex_cx) ** 2 + (new_cy - ex_cy) ** 2
+                if dist_sq < min_sep ** 2:
+                    return {
+                        "ok": False,
+                        "reason": "duplicate_roi",
+                        "message": (
+                            f"This location is too close to an already-marked ROI (roi_id={existing['roi_id']}, "
+                            f"label='{existing['label']}'). Choose a different candidate or navigate to a new region."
+                        ),
+                        "existing_roi_id": existing["roi_id"],
+                    }
 
         print(
             "[WSI][ROI_NORM] requested_center=(%.1f,%.1f), snapped_center=(%.1f,%.1f), "

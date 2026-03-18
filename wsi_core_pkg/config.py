@@ -36,9 +36,9 @@ set_default_openai_api("chat_completions")
 set_tracing_disabled(False)
 enable_verbose_stdout_logging()
 
-MAX_IMG_DIM = 1024
+MAX_IMG_DIM = int(os.getenv("MAX_IMG_DIM", "1024"))
 MAX_NATIVE_VIEW_DIM = 4096
-MAX_TURNS = 200
+MAX_TURNS = int(os.getenv("MAX_TURNS", "50"))
 
 ROI_TARGET_SIDE_PX = 1500
 
@@ -63,9 +63,11 @@ os.makedirs(SELECTED_TILES_ROOT, exist_ok=True)
 EXAMPLE_TILES_ROOT = os.path.abspath(os.getenv("EXAMPLE_TILES_ROOT", "./Selected_Tiles"))
 EXAMPLE_TILES_GOOD_DIR = os.path.join(EXAMPLE_TILES_ROOT, "Good_Tiles")
 EXAMPLE_TILES_BAD_DIR = os.path.join(EXAMPLE_TILES_ROOT, "Bad_Tiles")
-EXAMPLE_TILES_MAX_PER_CLASS = 7
+EXAMPLE_TILES_MAX_PER_CLASS = int(os.getenv("EXAMPLE_TILES_MAX_PER_CLASS", "7"))
 
 EXAMPLE_ROIS_ROOT = os.path.abspath(os.getenv("EXAMPLE_ROIS_ROOT", "./Example_ROIs"))
 EXAMPLE_ROIS_POS_DIR = os.path.join(EXAMPLE_ROIS_ROOT, "ROI")
 EXAMPLE_ROIS_NEG_DIR = os.path.join(EXAMPLE_ROIS_ROOT, "Non_ROI")
-EXAMPLE_ROIS_MAX_PER_CLASS = 7
+EXAMPLE_ROIS_MAX_PER_CLASS = int(os.getenv("EXAMPLE_ROIS_MAX_PER_CLASS", "7"))
+CONTEXT_PREVIOUS_VIEWS_MAX = int(os.getenv("CONTEXT_PREVIOUS_VIEWS_MAX", "2"))
+CONTEXT_ROI_CANDIDATE_LINES_MAX = int(os.getenv("CONTEXT_ROI_CANDIDATE_LINES_MAX", "6"))

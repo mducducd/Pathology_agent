@@ -8,6 +8,8 @@ from typing import Any, Dict, List, Optional
 
 from . import state
 from .config import (
+    CONTEXT_PREVIOUS_VIEWS_MAX,
+    CONTEXT_ROI_CANDIDATE_LINES_MAX,
     EXAMPLE_ROIS_MAX_PER_CLASS,
     EXAMPLE_ROIS_NEG_DIR,
     EXAMPLE_ROIS_POS_DIR,
@@ -22,18 +24,30 @@ from .config import (
 _real_async_chat_create = client_async.chat.completions.create
 _real_sync_chat_create = client_sync.chat.completions.create
 _patch_installed = False
+_data_url_cache: Dict[str, Optional[str]] = {}
+
+
+def _agent_type() -> str:
+    return str(getattr(state, "AGENT_TYPE", "") or "").lower()
 
 
 def _encode_image_as_data_url(path: str) -> Optional[str]:
     if not path or not os.path.exists(path):
         return None
+    cached = _data_url_cache.get(path)
+    if cached is not None:
+        return cached
     with open(path, "rb") as f:
         img_bytes = f.read()
     image_b64 = base64.b64encode(img_bytes).decode("ascii")
     mime, _ = mimetypes.guess_type(path)
     if not mime:
         mime = "image/jpeg"
-    return f"data:{mime};base64,{image_b64}"
+    url = f"data:{mime};base64,{image_b64}"
+    if len(_data_url_cache) >= 512:
+        _data_url_cache.clear()
+    _data_url_cache[path] = url
+    return url
 
 
 def _redact_messages_for_trace(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -193,10 +207,28 @@ def _inject_wsi_images(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         new_messages.insert(insert_pos, current_view_msg)
         insert_pos += 1
 
+    if _agent_type() == "aml":
+        kept_roi_count = len(state._roi_marks)
+        aml_stop_lines = [
+            "AML efficiency reminder:",
+            "- If the evidence you already have is enough to make the final AML decision "
+            "(Normal marrow / Acute leukemia / Call for more diagnostics), stop calling tools now and give the final answer.",
+            "- Do NOT explore another ROI unless it could materially change the final category or blast estimate.",
+        ]
+        if kept_roi_count >= 2:
+            aml_stop_lines.append(
+                f"- You already have {kept_roi_count} kept ROI(s); this is often enough for a final AML decision."
+            )
+        new_messages.insert(
+            insert_pos,
+            {"role": "user", "content": [{"type": "text", "text": "\n".join(aml_stop_lines)}]},
+        )
+        insert_pos += 1
+
     if state._last_roi_candidates:
         source = state._last_roi_candidate_source or "unknown"
         cand_lines = []
-        for c in state._last_roi_candidates[:8]:
+        for c in state._last_roi_candidates[:max(1, CONTEXT_ROI_CANDIDATE_LINES_MAX)]:
             rank = c.get("rank")
             center = c.get("center_norm", [0, 0])
             score = c.get("score")
@@ -213,7 +245,7 @@ def _inject_wsi_images(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         aml_meta_line = ""
         meta = state._roi_ranker_meta if isinstance(state._roi_ranker_meta, dict) else {}
         ref_stats = meta.get("reference_stats") if isinstance(meta.get("reference_stats"), dict) else None
-        if ref_stats and str(getattr(state, "AGENT_TYPE", "") or "").lower() == "aml":
+        if ref_stats and _agent_type() == "aml":
             mode = ref_stats.get("reference_mode")
             bad_frac = ref_stats.get("wsi_bad_like_fraction")
             strong_bad_frac = ref_stats.get("wsi_bad_like_strong_fraction")
@@ -259,24 +291,26 @@ def _inject_wsi_images(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             new_messages.insert(insert_pos, overview_msg)
             insert_pos += 1
 
-    for view in state._view_history[-4:]:
-        url = _encode_image_as_data_url(view["debug_path"])
-        if not url:
-            continue
-        fw = view.get("field_width_um")
-        extra = _format_field_width_caption(fw)
-        tag = view.get("tag", "view")
-        view_msg = {
-            "role": "user",
-            "content": [
-                {
-                    "type": "text",
-                    "text": f"Previous view ({tag}{extra}).",
-                },
-                {"type": "image_url", "image_url": {"url": url}},
-            ],
-        }
-        new_messages.append(view_msg)
+    prev_view_limit = max(0, CONTEXT_PREVIOUS_VIEWS_MAX)
+    if prev_view_limit:
+        for view in state._view_history[-prev_view_limit:]:
+            url = _encode_image_as_data_url(view["debug_path"])
+            if not url:
+                continue
+            fw = view.get("field_width_um")
+            extra = _format_field_width_caption(fw)
+            tag = view.get("tag", "view")
+            view_msg = {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": f"Previous view ({tag}{extra}).",
+                    },
+                    {"type": "image_url", "image_url": {"url": url}},
+                ],
+            }
+            new_messages.append(view_msg)
 
     return new_messages
 

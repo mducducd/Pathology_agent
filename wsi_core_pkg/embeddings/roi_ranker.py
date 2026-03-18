@@ -23,6 +23,20 @@ ROI_KNN_RANDOM_SEED = int(os.getenv("ROI_KNN_RANDOM_SEED", "42"))
 ROI_CANDIDATE_MAX_IOU = float(os.getenv("ROI_CANDIDATE_MAX_IOU", "0.20"))
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".tif", ".tiff"}
 
+# Scoring weights for generic WSI mode: score = w_nov*z(novelty) + w_cen*z(centroid_dist)
+WSI_W_NOVELTY = float(os.getenv("WSI_W_NOVELTY", "0.65"))
+WSI_W_CENTROID = float(os.getenv("WSI_W_CENTROID", "0.35"))
+
+# Scoring weights for AML/reference mode: score = w_nov*z(novelty) + w_cen*z(centroid_dist) + w_bad*z(bad_margin)
+AML_W_NOVELTY = float(os.getenv("AML_W_NOVELTY", "0.35"))
+AML_W_CENTROID = float(os.getenv("AML_W_CENTROID", "0.15"))
+AML_W_BAD = float(os.getenv("AML_W_BAD", "0.50"))
+
+# Novelty outlier clipping: tiles above this percentile of novelty are likely artifacts
+# (tissue folds, pen marks, torn edges). Clipped to this ceiling before z-scoring so
+# they don't dominate the ranking. Set to 100 to disable.
+ROI_NOVELTY_CLIP_PERCENTILE = float(os.getenv("ROI_NOVELTY_CLIP_PERCENTILE", "97.0"))
+
 
 @dataclass(frozen=True)
 class UnsupervisedROIIndex:
@@ -204,6 +218,27 @@ def _compute_bad_similarity_scores(
     return np.zeros((n,), dtype=np.float32), np.full((n,), 0.5, dtype=np.float32), "none"
 
 
+def _suppress_artifact_outliers(
+    novelty: npt.NDArray[np.float32],
+    *,
+    percentile: float,
+) -> npt.NDArray[np.float32]:
+    """Cap extreme novelty scores at `percentile` to prevent artifact tiles
+    (folds, pen marks, torn edges) from dominating the ranking after z-scoring.
+
+    Tiles above the ceiling are clipped to the ceiling value — they remain
+    present and their relative ordering is preserved up to that cap, but they
+    cannot pull the z-score distribution so far that all normal tissue tiles
+    collapse to near-zero score.
+
+    Set ROI_NOVELTY_CLIP_PERCENTILE=100 to disable.
+    """
+    if novelty.size == 0 or percentile >= 100.0:
+        return novelty
+    ceiling = float(np.percentile(novelty, percentile))
+    return np.minimum(novelty, ceiling).astype(np.float32, copy=False)
+
+
 def _novelty_scores_from_knn(
     features_l2: npt.NDArray[np.float32],
     *,
@@ -322,13 +357,14 @@ def build_unsupervised_roi_index(
             }
         )
     novelty = _novelty_scores_from_knn(features_l2, k_neighbors=k_neighbors)
+    novelty = _suppress_artifact_outliers(novelty, percentile=ROI_NOVELTY_CLIP_PERCENTILE)
 
     centroid = np.mean(features_l2, axis=0, keepdims=True).astype(np.float32, copy=False)
     centroid = _l2_normalize_rows(centroid)[0]
     centroid_dist = (1.0 - (features_l2 @ centroid)).astype(np.float32, copy=False)
 
     # Default generic ranking.
-    scores = (0.65 * _zscore(novelty) + 0.35 * _zscore(centroid_dist)).astype(np.float32, copy=False)
+    scores = (WSI_W_NOVELTY * _zscore(novelty) + WSI_W_CENTROID * _zscore(centroid_dist)).astype(np.float32, copy=False)
     bad_margin = np.zeros((num_tiles,), dtype=np.float32)
     bad_likelihood = np.full((num_tiles,), 0.5, dtype=np.float32)
     reference_mode = "none"
@@ -374,9 +410,9 @@ def build_unsupervised_roi_index(
             if reference_mode != "none":
                 # AML mode: bias ranking toward bad-like regions while still retaining novelty.
                 scores = (
-                    0.35 * _zscore(novelty)
-                    + 0.15 * _zscore(centroid_dist)
-                    + 0.50 * _zscore(bad_margin)
+                    AML_W_NOVELTY * _zscore(novelty)
+                    + AML_W_CENTROID * _zscore(centroid_dist)
+                    + AML_W_BAD * _zscore(bad_margin)
                 ).astype(np.float32, copy=False)
 
             reference_stats.update(
