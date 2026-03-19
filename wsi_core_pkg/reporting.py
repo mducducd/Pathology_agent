@@ -83,6 +83,25 @@ def write_markdown_report(
             state._roi_marks,
             key=lambda r: (-int(r.get("importance", 1)), r["roi_id"]),
         )
+        if str(getattr(state, "AGENT_TYPE", "") or "").lower() == "aml":
+            closer_to_bad = sum(
+                1
+                for roi in sorted_rois
+                if isinstance(roi.get("aml_reference_evidence"), dict)
+                and roi["aml_reference_evidence"].get("match_label") == "closer_to_bad"
+            )
+            closer_to_good = sum(
+                1
+                for roi in sorted_rois
+                if isinstance(roi.get("aml_reference_evidence"), dict)
+                and roi["aml_reference_evidence"].get("match_label") == "closer_to_good"
+            )
+            uncertain = len(sorted_rois) - closer_to_bad - closer_to_good
+            lines.append("### AML Retrieval Summary\n")
+            lines.append(f"- **ROIs closer to bad exemplars**: {closer_to_bad}")
+            lines.append(f"- **ROIs closer to good exemplars**: {closer_to_good}")
+            lines.append(f"- **Uncertain ROIs**: {uncertain}")
+            lines.append("")
         for roi in sorted_rois:
             rid = roi["roi_id"]
             label = roi["label"]
@@ -95,6 +114,7 @@ def write_markdown_report(
             field_h = roi.get("field_height_um")
             tf = roi.get("tissue_fraction")
             debug_path = roi.get("debug_path")
+            aml_ref = roi.get("aml_reference_evidence") if isinstance(roi.get("aml_reference_evidence"), dict) else None
 
             lines.append(f"### ROI {rid}: {label}\n")
             lines.append(f"- **Importance**: {importance}")
@@ -113,6 +133,28 @@ def write_markdown_report(
                 lines.append(f"- **Tissue fraction**: {tf:.2f}")
             if eff_mag is not None:
                 lines.append(f"- **Effective magnification (approx)**: ~{eff_mag:.1f}x")
+            if aml_ref:
+                match_label = aml_ref.get("match_label")
+                summary = aml_ref.get("summary")
+                bad_top1 = aml_ref.get("bad_top1_similarity")
+                good_top1 = aml_ref.get("good_top1_similarity")
+                retrieval_score = aml_ref.get("retrieval_score")
+                nearest_bad = aml_ref.get("nearest_bad_ref") if isinstance(aml_ref.get("nearest_bad_ref"), dict) else None
+                nearest_good = aml_ref.get("nearest_good_ref") if isinstance(aml_ref.get("nearest_good_ref"), dict) else None
+                if match_label:
+                    lines.append(f"- **AML reference match**: {str(match_label).replace('_', ' ')}")
+                if summary:
+                    lines.append(f"- **AML reference summary**: {summary}")
+                if retrieval_score is not None:
+                    lines.append(f"- **Retrieval score**: {float(retrieval_score):.3f}")
+                if bad_top1 is not None:
+                    lines.append(f"- **Nearest bad similarity**: {float(bad_top1):.3f}")
+                if good_top1 is not None:
+                    lines.append(f"- **Nearest good similarity**: {float(good_top1):.3f}")
+                if nearest_bad and nearest_bad.get("name"):
+                    lines.append(f"- **Nearest bad exemplar**: {nearest_bad['name']}")
+                if nearest_good and nearest_good.get("name"):
+                    lines.append(f"- **Nearest good exemplar**: {nearest_good['name']}")
 
             if debug_path:
                 rel_img = _copy_image_for_report(

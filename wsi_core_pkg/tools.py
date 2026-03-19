@@ -37,16 +37,12 @@ from .slide_utils import (
     _safe_filename,
 )
 
-ROI_CANDIDATE_TOP_K = int(os.getenv("ROI_CANDIDATE_TOP_K", "12"))
+ROI_CANDIDATE_TOP_K = int(os.getenv("ROI_CANDIDATE_TOP_K", "24"))
 ROI_CANDIDATE_MIN_SEPARATION_PX = int(os.getenv("ROI_CANDIDATE_MIN_SEPARATION_PX", "512"))
 ROI_MARK_CANDIDATE_TOLERANCE_NORM = int(os.getenv("ROI_MARK_CANDIDATE_TOLERANCE_NORM", "170"))
 ROI_CANDIDATE_ALLOW_FALLBACK = os.getenv("ROI_CANDIDATE_ALLOW_FALLBACK", "0").strip().lower() in {"1", "true", "yes", "y"}
-# In AML mode, only show candidates whose bad_likelihood meets this floor.
-# Tiles below the threshold are excluded from the candidate list entirely, producing
-# a shorter, higher-confidence list without touching top-k.
-ROI_CANDIDATE_AML_BAD_LIKELIHOOD_MIN = float(os.getenv("ROI_CANDIDATE_AML_BAD_LIKELIHOOD_MIN", "0.55"))
-# Hard cap on how many candidates the VLM sees in AML mode (applied after bad_likelihood filter).
-ROI_CANDIDATE_TOP_K_AML = int(os.getenv("ROI_CANDIDATE_TOP_K_AML", "3"))
+# Hard cap on how many candidates the VLM sees in AML mode after raw retrieval ranking.
+ROI_CANDIDATE_TOP_K_AML = int(os.getenv("ROI_CANDIDATE_TOP_K_AML", "15"))
 ROI_RANKER_BATCH_SIZE = int(os.getenv("ROI_RANKER_BATCH_SIZE", "32"))
 ROI_RANKER_MAX_WORKERS = int(os.getenv("ROI_RANKER_MAX_WORKERS", "4"))
 ROI_TILE_CACHE_DIR = os.getenv("ROI_TILE_CACHE_DIR", "").strip()
@@ -81,17 +77,19 @@ def _ensure_unsupervised_roi_index():
     cached = state._roi_ranker_index
     meta = state._roi_ranker_meta or {}
     if cached is not None and meta.get("slide_path") == state.SLIDE_PATH:
+        cached_source = "uni2_exact_retrieval" if str(getattr(state, "AGENT_TYPE", "") or "").lower() == "aml" else "uni2_knn"
         _set_roi_candidate_prep(
             phase="ready",
             status="done",
             message="ROI candidates already prepared for this run.",
-            extra={"source": "cache", "slide_path": state.SLIDE_PATH},
+            extra={"source": "cache", "candidate_source": cached_source, "slide_path": state.SLIDE_PATH},
         )
         return cached
 
     aml_mode = str(getattr(state, "AGENT_TYPE", "") or "").lower() == "aml"
+    candidate_source = "uni2_exact_retrieval" if aml_mode else "uni2_knn"
     pipeline_desc = (
-        "UNI2 tile embeddings -> kNN novelty + bad-vs-good reference scoring -> top-K per view"
+        "UNI2 tile embeddings -> exact good/bad exemplar retrieval -> rank by raw nearest bad similarity -> top-K per view"
         if aml_mode
         else "UNI2 tile embeddings -> kNN novelty ranking -> top-K per view"
     )
@@ -100,7 +98,7 @@ def _ensure_unsupervised_roi_index():
         phase="starting",
         status="starting",
         message="Preparing ROI candidates from slide tiles...",
-        extra={"source": "uni2_knn", "slide_path": state.SLIDE_PATH},
+        extra={"source": candidate_source, "slide_path": state.SLIDE_PATH},
     )
     _log_step(
         "wsi_prepare_roi_candidates",
@@ -139,7 +137,7 @@ def _ensure_unsupervised_roi_index():
                 rt = evt.get("reference_tiles_total")
                 rg = evt.get("reference_tiles_good")
                 rb = evt.get("reference_tiles_bad")
-                msg = "Embedding AML reference tiles (good/bad)..."
+                msg = "Embedding AML reference tiles and running exact exemplar retrieval..."
                 if rt is not None:
                     msg += f" total={rt}"
                 if rg is not None and rb is not None:
@@ -190,7 +188,7 @@ def _ensure_unsupervised_roi_index():
                 f" extractor={index.extractor_id}, tiles={index.num_tiles}, dim={index.feature_dim}"
             ),
             extra={
-                "source": "uni2_knn",
+                "source": candidate_source,
                 "extractor_id": index.extractor_id,
                 "num_tiles": index.num_tiles,
                 "feature_dim": index.feature_dim,
@@ -216,7 +214,7 @@ def _ensure_unsupervised_roi_index():
             phase="failed",
             status="failed",
             message=f"ROI candidate preparation failed: {err_text}",
-            extra={"source": "uni2_knn", "error": err_text},
+            extra={"source": candidate_source, "error": err_text},
         )
         state._roi_ranker_index = None
         state._roi_ranker_meta = {
@@ -417,7 +415,7 @@ def _refresh_roi_candidates_for_current_view(top_k: int = ROI_CANDIDATE_TOP_K) -
             top_k=top_k,
             min_center_separation_px=max(64, ROI_CANDIDATE_MIN_SEPARATION_PX),
         )
-        source = "uni2_knn"
+        source = "uni2_exact_retrieval" if str(getattr(state, "AGENT_TYPE", "") or "").lower() == "aml" else "uni2_knn"
 
     if not candidates and ROI_CANDIDATE_ALLOW_FALLBACK:
         candidates = _fallback_candidates_from_current_view(top_k)
@@ -455,15 +453,21 @@ def _attach_roi_candidates(info: Dict[str, Any], top_k: int = ROI_CANDIDATE_TOP_
             candidates = [c for c in candidates if _not_marked(c)]
 
     if aml_mode and candidates:
-        # Keep only tiles that are genuinely blast-like. The full list stays in
-        # state._last_roi_candidates so wsi_mark_roi_norm validation still accepts
-        # any of these coordinates.
-        filtered = [c for c in candidates if c.get("bad_likelihood", 0.5) >= ROI_CANDIDATE_AML_BAD_LIKELIHOOD_MIN]
+        # In AML mode, expose the tiles where retrieved bad exemplars beat retrieved
+        # good exemplars. The full list stays in state._last_roi_candidates so
+        # wsi_mark_roi_norm validation still accepts any of these coordinates.
+        filtered = [c for c in candidates if c.get("quality_hint") == "bad_like"]
         if filtered:
-            # Re-sort by bad_likelihood descending so the strongest signals appear first.
-            candidates = sorted(filtered, key=lambda c: c["bad_likelihood"], reverse=True)
-        # else: nothing passes the threshold (all good-like view) — keep full list
-        # so the VLM can observe the good_like evidence and apply the stopping rule.
+            candidates = sorted(
+                filtered,
+                key=lambda c: (
+                    float(c.get("retrieval_score", c.get("score", float("-inf")))),
+                    float(c.get("bad_margin", 0.0)),
+                ),
+                reverse=True,
+            )
+        # else: nothing is bad_like in this view — keep the raw retrieval-ranked
+        # list so the VLM can see that bad exemplars are not winning here.
         # Final hard cap: show at most ROI_CANDIDATE_TOP_K_AML candidates.
         candidates = candidates[:ROI_CANDIDATE_TOP_K_AML]
     info["roi_candidates"] = candidates
@@ -533,7 +537,7 @@ def _attach_roi_candidates(info: Dict[str, Any], top_k: int = ROI_CANDIDATE_TOP_
     info["roi_candidate_overlay_path"] = state._last_roi_candidate_overlay_path
     if aml_mode:
         info["roi_candidate_pipeline"] = (
-            "UNI2 tile embeddings -> kNN novelty + bad-vs-good reference scoring -> top-K per current view"
+            "UNI2 tile embeddings -> exact good/bad exemplar retrieval -> rank by raw nearest bad similarity -> top-K per current view"
         )
     else:
         info["roi_candidate_pipeline"] = "UNI2 tile embeddings -> kNN novelty ranking -> top-K per current view"
@@ -542,15 +546,17 @@ def _attach_roi_candidates(info: Dict[str, Any], top_k: int = ROI_CANDIDATE_TOP_
         ref_stats = state._roi_ranker_meta.get("reference_stats")
         if aml_mode and isinstance(ref_stats, dict):
             info["aml_reference_stats"] = dict(ref_stats)
-    if state._last_roi_candidate_source != "uni2_knn":
+    expected_source = "uni2_exact_retrieval" if aml_mode else "uni2_knn"
+    if state._last_roi_candidate_source != expected_source:
         info["roi_candidate_warning"] = (
-            "UNI2/kNN candidate source unavailable for this view."
+            "Primary candidate source unavailable for this view."
             + (" Using fallback heuristic." if ROI_CANDIDATE_ALLOW_FALLBACK else " Fallback disabled.")
         )
     if candidates:
         if aml_mode:
             info["roi_candidate_guidance"] = (
-                "For AML, prioritize candidates with quality_hint='bad_like' and higher bad_likelihood. "
+                "For AML, prioritize candidates with quality_hint='bad_like' and higher retrieval_score. "
+                "Use retrieved good exemplars only as contrast checks, not as an extra blended score. "
                 "Use one of the top-K candidate centers/bboxes for wsi_mark_roi_norm; "
                 "arbitrary ROI coordinates are rejected."
             )
@@ -579,6 +585,53 @@ def _closest_candidate(
             best = cand
             best_dist = dist
     return best, best_dist
+
+
+def _aml_candidate_reference_evidence(candidate: Dict[str, Any]) -> Dict[str, Any]:
+    bad_top1 = candidate.get("bad_top1_similarity")
+    good_top1 = candidate.get("good_top1_similarity")
+    bad_margin = candidate.get("bad_margin")
+    retrieval_score = candidate.get("retrieval_score", candidate.get("score"))
+    quality_hint = str(candidate.get("quality_hint") or "uncertain")
+    bad_refs = candidate.get("retrieved_bad_refs") if isinstance(candidate.get("retrieved_bad_refs"), list) else []
+    good_refs = candidate.get("retrieved_good_refs") if isinstance(candidate.get("retrieved_good_refs"), list) else []
+    top_bad = bad_refs[0] if bad_refs else None
+    top_good = good_refs[0] if good_refs else None
+
+    match_label = "uncertain"
+    if quality_hint == "bad_like":
+        match_label = "closer_to_bad"
+    elif quality_hint == "good_like":
+        match_label = "closer_to_good"
+
+    parts: List[str] = [match_label.replace("_", " ")]
+    if isinstance(bad_top1, (int, float)):
+        parts.append(f"bad_top1={float(bad_top1):.3f}")
+    if isinstance(good_top1, (int, float)):
+        parts.append(f"good_top1={float(good_top1):.3f}")
+    if isinstance(bad_margin, (int, float)):
+        parts.append(f"margin={float(bad_margin):.3f}")
+    if isinstance(retrieval_score, (int, float)):
+        parts.append(f"retrieval={float(retrieval_score):.3f}")
+    if isinstance(top_bad, dict) and top_bad.get("name"):
+        parts.append(f"nearest_bad={top_bad['name']}")
+    if isinstance(top_good, dict) and top_good.get("name"):
+        parts.append(f"nearest_good={top_good['name']}")
+
+    return {
+        "match_label": match_label,
+        "quality_hint": quality_hint,
+        "retrieval_score": float(retrieval_score) if isinstance(retrieval_score, (int, float)) else None,
+        "bad_likelihood": float(candidate["bad_likelihood"]) if isinstance(candidate.get("bad_likelihood"), (int, float)) else None,
+        "bad_margin": float(bad_margin) if isinstance(bad_margin, (int, float)) else None,
+        "bad_top1_similarity": float(bad_top1) if isinstance(bad_top1, (int, float)) else None,
+        "good_top1_similarity": float(good_top1) if isinstance(good_top1, (int, float)) else None,
+        "nearest_bad_ref": dict(top_bad) if isinstance(top_bad, dict) else None,
+        "nearest_good_ref": dict(top_good) if isinstance(top_good, dict) else None,
+        "retrieved_bad_refs": [dict(x) for x in bad_refs[:3] if isinstance(x, dict)],
+        "retrieved_good_refs": [dict(x) for x in good_refs[:3] if isinstance(x, dict)],
+        "summary": ", ".join(parts),
+    }
 
 
 @function_tool
@@ -1012,6 +1065,11 @@ def wsi_mark_roi_norm(
         eff_mag = objective / ds if ds > 0 else None
 
         roi_id = len(state._roi_marks) + 1
+        aml_reference_evidence = (
+            _aml_candidate_reference_evidence(chosen)
+            if str(getattr(state, "AGENT_TYPE", "") or "").lower() == "aml"
+            else {}
+        )
         roi = {
             "roi_id": roi_id,
             "label": label,
@@ -1029,6 +1087,15 @@ def wsi_mark_roi_norm(
             "candidate_rank": chosen.get("rank"),
             "candidate_score": chosen.get("score"),
             "candidate_center_norm": chosen.get("center_norm"),
+            "candidate_quality_hint": chosen.get("quality_hint"),
+            "candidate_retrieval_score": chosen.get("retrieval_score", chosen.get("score")),
+            "candidate_bad_likelihood": chosen.get("bad_likelihood"),
+            "candidate_bad_margin": chosen.get("bad_margin"),
+            "candidate_bad_top1_similarity": chosen.get("bad_top1_similarity"),
+            "candidate_good_top1_similarity": chosen.get("good_top1_similarity"),
+            "candidate_retrieved_bad_refs": list(chosen.get("retrieved_bad_refs") or []),
+            "candidate_retrieved_good_refs": list(chosen.get("retrieved_good_refs") or []),
+            "aml_reference_evidence": aml_reference_evidence,
             "requested_center_norm": [
                 int(round(requested_cx_999)),
                 int(round(requested_cy_999)),

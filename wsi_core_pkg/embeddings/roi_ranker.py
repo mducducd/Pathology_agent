@@ -27,10 +27,10 @@ IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".tif", ".tiff"}
 WSI_W_NOVELTY = float(os.getenv("WSI_W_NOVELTY", "0.65"))
 WSI_W_CENTROID = float(os.getenv("WSI_W_CENTROID", "0.35"))
 
-# Scoring weights for AML/reference mode: score = w_nov*z(novelty) + w_cen*z(centroid_dist) + w_bad*z(bad_margin)
-AML_W_NOVELTY = float(os.getenv("AML_W_NOVELTY", "0.35"))
-AML_W_CENTROID = float(os.getenv("AML_W_CENTROID", "0.15"))
-AML_W_BAD = float(os.getenv("AML_W_BAD", "0.50"))
+AML_REFERENCE_TOP_K = int(os.getenv("AML_REFERENCE_TOP_K", "5"))
+AML_REFERENCE_QUERY_BLOCK_ROWS = int(os.getenv("AML_REFERENCE_QUERY_BLOCK_ROWS", "1024"))
+AML_REFERENCE_LOGIT_SCALE = float(os.getenv("AML_REFERENCE_LOGIT_SCALE", "4.0"))
+AML_REFERENCE_EVIDENCE_PER_CLASS = int(os.getenv("AML_REFERENCE_EVIDENCE_PER_CLASS", "3"))
 
 # Novelty outlier clipping: tiles above this percentile of novelty are likely artifacts
 # (tissue folds, pen marks, torn edges). Clipped to this ceiling before z-scoring so
@@ -53,6 +53,27 @@ class UnsupervisedROIIndex:
     bad_likelihood: npt.NDArray[np.float32] = field(default_factory=lambda: np.empty((0,), dtype=np.float32))
     reference_mode: str = "none"
     reference_stats: dict[str, Any] = field(default_factory=dict)
+    bad_neighbor_indices: npt.NDArray[np.int32] = field(default_factory=lambda: np.empty((0, 0), dtype=np.int32))
+    bad_neighbor_sims: npt.NDArray[np.float32] = field(default_factory=lambda: np.empty((0, 0), dtype=np.float32))
+    good_neighbor_indices: npt.NDArray[np.int32] = field(default_factory=lambda: np.empty((0, 0), dtype=np.int32))
+    good_neighbor_sims: npt.NDArray[np.float32] = field(default_factory=lambda: np.empty((0, 0), dtype=np.float32))
+    reference_tile_paths: tuple[str, ...] = field(default_factory=tuple)
+    reference_tile_labels: tuple[str, ...] = field(default_factory=tuple)
+    reference_neighbor_k: int = 0
+
+
+@dataclass(frozen=True)
+class ReferenceKNNScoring:
+    margin: npt.NDArray[np.float32]
+    bad_likelihood: npt.NDArray[np.float32]
+    reference_mode: str
+    rank_scores: npt.NDArray[np.float32] = field(default_factory=lambda: np.empty((0,), dtype=np.float32))
+    bad_top1_similarity: npt.NDArray[np.float32] = field(default_factory=lambda: np.empty((0,), dtype=np.float32))
+    good_top1_similarity: npt.NDArray[np.float32] = field(default_factory=lambda: np.empty((0,), dtype=np.float32))
+    bad_neighbor_indices: npt.NDArray[np.int32] = field(default_factory=lambda: np.empty((0, 0), dtype=np.int32))
+    bad_neighbor_sims: npt.NDArray[np.float32] = field(default_factory=lambda: np.empty((0, 0), dtype=np.float32))
+    good_neighbor_indices: npt.NDArray[np.int32] = field(default_factory=lambda: np.empty((0, 0), dtype=np.int32))
+    good_neighbor_sims: npt.NDArray[np.float32] = field(default_factory=lambda: np.empty((0, 0), dtype=np.float32))
 
 
 def _l2_normalize_rows(x: npt.NDArray[np.float32]) -> npt.NDArray[np.float32]:
@@ -67,6 +88,10 @@ def _zscore(x: npt.NDArray[np.float32]) -> npt.NDArray[np.float32]:
     if sigma < 1e-12:
         return np.zeros_like(x, dtype=np.float32)
     return ((x - mu) / sigma).astype(np.float32, copy=False)
+
+
+def _sigmoid(x: npt.NDArray[np.float32]) -> npt.NDArray[np.float32]:
+    return (1.0 / (1.0 + np.exp(-np.clip(x, -30.0, 30.0)))).astype(np.float32, copy=False)
 
 
 def _prepare_input_tensor(image: Image.Image, transform: Any) -> torch.Tensor:
@@ -142,14 +167,15 @@ def _embed_reference_tiles(
     extractor: Any,
     device: torch.device,
     batch_size: int,
-) -> tuple[npt.NDArray[np.float32], npt.NDArray[np.str_]]:
+) -> tuple[npt.NDArray[np.float32], npt.NDArray[np.str_], tuple[str, ...]]:
     if not records:
-        return np.empty((0, 0), dtype=np.float32), np.empty((0,), dtype=np.str_)
+        return np.empty((0, 0), dtype=np.float32), np.empty((0,), dtype=np.str_), ()
 
     model = extractor.model.to(device)
     model.eval()
 
     label_buf: list[str] = []
+    path_buf: list[str] = []
     batch_tensors: list[torch.Tensor] = []
     chunks: list[torch.Tensor] = []
 
@@ -158,6 +184,7 @@ def _embed_reference_tiles(
             rgb = im.convert("RGB")
             batch_tensors.append(_prepare_input_tensor(rgb, extractor.transform))
             label_buf.append(label)
+            path_buf.append(str(path))
 
         if len(batch_tensors) >= batch_size:
             x = torch.stack(batch_tensors, dim=0).to(device, non_blocking=True)
@@ -175,47 +202,156 @@ def _embed_reference_tiles(
     feat = torch.cat(chunks, dim=0).numpy().astype(np.float32, copy=False)
     feat_l2 = _l2_normalize_rows(feat)
     labels = np.asarray(label_buf, dtype=np.str_)
-    return feat_l2, labels
+    return feat_l2, labels, tuple(path_buf)
 
 
-def _compute_bad_similarity_scores(
+def _topk_from_similarity_matrix(
+    *,
+    similarities: npt.NDArray[np.float32],
+    k: int,
+) -> tuple[npt.NDArray[np.int32], npt.NDArray[np.float32]]:
+    rows = int(similarities.shape[0]) if similarities.ndim == 2 else 0
+    cols = int(similarities.shape[1]) if similarities.ndim == 2 else 0
+    if rows == 0 or cols == 0 or k <= 0:
+        return np.empty((rows, 0), dtype=np.int32), np.empty((rows, 0), dtype=np.float32)
+
+    k_eff = max(1, min(int(k), cols))
+    kth = max(0, cols - k_eff)
+    part = np.argpartition(similarities, kth=kth, axis=1)[:, -k_eff:]
+    part_sims = np.take_along_axis(similarities, part, axis=1)
+    order = np.argsort(part_sims, axis=1)[:, ::-1]
+    top_idx = np.take_along_axis(part, order, axis=1).astype(np.int32, copy=False)
+    top_sims = np.take_along_axis(part_sims, order, axis=1).astype(np.float32, copy=False)
+    return top_idx, top_sims
+
+
+def _exact_topk_reference_matches(
+    *,
+    features_l2: npt.NDArray[np.float32],
+    ref_features_l2: npt.NDArray[np.float32],
+    k: int,
+    row_block_size: int,
+) -> tuple[npt.NDArray[np.int32], npt.NDArray[np.float32]]:
+    rows = int(features_l2.shape[0]) if features_l2.ndim == 2 else 0
+    cols = int(ref_features_l2.shape[0]) if ref_features_l2.ndim == 2 else 0
+    if rows == 0 or cols == 0 or k <= 0:
+        return np.empty((rows, 0), dtype=np.int32), np.empty((rows, 0), dtype=np.float32)
+
+    k_eff = max(1, min(int(k), cols))
+    block_rows = max(1, int(row_block_size))
+    top_idx = np.empty((rows, k_eff), dtype=np.int32)
+    top_sims = np.empty((rows, k_eff), dtype=np.float32)
+
+    for start in range(0, rows, block_rows):
+        stop = min(rows, start + block_rows)
+        sims = (features_l2[start:stop] @ ref_features_l2.T).astype(np.float32, copy=False)
+        block_idx, block_sims = _topk_from_similarity_matrix(similarities=sims, k=k_eff)
+        top_idx[start:stop] = block_idx
+        top_sims[start:stop] = block_sims
+
+    return top_idx, top_sims
+
+
+def _top1_sims(
+    sims: npt.NDArray[np.float32],
+    *,
+    rows: int,
+) -> npt.NDArray[np.float32]:
+    if sims.ndim != 2 or sims.shape[1] == 0:
+        return np.zeros((rows,), dtype=np.float32)
+    return sims[:, 0].astype(np.float32, copy=False)
+
+
+def _compute_reference_knn_scores(
     *,
     features_l2: npt.NDArray[np.float32],
     ref_features_l2: npt.NDArray[np.float32],
     ref_labels: npt.NDArray[np.str_],
-) -> tuple[npt.NDArray[np.float32], npt.NDArray[np.float32], str]:
+    top_k: int,
+    row_block_size: int,
+) -> ReferenceKNNScoring:
+    rows = int(features_l2.shape[0]) if features_l2.ndim == 2 else 0
+    empty_margin = np.zeros((rows,), dtype=np.float32)
+    empty_like = np.full((rows,), 0.5, dtype=np.float32)
+    empty_idx = np.empty((rows, 0), dtype=np.int32)
+    empty_sims = np.empty((rows, 0), dtype=np.float32)
+
     if features_l2.size == 0 or ref_features_l2.size == 0 or ref_labels.size == 0:
-        n = int(features_l2.shape[0]) if features_l2.ndim == 2 else 0
-        return np.zeros((n,), dtype=np.float32), np.full((n,), 0.5, dtype=np.float32), "none"
+        return ReferenceKNNScoring(
+            margin=empty_margin,
+            bad_likelihood=empty_like,
+            reference_mode="none",
+            rank_scores=empty_margin,
+            bad_top1_similarity=empty_margin,
+            good_top1_similarity=empty_margin,
+            bad_neighbor_indices=empty_idx,
+            bad_neighbor_sims=empty_sims,
+            good_neighbor_indices=empty_idx,
+            good_neighbor_sims=empty_sims,
+        )
 
-    bad_mask = ref_labels == "bad"
-    good_mask = ref_labels == "good"
+    bad_ref_ids = np.flatnonzero(ref_labels == "bad").astype(np.int32, copy=False)
+    good_ref_ids = np.flatnonzero(ref_labels == "good").astype(np.int32, copy=False)
 
-    if np.any(bad_mask) and np.any(good_mask):
-        bad_proto = _l2_normalize_rows(np.mean(ref_features_l2[bad_mask], axis=0, keepdims=True))[0]
-        good_proto = _l2_normalize_rows(np.mean(ref_features_l2[good_mask], axis=0, keepdims=True))[0]
-        sim_bad = (features_l2 @ bad_proto).astype(np.float32, copy=False)
-        sim_good = (features_l2 @ good_proto).astype(np.float32, copy=False)
-        margin = (sim_bad - sim_good).astype(np.float32, copy=False)
-        bad_like = (1.0 / (1.0 + np.exp(-np.clip(4.0 * margin, -30.0, 30.0)))).astype(np.float32, copy=False)
-        return margin, bad_like, "good_bad_centroid"
+    bad_neighbor_indices = empty_idx
+    bad_neighbor_sims = empty_sims
+    good_neighbor_indices = empty_idx
+    good_neighbor_sims = empty_sims
 
-    if np.any(bad_mask):
-        bad_proto = _l2_normalize_rows(np.mean(ref_features_l2[bad_mask], axis=0, keepdims=True))[0]
-        sim_bad = (features_l2 @ bad_proto).astype(np.float32, copy=False)
-        margin = (sim_bad - float(np.mean(sim_bad))).astype(np.float32, copy=False)
-        bad_like = (1.0 / (1.0 + np.exp(-np.clip(4.0 * margin, -30.0, 30.0)))).astype(np.float32, copy=False)
-        return margin, bad_like, "bad_only_centroid"
+    if bad_ref_ids.size:
+        bad_local_idx, bad_neighbor_sims = _exact_topk_reference_matches(
+            features_l2=features_l2,
+            ref_features_l2=ref_features_l2[bad_ref_ids],
+            k=top_k,
+            row_block_size=row_block_size,
+        )
+        bad_neighbor_indices = bad_ref_ids[bad_local_idx] if bad_local_idx.size else empty_idx
 
-    if np.any(good_mask):
-        good_proto = _l2_normalize_rows(np.mean(ref_features_l2[good_mask], axis=0, keepdims=True))[0]
-        sim_good = (features_l2 @ good_proto).astype(np.float32, copy=False)
-        margin = (float(np.mean(sim_good)) - sim_good).astype(np.float32, copy=False)
-        bad_like = (1.0 / (1.0 + np.exp(-np.clip(4.0 * margin, -30.0, 30.0)))).astype(np.float32, copy=False)
-        return margin, bad_like, "good_only_centroid"
+    if good_ref_ids.size:
+        good_local_idx, good_neighbor_sims = _exact_topk_reference_matches(
+            features_l2=features_l2,
+            ref_features_l2=ref_features_l2[good_ref_ids],
+            k=top_k,
+            row_block_size=row_block_size,
+        )
+        good_neighbor_indices = good_ref_ids[good_local_idx] if good_local_idx.size else empty_idx
 
-    n = int(features_l2.shape[0])
-    return np.zeros((n,), dtype=np.float32), np.full((n,), 0.5, dtype=np.float32), "none"
+    bad_top1 = _top1_sims(bad_neighbor_sims, rows=rows)
+    good_top1 = _top1_sims(good_neighbor_sims, rows=rows)
+
+    if bad_ref_ids.size and good_ref_ids.size:
+        margin = (bad_top1 - good_top1).astype(np.float32, copy=False)
+        bad_like = _sigmoid((AML_REFERENCE_LOGIT_SCALE * margin).astype(np.float32, copy=False))
+        rank_scores = bad_top1.astype(np.float32, copy=False)
+        mode = "good_bad_exact_knn"
+    elif bad_ref_ids.size:
+        margin = bad_top1.astype(np.float32, copy=False)
+        bad_like = _sigmoid((AML_REFERENCE_LOGIT_SCALE * margin).astype(np.float32, copy=False))
+        rank_scores = bad_top1.astype(np.float32, copy=False)
+        mode = "bad_only_exact_knn"
+    elif good_ref_ids.size:
+        margin = (-good_top1).astype(np.float32, copy=False)
+        bad_like = _sigmoid((AML_REFERENCE_LOGIT_SCALE * margin).astype(np.float32, copy=False))
+        rank_scores = (-good_top1).astype(np.float32, copy=False)
+        mode = "good_only_exact_knn"
+    else:
+        margin = empty_margin
+        bad_like = empty_like
+        rank_scores = empty_margin
+        mode = "none"
+
+    return ReferenceKNNScoring(
+        margin=margin,
+        bad_likelihood=bad_like,
+        reference_mode=mode,
+        rank_scores=rank_scores,
+        bad_top1_similarity=bad_top1,
+        good_top1_similarity=good_top1,
+        bad_neighbor_indices=bad_neighbor_indices,
+        bad_neighbor_sims=bad_neighbor_sims,
+        good_neighbor_indices=good_neighbor_indices,
+        good_neighbor_sims=good_neighbor_sims,
+    )
 
 
 def _suppress_artifact_outliers(
@@ -344,35 +480,33 @@ def build_unsupervised_roi_index(
             bad_likelihood=np.empty((0,), dtype=np.float32),
             reference_mode="none",
             reference_stats={},
+            bad_neighbor_indices=np.empty((0, 0), dtype=np.int32),
+            bad_neighbor_sims=np.empty((0, 0), dtype=np.float32),
+            good_neighbor_indices=np.empty((0, 0), dtype=np.int32),
+            good_neighbor_sims=np.empty((0, 0), dtype=np.float32),
+            reference_tile_paths=(),
+            reference_tile_labels=(),
+            reference_neighbor_k=0,
         )
 
     features_l2 = _l2_normalize_rows(features)
-    if progress_cb is not None:
-        progress_cb(
-            {
-                "phase": "build_knn",
-                "status": "running",
-                "num_tiles": num_tiles,
-                "feature_dim": feature_dim,
-            }
-        )
-    novelty = _novelty_scores_from_knn(features_l2, k_neighbors=k_neighbors)
-    novelty = _suppress_artifact_outliers(novelty, percentile=ROI_NOVELTY_CLIP_PERCENTILE)
-
-    centroid = np.mean(features_l2, axis=0, keepdims=True).astype(np.float32, copy=False)
-    centroid = _l2_normalize_rows(centroid)[0]
-    centroid_dist = (1.0 - (features_l2 @ centroid)).astype(np.float32, copy=False)
-
-    # Default generic ranking.
-    scores = (WSI_W_NOVELTY * _zscore(novelty) + WSI_W_CENTROID * _zscore(centroid_dist)).astype(np.float32, copy=False)
+    scores = np.zeros((num_tiles,), dtype=np.float32)
     bad_margin = np.zeros((num_tiles,), dtype=np.float32)
     bad_likelihood = np.full((num_tiles,), 0.5, dtype=np.float32)
     reference_mode = "none"
     reference_stats: dict[str, Any] = {}
+    bad_neighbor_indices = np.empty((num_tiles, 0), dtype=np.int32)
+    bad_neighbor_sims = np.empty((num_tiles, 0), dtype=np.float32)
+    good_neighbor_indices = np.empty((num_tiles, 0), dtype=np.int32)
+    good_neighbor_sims = np.empty((num_tiles, 0), dtype=np.float32)
+    reference_tile_paths: tuple[str, ...] = ()
+    reference_tile_labels: tuple[str, ...] = ()
+    reference_neighbor_k = 0
+    ref_root = Path(reference_tiles_root).resolve() if (use_reference_labels and reference_tiles_root) else None
+    ref_records = _discover_reference_tiles(ref_root) if ref_root else []
+    use_retrieval_ranking = False
 
     if use_reference_labels:
-        ref_root = Path(reference_tiles_root).resolve() if reference_tiles_root else None
-        ref_records = _discover_reference_tiles(ref_root) if ref_root else []
         good_n = sum(1 for _, lbl in ref_records if lbl == "good")
         bad_n = sum(1 for _, lbl in ref_records if lbl == "bad")
         reference_stats = {
@@ -380,6 +514,9 @@ def build_unsupervised_roi_index(
             "reference_tiles_total": len(ref_records),
             "reference_tiles_good": int(good_n),
             "reference_tiles_bad": int(bad_n),
+            "reference_neighbor_k": int(AML_REFERENCE_TOP_K),
+            "reference_similarity": "cosine_exact",
+            "ranking_strategy": "raw_exact_retrieval",
         }
 
         if ref_records:
@@ -395,31 +532,40 @@ def build_unsupervised_roi_index(
                 )
 
             run_device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
-            ref_feat_l2, ref_labels = _embed_reference_tiles(
+            ref_feat_l2, ref_labels, ref_paths = _embed_reference_tiles(
                 records=ref_records,
                 extractor=extractor,
                 device=run_device,
                 batch_size=max(1, min(64, int(batch_size))),
             )
-            bad_margin, bad_likelihood, reference_mode = _compute_bad_similarity_scores(
+            retrieval = _compute_reference_knn_scores(
                 features_l2=features_l2,
                 ref_features_l2=ref_feat_l2,
                 ref_labels=ref_labels,
+                top_k=AML_REFERENCE_TOP_K,
+                row_block_size=AML_REFERENCE_QUERY_BLOCK_ROWS,
             )
+            bad_margin = retrieval.margin
+            bad_likelihood = retrieval.bad_likelihood
+            reference_mode = retrieval.reference_mode
+            bad_neighbor_indices = retrieval.bad_neighbor_indices
+            bad_neighbor_sims = retrieval.bad_neighbor_sims
+            good_neighbor_indices = retrieval.good_neighbor_indices
+            good_neighbor_sims = retrieval.good_neighbor_sims
+            reference_tile_paths = ref_paths
+            reference_tile_labels = tuple(str(label) for label in ref_labels.tolist())
+            reference_neighbor_k = int(AML_REFERENCE_TOP_K)
 
             if reference_mode != "none":
-                # AML mode: bias ranking toward bad-like regions while still retaining novelty.
-                scores = (
-                    AML_W_NOVELTY * _zscore(novelty)
-                    + AML_W_CENTROID * _zscore(centroid_dist)
-                    + AML_W_BAD * _zscore(bad_margin)
-                ).astype(np.float32, copy=False)
+                scores = retrieval.rank_scores.astype(np.float32, copy=False)
+                use_retrieval_ranking = True
 
             reference_stats.update(
                 {
                     "reference_mode": reference_mode,
                     "wsi_bad_like_fraction": float(np.mean(bad_likelihood >= 0.5)),
                     "wsi_bad_like_strong_fraction": float(np.mean(bad_likelihood >= 0.65)),
+                    "reference_query_block_rows": int(AML_REFERENCE_QUERY_BLOCK_ROWS),
                 }
             )
             if progress_cb is not None:
@@ -435,6 +581,33 @@ def build_unsupervised_roi_index(
             reference_mode = "no_reference_tiles"
             reference_stats["reference_mode"] = reference_mode
 
+    if not use_retrieval_ranking:
+        if progress_cb is not None:
+            progress_cb(
+                {
+                    "phase": "build_knn",
+                    "status": "running",
+                    "num_tiles": num_tiles,
+                    "feature_dim": feature_dim,
+                }
+            )
+        novelty = _novelty_scores_from_knn(features_l2, k_neighbors=k_neighbors)
+        novelty = _suppress_artifact_outliers(novelty, percentile=ROI_NOVELTY_CLIP_PERCENTILE)
+
+        centroid = np.mean(features_l2, axis=0, keepdims=True).astype(np.float32, copy=False)
+        centroid = _l2_normalize_rows(centroid)[0]
+        centroid_dist = (1.0 - (features_l2 @ centroid)).astype(np.float32, copy=False)
+
+        scores = (WSI_W_NOVELTY * _zscore(novelty) + WSI_W_CENTROID * _zscore(centroid_dist)).astype(np.float32, copy=False)
+        if progress_cb is not None:
+            progress_cb(
+                {
+                    "phase": "build_knn",
+                    "status": "done",
+                    "num_tiles": num_tiles,
+                    "feature_dim": feature_dim,
+                }
+            )
     default_mpp_obj = SlideMPP(default_slide_mpp) if default_slide_mpp is not None else None
     slide_mpp = get_slide_mpp_(slide_path, default_mpp=default_mpp_obj)
     if slide_mpp is None:
@@ -446,14 +619,6 @@ def build_unsupervised_roi_index(
     coordinates_level0_xy = (xy_um / slide_mpp_f).astype(np.float32, copy=False)
 
     if progress_cb is not None:
-        progress_cb(
-            {
-                "phase": "build_knn",
-                "status": "done",
-                "num_tiles": num_tiles,
-                "feature_dim": feature_dim,
-            }
-        )
         progress_cb(
             {
                 "phase": "rank_candidates",
@@ -477,7 +642,58 @@ def build_unsupervised_roi_index(
         bad_likelihood=bad_likelihood,
         reference_mode=reference_mode,
         reference_stats=reference_stats,
+        bad_neighbor_indices=bad_neighbor_indices,
+        bad_neighbor_sims=bad_neighbor_sims,
+        good_neighbor_indices=good_neighbor_indices,
+        good_neighbor_sims=good_neighbor_sims,
+        reference_tile_paths=reference_tile_paths,
+        reference_tile_labels=reference_tile_labels,
+        reference_neighbor_k=reference_neighbor_k,
     )
+
+
+def _reference_matches_for_tile(
+    *,
+    index: UnsupervisedROIIndex,
+    tile_idx: int,
+    max_items: int = AML_REFERENCE_EVIDENCE_PER_CLASS,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], float, float]:
+    def _collect(
+        neighbor_indices: npt.NDArray[np.int32],
+        neighbor_sims: npt.NDArray[np.float32],
+    ) -> list[dict[str, Any]]:
+        if neighbor_indices.ndim != 1 or neighbor_sims.ndim != 1:
+            return []
+
+        out: list[dict[str, Any]] = []
+        limit = max(0, min(int(max_items), int(neighbor_indices.shape[0]), int(neighbor_sims.shape[0])))
+        for ref_idx, sim in zip(neighbor_indices[:limit], neighbor_sims[:limit]):
+            ref_i = int(ref_idx)
+            if ref_i < 0 or ref_i >= len(index.reference_tile_paths):
+                continue
+            out.append(
+                {
+                    "path": index.reference_tile_paths[ref_i],
+                    "name": Path(index.reference_tile_paths[ref_i]).name,
+                    "label": index.reference_tile_labels[ref_i] if ref_i < len(index.reference_tile_labels) else "",
+                    "similarity": float(sim),
+                }
+            )
+        return out
+
+    bad_refs: list[dict[str, Any]] = []
+    good_refs: list[dict[str, Any]] = []
+    bad_top1 = 0.0
+    good_top1 = 0.0
+
+    if index.bad_neighbor_sims.ndim == 2 and index.bad_neighbor_sims.shape[0] > tile_idx:
+        bad_top1 = float(index.bad_neighbor_sims[tile_idx, 0]) if index.bad_neighbor_sims.shape[1] else 0.0
+        bad_refs = _collect(index.bad_neighbor_indices[tile_idx], index.bad_neighbor_sims[tile_idx])
+    if index.good_neighbor_sims.ndim == 2 and index.good_neighbor_sims.shape[0] > tile_idx:
+        good_top1 = float(index.good_neighbor_sims[tile_idx, 0]) if index.good_neighbor_sims.shape[1] else 0.0
+        good_refs = _collect(index.good_neighbor_indices[tile_idx], index.good_neighbor_sims[tile_idx])
+
+    return bad_refs, good_refs, bad_top1, good_top1
 
 
 def select_topk_candidates_for_view(
@@ -598,22 +814,37 @@ def select_topk_candidates_for_view(
             if index.bad_margin.size > tile_idx
             else 0.0
         )
-        if bad_like >= 0.60:
+        retrieval_score = float(index.scores[tile_idx])
+        if index.reference_mode.startswith("good_bad_exact_knn"):
+            if bad_margin > 0.0:
+                quality_hint = "bad_like"
+            elif bad_margin < 0.0:
+                quality_hint = "good_like"
+            else:
+                quality_hint = "uncertain"
+        elif bad_like >= 0.60:
             quality_hint = "bad_like"
         elif bad_like <= 0.40:
             quality_hint = "good_like"
         else:
             quality_hint = "uncertain"
+        bad_refs, good_refs, bad_top1, good_top1 = _reference_matches_for_tile(index=index, tile_idx=int(tile_idx))
 
         out.append(
             {
                 "rank": rank,
                 "tile_index": int(tile_idx),
                 "score": float(index.scores[tile_idx]),
+                "retrieval_score": retrieval_score,
                 "bad_likelihood": bad_like,
                 "bad_margin": bad_margin,
                 "quality_hint": quality_hint,
                 "reference_mode": index.reference_mode,
+                "reference_neighbor_k": index.reference_neighbor_k,
+                "bad_top1_similarity": bad_top1,
+                "good_top1_similarity": good_top1,
+                "retrieved_bad_refs": bad_refs,
+                "retrieved_good_refs": good_refs,
                 "center_norm": [cx_norm, cy_norm],
                 "bbox_norm": [bx0n, by0n, bx1n, by1n],
                 "center_level0": [cxi, cyi],

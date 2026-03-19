@@ -182,12 +182,19 @@ def _inject_wsi_images(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             last_roi = state._roi_marks[-1]
             roi_id = last_roi.get("roi_id")
             label = last_roi.get("label", "")
+            ref_evidence = last_roi.get("aml_reference_evidence") if isinstance(last_roi.get("aml_reference_evidence"), dict) else None
+            ref_extra = ""
+            if _agent_type() == "aml" and ref_evidence:
+                summary = ref_evidence.get("summary")
+                if isinstance(summary, str) and summary:
+                    ref_extra = f" Retrieval evidence for this ROI: {summary}."
             text = (
                 f"CURRENT VIEW = NEWLY MARKED ROI (ROI #{roi_id}: {label}{extra}). "
                 "Carefully inspect this high-power field. If it is mostly background or "
                 "not diagnostic, your very next action should be to call "
                 "wsi_discard_last_roi. All coordinates for any subsequent tool call must "
                 "be chosen relative to THIS image."
+                + ref_extra
             )
         else:
             text = (
@@ -219,6 +226,13 @@ def _inject_wsi_images(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             aml_stop_lines.append(
                 f"- You already have {kept_roi_count} kept ROI(s); this is often enough for a final AML decision."
             )
+        if kept_roi_count:
+            aml_stop_lines.append("- Kept ROI reference evidence:")
+            for roi in state._roi_marks[-min(3, kept_roi_count):]:
+                ref_evidence = roi.get("aml_reference_evidence") if isinstance(roi.get("aml_reference_evidence"), dict) else None
+                summary = ref_evidence.get("summary") if ref_evidence else None
+                if isinstance(summary, str) and summary:
+                    aml_stop_lines.append(f"- ROI #{roi.get('roi_id')}: {summary}")
         new_messages.insert(
             insert_pos,
             {"role": "user", "content": [{"type": "text", "text": "\n".join(aml_stop_lines)}]},
@@ -235,11 +249,34 @@ def _inject_wsi_images(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             score_txt = f"{float(score):.3f}" if isinstance(score, (int, float)) else "n/a"
             quality_hint = c.get("quality_hint")
             bad_like = c.get("bad_likelihood")
+            retrieval_score = c.get("retrieval_score")
+            bad_top1 = c.get("bad_top1_similarity")
+            good_top1 = c.get("good_top1_similarity")
+            bad_refs = c.get("retrieved_bad_refs")
+            good_refs = c.get("retrieved_good_refs")
             extras = []
             if isinstance(quality_hint, str) and quality_hint:
                 extras.append(f"hint={quality_hint}")
+            if isinstance(retrieval_score, (int, float)):
+                extras.append(f"retrieval={float(retrieval_score):.2f}")
             if isinstance(bad_like, (int, float)):
                 extras.append(f"bad_like={float(bad_like):.2f}")
+            if isinstance(bad_top1, (int, float)):
+                extras.append(f"bad_top1={float(bad_top1):.2f}")
+            if isinstance(good_top1, (int, float)):
+                extras.append(f"good_top1={float(good_top1):.2f}")
+            if isinstance(bad_refs, list) and bad_refs:
+                top_bad = bad_refs[0]
+                sim = top_bad.get("similarity")
+                name = top_bad.get("name") or os.path.basename(str(top_bad.get("path") or ""))
+                if name and isinstance(sim, (int, float)):
+                    extras.append(f"bad_nn={name}@{float(sim):.2f}")
+            if isinstance(good_refs, list) and good_refs:
+                top_good = good_refs[0]
+                sim = top_good.get("similarity")
+                name = top_good.get("name") or os.path.basename(str(top_good.get("path") or ""))
+                if name and isinstance(sim, (int, float)):
+                    extras.append(f"good_nn={name}@{float(sim):.2f}")
             suffix = f", {', '.join(extras)}" if extras else ""
             cand_lines.append(f"#{rank}: center=({int(center[0])},{int(center[1])}), score={score_txt}{suffix}")
         aml_meta_line = ""
@@ -249,19 +286,31 @@ def _inject_wsi_images(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             mode = ref_stats.get("reference_mode")
             bad_frac = ref_stats.get("wsi_bad_like_fraction")
             strong_bad_frac = ref_stats.get("wsi_bad_like_strong_fraction")
+            ref_k = ref_stats.get("reference_neighbor_k")
+            similarity = ref_stats.get("reference_similarity")
             parts = []
             if mode:
                 parts.append(f"mode={mode}")
+            if similarity:
+                parts.append(f"similarity={similarity}")
+            if isinstance(ref_k, int):
+                parts.append(f"ref_k={ref_k}")
             if isinstance(bad_frac, (int, float)):
                 parts.append(f"bad_like_fraction={float(bad_frac):.2f}")
             if isinstance(strong_bad_frac, (int, float)):
                 parts.append(f"strong_bad_like_fraction={float(strong_bad_frac):.2f}")
             if parts:
                 aml_meta_line = "\nAML quality summary: " + ", ".join(parts)
+        expected_source = (
+            "UNI2 tile embeddings + exact good/bad exemplar retrieval ranked by raw nearest bad similarity."
+            if _agent_type() == "aml"
+            else "UNI2 tile embeddings + kNN ranking."
+        )
+        expected_source_name = "uni2_exact_retrieval" if _agent_type() == "aml" else "uni2_knn"
         cand_text = (
             "Top ROI candidates for CURRENT VIEW (normalized 0-999 coordinates). "
             f"Candidate source: {source}. "
-            "Expected source is 'uni2_knn' from UNI2 tile embeddings + kNN ranking. "
+            f"Expected source is '{expected_source_name}' from {expected_source} "
             "For wsi_mark_roi_norm, choose one of these candidate centers/bboxes; arbitrary ROI coords are rejected:\n"
             + "\n".join(cand_lines)
             + aml_meta_line

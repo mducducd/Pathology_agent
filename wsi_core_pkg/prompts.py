@@ -46,8 +46,8 @@ DEFAULT_AML_PROMPT = (
     "Be efficient: inspect only a small number of diagnostically meaningful high-power ROIs, not an exhaustive survey.\n"
     "Examine only diagnostically relevant regions with good focus and staining. Avoid pale/empty or artifact regions.\n"
     "You MUST search for high-density cellular regions. Zoom in repeatedly until you reach true high-power views with clear cellular detail.\n"
-    "Navigation outputs may include roi_candidates with quality_hint and bad_likelihood from good-vs-bad reference-tile matching; "
-    "prioritize bad_like candidates first and treat mostly good_like candidates as weaker AML evidence.\n"
+    "Navigation outputs may include roi_candidates with quality_hint and retrieved nearest good/bad exemplars from exact reference-tile search; "
+    "prioritize bad_like candidates first, ranked by raw nearest bad-exemplar similarity, and use good exemplars only as contrast checks.\n"
     "Inspect a few high-value ROIs at high power and estimate blast percentage across them.\n"
     "After each wsi_mark_roi_norm, if the ROI is background, low-cellularity, out of focus, or redundant, immediately call wsi_discard_last_roi.\n"
     "If the evidence you already have is enough for a stable final AML category, stop immediately instead of searching for extra confirmation.\n"
@@ -75,4 +75,5 @@ DEFAULT_AML_PROMPT = (
     "- Brief morphology summary.\n"
     "- Estimated blast percentage range.\n"
     "- Final decision (Normal marrow / Acute leukemia / Call for more diagnostics).\n"
+    "- For each kept ROI, include whether retrieval evidence was closer to bad or good exemplars if shown in the tool outputs.\n"
 )

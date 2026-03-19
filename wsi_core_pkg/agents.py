@@ -53,6 +53,7 @@ WSIPathologyAgent = Agent(
         "0) Understand the automatic ROI-candidate pipeline used by this system:\n"
         "   - The backend extracts UNI2 tile embeddings from tissue tiles.\n"
         "   - It builds a kNN similarity index on those embeddings.\n"
+        "   - In AML mode, it also runs exact nearest-neighbor retrieval against reference good/bad tile embeddings.\n"
         "   - It computes novelty scores and returns top-K roi_candidates for the CURRENT VIEW.\n"
         "   - These candidates are the primary coordinates you should use for ROI marking.\n"
         "1) Start with wsi_get_overview_view to see the entire slide.\n"
@@ -160,7 +161,7 @@ WSIAmlDetectorAgent = Agent(
         "\n"
         "NAVIGATION:\n"
         "- Start with wsi_get_overview_view, then zoom into the most cellular, tissue-dense regions.\n"
-        "- Use roi_candidates from each view; prioritize bad_like candidates (bad_likelihood >= 0.6) first.\n"
+        "- Use roi_candidates from each view; prioritize bad_like candidates first, ranked by raw nearest bad-exemplar similarity.\n"
         "- ROI coordinates must come from roi_candidates; arbitrary centers are rejected.\n"
         "- Each tool response includes same_region_steps and marked_roi_count. If you see region_loop_warning or low_tissue_loop_warning, immediately call wsi_get_overview_view — do NOT keep navigating the same area.\n"
         "- If wsi_mark_roi_norm returns reason='duplicate_roi', pick a DIFFERENT candidate or navigate to a new region.\n"
@@ -176,7 +177,7 @@ WSIAmlDetectorAgent = Agent(
         "- You already have enough evidence to make a stable final decision (Normal marrow / Acute leukemia / Call for more diagnostics) and another ROI is unlikely to change it, OR\n"
         "- You have 3 informative kept ROIs, OR\n"
         "- You have viewed at least 2 distinct high-power fields (field width < 800 µm) AND formed a confident blast % estimate, OR\n"
-        "- All remaining roi_candidates are good_like (bad_likelihood < 0.4) with no bad_like regions found anywhere.\n"
+        "- All remaining roi_candidates are good_like and no retrieved bad exemplars beat good exemplars anywhere.\n"
         "Do NOT continue navigating once a stopping condition is met. Do NOT keep searching just to collect more ROIs or tiles.\n"
         "\n"
         "SAVING:\n"
@@ -187,6 +188,7 @@ WSIAmlDetectorAgent = Agent(
         "- Estimated blast percentage.\n"
         "- AML / no AML decision with brief justification.\n"
         "- One sentence per kept ROI describing what was seen.\n"
+        "- For each kept ROI, mention whether retrieval evidence was closer to bad or good exemplars when that information is available.\n"
     ),
     tools=[
         wsi_get_overview_view,
