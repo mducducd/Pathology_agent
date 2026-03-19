@@ -13,7 +13,7 @@ import openslide
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from wsi_core_pkg.embeddings import (
     extract_wsi_features_by_tiles,
@@ -43,6 +43,15 @@ ALLOWED_MODEL_NAMES = {
     "Qwen3.5-397B-A17B-FP8",
 }
 ALLOWED_EMBEDDING_EXTRACTORS = {"uni2"}
+DEFAULT_SERVER_SLIDE_ROOTS = [
+    Path("/mnt/copernicus3/PATHOLOGY/others/private/haemadata/ALL_WSIs/"),
+]
+SERVER_SELECTION_LABELS = {
+    "slide_file": "Server slide file",
+    "mirax_file": "Server MIRAX file",
+    "directory": "Server folder",
+    "mirax_directory": "Server MIRAX folder",
+}
 
 app = FastAPI(title="WSI Agent Prototype")
 
@@ -70,11 +79,14 @@ class RunStatus(BaseModel):
     report_path: Optional[str] = None
     error_message: Optional[str] = None
     traceback: Optional[str] = None
+    source_mode: str = "upload"  # upload | server
+    selected_source_path: Optional[str] = None
+    selected_source_label: Optional[str] = None
 
     # upload bookkeeping
     upload_count: int = 0
     upload_bytes: int = 0
-    uploaded_files: List[str] = []
+    uploaded_files: List[str] = Field(default_factory=list)
 
 
 RUNS: Dict[str, RunStatus] = {}
@@ -85,6 +97,34 @@ _EMBEDDING_EXTRACTOR_LOCK = threading.Lock()
 
 # --- Auto-cleanup config ---
 DELETE_UPLOADS_AFTER_RUN = os.getenv("DELETE_UPLOADS_AFTER_RUN", "1").strip().lower() in {"1", "true", "yes", "y"}
+
+
+def _load_server_slide_roots() -> List[Path]:
+    raw = os.getenv("SERVER_SLIDE_ROOTS", "").strip()
+    candidates: List[Path]
+    if raw:
+        candidates = [Path(chunk).expanduser() for chunk in raw.split(os.pathsep) if chunk.strip()]
+    else:
+        candidates = list(DEFAULT_SERVER_SLIDE_ROOTS)
+
+    roots: List[Path] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        try:
+            resolved = candidate.resolve(strict=False)
+        except Exception:
+            resolved = candidate
+        if not resolved.is_absolute():
+            continue
+        key = str(resolved)
+        if key in seen:
+            continue
+        seen.add(key)
+        roots.append(resolved)
+    return roots
+
+
+SERVER_SLIDE_ROOTS = _load_server_slide_roots()
 
 
 def _safe_cleanup_run_upload_dir(run_id: str) -> None:
@@ -138,6 +178,45 @@ def _is_safe_relpath(p: Path) -> bool:
     if ".." in p.parts:
         return False
     return True
+
+
+def _get_server_root_for_path(path: Path) -> Optional[Path]:
+    resolved_path = path.resolve(strict=False)
+    for root in SERVER_SLIDE_ROOTS:
+        try:
+            resolved_path.relative_to(root)
+            return root
+        except ValueError:
+            continue
+    return None
+
+
+def _resolve_allowed_server_path(raw_path: str) -> Tuple[Path, Path]:
+    raw = (raw_path or "").strip()
+    if not raw:
+        raise HTTPException(status_code=400, detail="A server path is required.")
+
+    candidate = Path(raw).expanduser()
+    if not candidate.is_absolute():
+        raise HTTPException(status_code=400, detail="Server paths must be absolute.")
+
+    try:
+        resolved = candidate.resolve(strict=True)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=f"Path not found: {candidate}") from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Failed to resolve path '{candidate}': {type(exc).__name__}: {exc}",
+        ) from exc
+
+    root = _get_server_root_for_path(resolved)
+    if root is None:
+        raise HTTPException(
+            status_code=403,
+            detail="Selected path is outside the allowed server slide roots.",
+        )
+    return resolved, root
 
 
 def _get_embedding_extractor(extractor_name: str):
@@ -218,6 +297,90 @@ def _score_mirax_candidate(p: Path) -> Tuple[int, int, int]:
         has_sibling_dir = 0
     depth = len(p.parts)
     return (has_sibling_dir, -depth, -len(str(p)))
+
+
+def _matching_mirax_sibling_for_dir(dir_path: Path) -> Optional[Path]:
+    for ext in sorted(MIRAX_EXTS):
+        candidate = dir_path.parent / f"{dir_path.name}{ext}"
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _discover_slide_candidates(root: Path, limit: int = 4) -> List[Path]:
+    found: List[Path] = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = sorted(d for d in dirnames if not d.startswith("."))
+        for filename in sorted(filenames):
+            ext = Path(filename).suffix.lower()
+            if ext not in SUPPORTED_PRIMARY_EXTS:
+                continue
+            found.append(Path(dirpath) / filename)
+            if len(found) >= limit:
+                return found
+    return found
+
+
+def _resolve_slide_file_path(slide_path: Path) -> Tuple[Path, str]:
+    ext = slide_path.suffix.lower()
+    if ext in STD_EXTS:
+        return slide_path, slide_path.name
+
+    if ext in MIRAX_EXTS:
+        companion_dir = slide_path.parent / slide_path.stem
+        if not companion_dir.is_dir():
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "MIRAX slide detected (.mrxs/.mrsx) but companion data directory not found. "
+                    "Expected a folder named like the slide (same stem) next to the .mrxs/.mrsx."
+                ),
+            )
+        return slide_path, slide_path.name
+
+    raise HTTPException(
+        status_code=400,
+        detail="Selected file is not a supported slide. Choose .svs/.tif/.tiff/.ndpi/.mrxs/.mrsx.",
+    )
+
+
+def _resolve_server_slide_selection(source_path: Path) -> Tuple[Path, str, str]:
+    source_path = source_path.resolve(strict=True)
+
+    if source_path.is_file():
+        slide_path, slide_filename = _resolve_slide_file_path(source_path)
+        selection_kind = "mirax_file" if slide_path.suffix.lower() in MIRAX_EXTS else "slide_file"
+        return slide_path, slide_filename, selection_kind
+
+    if not source_path.is_dir():
+        raise HTTPException(status_code=400, detail=f"Selected path is neither a file nor a directory: {source_path}")
+
+    sibling_mirax = _matching_mirax_sibling_for_dir(source_path)
+    if sibling_mirax is not None:
+        slide_path, slide_filename = _resolve_slide_file_path(sibling_mirax)
+        return slide_path, slide_filename, "mirax_directory"
+
+    candidates = _discover_slide_candidates(source_path, limit=4)
+    if not candidates:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Selected folder does not contain a supported slide bundle. "
+                "Choose a slide file or a MIRAX companion folder."
+            ),
+        )
+    if len(candidates) > 1:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Selected folder contains multiple slide candidates. "
+                "Choose a specific slide file or navigate into a single-slide folder."
+            ),
+        )
+
+    slide_path, slide_filename = _resolve_slide_file_path(candidates[0])
+    selection_kind = "mirax_directory" if slide_path.suffix.lower() in MIRAX_EXTS else "directory"
+    return slide_path, slide_filename, selection_kind
 
 
 def _find_best_mirax_file(root: Path) -> Path:
@@ -397,6 +560,76 @@ def _assert_slide_openable(slide_path: Path) -> None:
         ) from exc
 
 
+def _server_root_label(root: Path) -> str:
+    return root.name or str(root)
+
+
+def _build_server_breadcrumbs(current_dir: Path, root: Path) -> List[dict]:
+    crumbs = [{"label": _server_root_label(root), "path": str(root)}]
+    if current_dir == root:
+        return crumbs
+
+    rel_parts = current_dir.relative_to(root).parts
+    acc = root
+    for part in rel_parts:
+        acc = acc / part
+        crumbs.append({"label": part, "path": str(acc)})
+    return crumbs
+
+
+def _list_server_directory_entries(current_dir: Path) -> List[dict]:
+    try:
+        children = sorted(
+            current_dir.iterdir(),
+            key=lambda p: (not p.is_dir(), p.name.lower()),
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=f"Permission denied: {current_dir}") from exc
+
+    entries: List[dict] = []
+    for child in children:
+        name = child.name
+        if name.startswith("."):
+            continue
+
+        if child.is_dir():
+            hint = "MIRAX companion folder" if _matching_mirax_sibling_for_dir(child) is not None else None
+            entries.append(
+                {
+                    "name": name,
+                    "path": str(child),
+                    "kind": "dir",
+                    "hint": hint,
+                }
+            )
+            continue
+
+        ext = child.suffix.lower()
+        if ext not in SUPPORTED_PRIMARY_EXTS:
+            continue
+
+        try:
+            size_bytes = child.stat().st_size
+        except OSError:
+            size_bytes = None
+
+        entries.append(
+            {
+                "name": name,
+                "path": str(child),
+                "kind": "file",
+                "ext": ext,
+                "size_bytes": size_bytes,
+                "slide_kind": "mirax" if ext in MIRAX_EXTS else "standard",
+            }
+        )
+
+    return entries
+
+
+class ServerPathRequest(BaseModel):
+    path: str
+
 
 def run_worker(
     run_id: str,
@@ -532,6 +765,88 @@ async def create_run(
     return {"run_id": run_id, "model_name": model_name}
 
 
+@app.get("/api/server_fs/roots")
+def list_server_roots():
+    roots = []
+    for root in SERVER_SLIDE_ROOTS:
+        roots.append(
+            {
+                "label": _server_root_label(root),
+                "path": str(root),
+                "exists": root.exists() and root.is_dir(),
+            }
+        )
+    return {"roots": roots}
+
+
+@app.get("/api/server_fs/list")
+def list_server_directory(path: str):
+    current_dir, root = _resolve_allowed_server_path(path)
+    if not current_dir.is_dir():
+        raise HTTPException(status_code=400, detail=f"Selected path is not a directory: {current_dir}")
+
+    parent_path: Optional[str] = None
+    if current_dir != root:
+        parent = current_dir.parent
+        if _get_server_root_for_path(parent) == root:
+            parent_path = str(parent)
+
+    return {
+        "current_path": str(current_dir),
+        "root_path": str(root),
+        "root_label": _server_root_label(root),
+        "parent_path": parent_path,
+        "breadcrumbs": _build_server_breadcrumbs(current_dir, root),
+        "entries": _list_server_directory_entries(current_dir),
+    }
+
+
+@app.post("/api/server_fs/resolve")
+def resolve_server_path(payload: ServerPathRequest):
+    source_path, root = _resolve_allowed_server_path(payload.path)
+    slide_path, slide_filename, selection_kind = _resolve_server_slide_selection(source_path)
+    return {
+        "requested_path": str(source_path),
+        "root_path": str(root),
+        "slide_path": str(slide_path),
+        "slide_filename": slide_filename,
+        "selection_kind": selection_kind,
+        "selection_label": SERVER_SELECTION_LABELS.get(selection_kind, "Server selection"),
+    }
+
+
+@app.post("/api/runs/{run_id}/select_server_path")
+def select_server_path_for_run(run_id: str, payload: ServerPathRequest):
+    run = RUNS.get(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    if run.status in {"pending", "running", "done", "terminated"}:
+        raise HTTPException(status_code=400, detail=f"Run is already {run.status}; source selection is closed.")
+    if run.status == "error":
+        raise HTTPException(status_code=400, detail="Run is in error state; create a new run.")
+    if run.upload_count > 0 or run.uploaded_files:
+        raise HTTPException(status_code=400, detail="This run already has uploaded files. Create a new run to use server browsing.")
+
+    source_path, _ = _resolve_allowed_server_path(payload.path)
+    _, slide_filename, selection_kind = _resolve_server_slide_selection(source_path)
+
+    run.source_mode = "server"
+    run.selected_source_path = str(source_path)
+    run.selected_source_label = SERVER_SELECTION_LABELS.get(selection_kind, "Server selection")
+    run.slide_filename = slide_filename
+    run.slide_path = None
+    run.status = "created"
+
+    return {
+        "ok": True,
+        "run_id": run_id,
+        "selected_source_path": run.selected_source_path,
+        "selected_source_label": run.selected_source_label,
+        "slide_filename": slide_filename,
+    }
+
+
 @app.post("/api/runs/{run_id}/upload")
 async def upload_one_file(
     run_id: str,
@@ -546,6 +861,8 @@ async def upload_one_file(
         raise HTTPException(status_code=400, detail=f"Run is already {run.status}; uploads are closed.")
     if run.status == "error":
         raise HTTPException(status_code=400, detail="Run is in error state; create a new run.")
+    if run.source_mode == "server" or run.selected_source_path:
+        raise HTTPException(status_code=400, detail="This run is configured for server browsing. Create a new run to upload files.")
 
     run_dir = BASE_RUN_DIR / run_id / "uploads"
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -583,11 +900,18 @@ async def finalize_and_start(run_id: str):
     if run.status == "error":
         raise HTTPException(status_code=400, detail="Run is in error state; create a new run.")
 
-    run_dir = BASE_RUN_DIR / run_id / "uploads"
-    if not run_dir.exists():
-        raise HTTPException(status_code=400, detail="Run directory missing; nothing to finalize.")
+    if run.source_mode == "server":
+        if not run.selected_source_path:
+            raise HTTPException(status_code=400, detail="No server path has been selected for this run.")
+        source_path, _ = _resolve_allowed_server_path(run.selected_source_path)
+        slide_path, slide_filename, selection_kind = _resolve_server_slide_selection(source_path)
+        run.selected_source_label = SERVER_SELECTION_LABELS.get(selection_kind, run.selected_source_label)
+    else:
+        run_dir = BASE_RUN_DIR / run_id / "uploads"
+        if not run_dir.exists():
+            raise HTTPException(status_code=400, detail="Run directory missing; nothing to finalize.")
+        slide_path, slide_filename = _validate_final_bundle(run_dir)
 
-    slide_path, slide_filename = _validate_final_bundle(run_dir)
     try:
         _assert_slide_openable(slide_path)
     except HTTPException as exc:

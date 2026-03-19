@@ -56,6 +56,20 @@
   const resizerLeftMainEl = document.getElementById("resizer-left-main");
   const resizerMainRightEl = document.getElementById("resizer-main-right");
   const resizerViewerSplitEl = document.getElementById("resizer-viewer-split");
+  const explorerModal = document.getElementById("explorer-modal");
+  const explorerBackdrop = document.getElementById("explorer-backdrop");
+  const explorerCloseBtn = document.getElementById("explorer-close");
+  const explorerRootSelect = document.getElementById("explorer-root-select");
+  const explorerUpBtn = document.getElementById("explorer-up");
+  const explorerRefreshBtn = document.getElementById("explorer-refresh");
+  const explorerBreadcrumbs = document.getElementById("explorer-breadcrumbs");
+  const explorerCurrentPath = document.getElementById("explorer-current-path");
+  const explorerError = document.getElementById("explorer-error");
+  const explorerEmpty = document.getElementById("explorer-empty");
+  const explorerList = document.getElementById("explorer-list");
+  const explorerSelectionPreview = document.getElementById("explorer-selection-preview");
+  const explorerUseFolderBtn = document.getElementById("explorer-use-folder");
+  const explorerUseFileBtn = document.getElementById("explorer-use-file");
 
   const defaultPrompts = {
     tile: `You are an expert pathologist’s assistant. Your task is to scan the whole WSI and save tiles for diagnostic analysis.
@@ -126,8 +140,9 @@ If you cannot find a suspicious lesion after exploring representative areas at a
     files: "Standard slides: .svs / .tif / .tiff / .ndpi (single file).",
     folder: "MIRAX: choose the MIRAX folder containing .mrxs/.mrsx and its data directory.",
     zip: "MIRAX zip: upload one .zip containing .mrxs/.mrsx plus the data directory.",
+    server: "Browse HPC slide roots directly and run from the server without uploading the WSI.",
   };
-  const uploadActionDefaultHint = "Choose an upload action.";
+  const uploadActionDefaultHint = "Choose a slide source.";
 
   function selectedAgentType() {
     return (agentSelect && agentSelect.value) ? agentSelect.value : "tile";
@@ -207,6 +222,10 @@ If you cannot find a suspicious lesion after exploring representative areas at a
     if (action === "zip") {
       zipInput.value = "";
       zipInput.click();
+      return;
+    }
+    if (action === "server") {
+      openExplorer();
     }
   }
 
@@ -233,6 +252,15 @@ If you cannot find a suspicious lesion after exploring representative areas at a
   const mirax = new Set([".mrxs", ".mrsx"]);
 
   let items = []; // {file, relPath, id}
+  let serverSelection = null; // {requestedPath, slidePath, slideFilename, selectionKind, selectionLabel}
+  let explorerRoots = [];
+  let explorerCurrentPathValue = "";
+  let explorerParentPathValue = "";
+  let explorerEntries = [];
+  let explorerBreadcrumbItems = [];
+  let explorerSelectedFilePath = "";
+  let explorerSelectedFileName = "";
+  let explorerBusy = false;
   let currentRunId = null;
   let currentModelName = null;
   let pollingTimer = null;
@@ -799,11 +827,23 @@ If you cannot find a suspicious lesion after exploring representative areas at a
     return Math.random().toString(16).slice(2) + Date.now().toString(16);
   }
 
-  function clearSelection() {
-    items = [];
+  function resetUploadInputs() {
     fileInput.value = "";
     folderInput.value = "";
     zipInput.value = "";
+  }
+
+  function setServerSelection(selection) {
+    items = [];
+    serverSelection = selection ? { ...selection } : null;
+    resetUploadInputs();
+    render();
+  }
+
+  function clearSelection() {
+    items = [];
+    serverSelection = null;
+    resetUploadInputs();
     render();
   }
 
@@ -870,25 +910,44 @@ If you cannot find a suspicious lesion after exploring representative areas at a
   }
 
   function addFiles(files) {
+    if (!files || !files.length) return;
+    serverSelection = null;
     for (const f of files) {
       const relPath = f.webkitRelativePath || f.name;
       items.push({ file: f, relPath, id: uniqId() });
     }
+    resetUploadInputs();
     render();
   }
 
   function removeItem(id) {
     items = items.filter((x) => x.id !== id);
     // Allow re-selecting the same file/folder immediately after removing it.
-    fileInput.value = "";
-    folderInput.value = "";
-    zipInput.value = "";
+    resetUploadInputs();
     render();
   }
 
   function computeModeAndValidation() {
+    if (serverSelection) {
+      return {
+        ok: true,
+        level: "good",
+        mode: serverSelection.selectionLabel || "Server selection",
+        msg: `Ready to run directly from server: ${serverSelection.slideFilename || serverSelection.requestedPath}.`,
+        startLabel: "Start run",
+        selectionMode: "server",
+      };
+    }
+
     if (items.length === 0) {
-      return { ok: false, level: "idle", mode: "No files", msg: "Drop or choose files to begin." };
+      return {
+        ok: false,
+        level: "idle",
+        mode: "No files",
+        msg: "Drop, upload, or browse the server to begin.",
+        startLabel: "Start run",
+        selectionMode: "none",
+      };
     }
 
     const exts = items.map(x => extOf(x.relPath || x.file.name));
@@ -899,35 +958,98 @@ If you cannot find a suspicious lesion after exploring representative areas at a
 
     if (hasZip) {
       if (items.length !== 1) {
-        return { ok: false, level: "bad", mode: "MIRAX zip (invalid mix)", msg: "If you upload a .zip, it must be the only file." };
+        return {
+          ok: false,
+          level: "bad",
+          mode: "MIRAX zip (invalid mix)",
+          msg: "If you upload a .zip, it must be the only file.",
+          startLabel: "Upload & Start run",
+          selectionMode: "upload",
+        };
       }
-      return { ok: true, level: "good", mode: "MIRAX zip", msg: `Ready to upload 1 zip (${bytesToHuman(totalBytes)}).` };
+      return {
+        ok: true,
+        level: "good",
+        mode: "MIRAX zip",
+        msg: `Ready to upload 1 zip (${bytesToHuman(totalBytes)}).`,
+        startLabel: "Upload & Start run",
+        selectionMode: "upload",
+      };
     }
 
     if (hasStd && hasMirax) {
-      return { ok: false, level: "bad", mode: "Mixed (invalid)", msg: "Do not mix standard slides with MIRAX in one upload." };
+      return {
+        ok: false,
+        level: "bad",
+        mode: "Mixed (invalid)",
+        msg: "Do not mix standard slides with MIRAX in one upload.",
+        startLabel: "Upload & Start run",
+        selectionMode: "upload",
+      };
     }
 
     if (hasStd) {
       if (items.length !== 1) {
-        return { ok: false, level: "bad", mode: "Standard slide (invalid)", msg: "Standard slides must be uploaded as a single file." };
+        return {
+          ok: false,
+          level: "bad",
+          mode: "Standard slide (invalid)",
+          msg: "Standard slides must be uploaded as a single file.",
+          startLabel: "Upload & Start run",
+          selectionMode: "upload",
+        };
       }
       const e = exts[0];
       if (!allowedPrimary.has(e)) {
-        return { ok: false, level: "bad", mode: "Unsupported", msg: "Unsupported file." };
+        return {
+          ok: false,
+          level: "bad",
+          mode: "Unsupported",
+          msg: "Unsupported file.",
+          startLabel: "Upload & Start run",
+          selectionMode: "upload",
+        };
       }
-      return { ok: true, level: "good", mode: "Standard slide", msg: `Ready (${bytesToHuman(totalBytes)}).` };
+      return {
+        ok: true,
+        level: "good",
+        mode: "Standard slide",
+        msg: `Ready (${bytesToHuman(totalBytes)}).`,
+        startLabel: "Upload & Start run",
+        selectionMode: "upload",
+      };
     }
 
     if (hasMirax) {
       if (items.length === 1) {
-        return { ok: false, level: "bad", mode: "MIRAX file only (invalid)", msg: "MIRAX needs its companion data directory. Upload folder or zip." };
+        return {
+          ok: false,
+          level: "bad",
+          mode: "MIRAX file only (invalid)",
+          msg: "MIRAX needs its companion data directory. Upload folder or zip.",
+          startLabel: "Upload & Start run",
+          selectionMode: "upload",
+        };
       }
       // with per-file upload, file count is not scary anymore
-      return { ok: true, level: "good", mode: "MIRAX folder/files", msg: `Ready (${items.length} files, ${bytesToHuman(totalBytes)}).` };
+      return {
+        ok: true,
+        level: "good",
+        mode: "MIRAX folder/files",
+        msg: `Ready (${items.length} files, ${bytesToHuman(totalBytes)}).`,
+        startLabel: "Upload & Start run",
+        selectionMode: "upload",
+      };
     }
 
-    return { ok: false, level: "bad", mode: "Unsupported", msg: "No supported slide detected." };
+    return {
+      ok: false,
+      level: "bad",
+      mode: "Unsupported",
+      msg: "No supported slide detected.",
+      startLabel: "Upload & Start run",
+      selectionMode: "upload",
+    };
   }
 
   function setPill(el, level, text) {
@@ -1000,6 +1122,9 @@ If you cannot find a suspicious lesion after exploring representative areas at a
 
   function syncStartButtonState(validation) {
     const v = validation || computeModeAndValidation();
+    if (btnStart) {
+      btnStart.textContent = v.startLabel || "Start run";
+    }
     btnStart.disabled = !v.ok || isRunBusyStatus(activeRunStatus);
     syncStatusPillVisibility(activeRunStatus || "idle");
     syncTerminateButtonState();
@@ -1007,10 +1132,9 @@ If you cannot find a suspicious lesion after exploring representative areas at a
 
   function render() {
     filelist.innerHTML = "";
-    const totalBytes = items.reduce((a, b) => a + (b.file.size || 0), 0);
-    filelistMeta.textContent = items.length ? `${items.length} file(s) · ${bytesToHuman(totalBytes)}` : "—";
+    if (serverSelection) {
+      filelistMeta.textContent = "Server path";
 
-    for (const it of items) {
       const li = document.createElement("li");
       li.className = "fileitem";
 
@@ -1019,11 +1143,11 @@ If you cannot find a suspicious lesion after exploring representative areas at a
 
       const name = document.createElement("div");
       name.className = "filename";
-      name.textContent = it.relPath || it.file.name;
+      name.textContent = serverSelection.requestedPath || serverSelection.slideFilename || "Server selection";
 
       const sub = document.createElement("div");
       sub.className = "filesub";
-      sub.textContent = `${bytesToHuman(it.file.size || 0)} · ${it.file.type || "application/octet-stream"}`;
+      sub.textContent = `${serverSelection.selectionLabel || "Server selection"} · ${serverSelection.slideFilename || ""}`;
 
       left.appendChild(name);
       left.appendChild(sub);
@@ -1031,29 +1155,76 @@ If you cannot find a suspicious lesion after exploring representative areas at a
       const right = document.createElement("div");
       right.className = "fileright";
 
-      const e = extOf(it.relPath || it.file.name);
       const tag = document.createElement("span");
       tag.className = "tag";
-      tag.textContent = e || "file";
+      tag.textContent = "server";
 
       const rm = document.createElement("button");
       rm.className = "remove icon-btn icon-remove";
       rm.type = "button";
-      rm.setAttribute("aria-label", "Remove file");
-      rm.title = "Remove file";
+      rm.setAttribute("aria-label", "Clear server selection");
+      rm.title = "Clear server selection";
       rm.innerHTML = `
         <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
           <path d="M4 7h16M9 7V5h6v2m-8 0 1 12h8l1-12M10 11v6M14 11v6" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
       `;
-      rm.addEventListener("click", () => removeItem(it.id));
+      rm.addEventListener("click", clearSelection);
 
       right.appendChild(tag);
       right.appendChild(rm);
-
       li.appendChild(left);
       li.appendChild(right);
       filelist.appendChild(li);
+    } else {
+      const totalBytes = items.reduce((a, b) => a + (b.file.size || 0), 0);
+      filelistMeta.textContent = items.length ? `${items.length} file(s) · ${bytesToHuman(totalBytes)}` : "—";
+
+      for (const it of items) {
+        const li = document.createElement("li");
+        li.className = "fileitem";
+
+        const left = document.createElement("div");
+        left.className = "fileleft";
+
+        const name = document.createElement("div");
+        name.className = "filename";
+        name.textContent = it.relPath || it.file.name;
+
+        const sub = document.createElement("div");
+        sub.className = "filesub";
+        sub.textContent = `${bytesToHuman(it.file.size || 0)} · ${it.file.type || "application/octet-stream"}`;
+
+        left.appendChild(name);
+        left.appendChild(sub);
+
+        const right = document.createElement("div");
+        right.className = "fileright";
+
+        const e = extOf(it.relPath || it.file.name);
+        const tag = document.createElement("span");
+        tag.className = "tag";
+        tag.textContent = e || "file";
+
+        const rm = document.createElement("button");
+        rm.className = "remove icon-btn icon-remove";
+        rm.type = "button";
+        rm.setAttribute("aria-label", "Remove file");
+        rm.title = "Remove file";
+        rm.innerHTML = `
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M4 7h16M9 7V5h6v2m-8 0 1 12h8l1-12M10 11v6M14 11v6" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+        `;
+        rm.addEventListener("click", () => removeItem(it.id));
+
+        right.appendChild(tag);
+        right.appendChild(rm);
+
+        li.appendChild(left);
+        li.appendChild(right);
+        filelist.appendChild(li);
+      }
     }
 
     const v = computeModeAndValidation();
@@ -1119,11 +1290,303 @@ If you cannot find a suspicious lesion after exploring representative areas at a
       collected.push(...files);
     }
 
+    serverSelection = null;
     for (const f of collected) {
       const rel = f._relPath || f.name;
       items.push({ file: f, relPath: rel, id: uniqId() });
     }
+    resetUploadInputs();
     render();
+  }
+
+  function setExplorerError(message) {
+    if (!explorerError) return;
+    const text = String(message || "").trim();
+    explorerError.textContent = text;
+    explorerError.hidden = !text;
+  }
+
+  function setExplorerBusyState(busy) {
+    explorerBusy = !!busy;
+    if (explorerRootSelect) explorerRootSelect.disabled = explorerBusy;
+    if (explorerUpBtn) explorerUpBtn.disabled = explorerBusy || !explorerParentPathValue;
+    if (explorerRefreshBtn) explorerRefreshBtn.disabled = explorerBusy || !explorerCurrentPathValue;
+    if (explorerUseFolderBtn) explorerUseFolderBtn.disabled = explorerBusy || !explorerCurrentPathValue;
+    if (explorerUseFileBtn) explorerUseFileBtn.disabled = explorerBusy || !explorerSelectedFilePath;
+  }
+
+  function updateExplorerSelectionPreview() {
+    if (!explorerSelectionPreview) return;
+    if (explorerSelectedFilePath) {
+      explorerSelectionPreview.textContent = `Selected file: ${explorerSelectedFileName || explorerSelectedFilePath}`;
+      return;
+    }
+    if (explorerCurrentPathValue) {
+      explorerSelectionPreview.textContent = `Current folder: ${explorerCurrentPathValue}`;
+      return;
+    }
+    explorerSelectionPreview.textContent = "Choose a file or navigate into a MIRAX folder.";
+  }
+
+  function setExplorerSelectedFile(entry) {
+    explorerSelectedFilePath = entry && entry.kind === "file" ? (entry.path || "") : "";
+    explorerSelectedFileName = entry && entry.kind === "file" ? (entry.name || "") : "";
+    renderExplorerList();
+    updateExplorerSelectionPreview();
+    setExplorerBusyState(explorerBusy);
+  }
+
+  function renderExplorerBreadcrumbs() {
+    if (!explorerBreadcrumbs) return;
+    explorerBreadcrumbs.innerHTML = "";
+    for (let i = 0; i < explorerBreadcrumbItems.length; i++) {
+      const crumb = explorerBreadcrumbItems[i];
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "explorer-crumb" + (i === explorerBreadcrumbItems.length - 1 ? " current" : "");
+      btn.textContent = crumb.label || crumb.path || "Path";
+      btn.addEventListener("click", () => loadExplorerPath(crumb.path));
+      explorerBreadcrumbs.appendChild(btn);
+    }
+  }
+
+  function renderExplorerList() {
+    if (!explorerList) return;
+    explorerList.innerHTML = "";
+    if (explorerEmpty) {
+      explorerEmpty.hidden = explorerEntries.length > 0;
+    }
+
+    for (const entry of explorerEntries) {
+      const li = document.createElement("li");
+      li.className = "explorer-entry";
+      if (entry.kind === "file" && entry.path === explorerSelectedFilePath) {
+        li.classList.add("is-selected");
+      }
+
+      const main = document.createElement("div");
+      main.className = "explorer-entry-main";
+
+      const icon = document.createElement("span");
+      icon.className = `explorer-entry-icon ${entry.kind}`;
+      icon.textContent = entry.kind === "dir" ? "D" : "F";
+
+      const text = document.createElement("div");
+      text.className = "explorer-entry-text";
+
+      const name = document.createElement("div");
+      name.className = "explorer-entry-name";
+      name.textContent = entry.name || entry.path || "Entry";
+
+      const sub = document.createElement("div");
+      sub.className = "explorer-entry-sub";
+      if (entry.kind === "dir") {
+        sub.textContent = entry.hint || "Directory";
+      } else {
+        const parts = [];
+        if (entry.slide_kind === "mirax") {
+          parts.push("MIRAX file");
+        } else {
+          parts.push(entry.ext || "Slide file");
+        }
+        if (Number.isFinite(entry.size_bytes)) {
+          parts.push(bytesToHuman(entry.size_bytes));
+        }
+        sub.textContent = parts.join(" · ");
+      }
+
+      text.appendChild(name);
+      text.appendChild(sub);
+      main.appendChild(icon);
+      main.appendChild(text);
+
+      const actions = document.createElement("div");
+      actions.className = "explorer-entry-actions";
+
+      if (entry.kind === "dir") {
+        li.addEventListener("click", () => loadExplorerPath(entry.path));
+
+        const openBtn = document.createElement("button");
+        openBtn.type = "button";
+        openBtn.className = "ghost explorer-entry-btn";
+        openBtn.textContent = "Open";
+        openBtn.addEventListener("click", (ev) => {
+          ev.stopPropagation();
+          loadExplorerPath(entry.path);
+        });
+        actions.appendChild(openBtn);
+      } else {
+        li.addEventListener("click", () => setExplorerSelectedFile(entry));
+        li.addEventListener("dblclick", () => resolveExplorerSelection(entry.path));
+
+        const selectBtn = document.createElement("button");
+        selectBtn.type = "button";
+        selectBtn.className = "ghost explorer-entry-btn";
+        selectBtn.textContent = entry.path === explorerSelectedFilePath ? "Selected" : "Select";
+        selectBtn.addEventListener("click", (ev) => {
+          ev.stopPropagation();
+          setExplorerSelectedFile(entry);
+        });
+        actions.appendChild(selectBtn);
+      }
+
+      li.appendChild(main);
+      li.appendChild(actions);
+      explorerList.appendChild(li);
+    }
+  }
+
+  async function apiServerRoots() {
+    const res = await fetch("/api/server_fs/roots", { cache: "no-store" });
+    if (!res.ok) throw new Error(await res.text());
+    return await res.json();
+  }
+
+  async function apiServerList(path) {
+    const url = `/api/server_fs/list?path=${encodeURIComponent(path)}`;
+    const res = await fetch(url, { cache: "no-store" });
+    if (!res.ok) throw new Error(await res.text());
+    return await res.json();
+  }
+
+  async function apiResolveServerSelection(path) {
+    const res = await fetch("/api/server_fs/resolve", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path }),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    return await res.json();
+  }
+
+  async function apiAttachServerSelection(runId, path) {
+    const res = await fetch(`/api/runs/${encodeURIComponent(runId)}/select_server_path`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path }),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    return await res.json();
+  }
+
+  async function loadExplorerRoots(preferredPath = "") {
+    const data = await apiServerRoots();
+    explorerRoots = Array.isArray(data.roots) ? data.roots : [];
+
+    if (explorerRootSelect) {
+      explorerRootSelect.innerHTML = "";
+      for (const root of explorerRoots) {
+        const opt = document.createElement("option");
+        opt.value = root.path;
+        opt.textContent = root.exists ? root.path : `${root.path} (unavailable)`;
+        opt.disabled = !root.exists;
+        explorerRootSelect.appendChild(opt);
+      }
+    }
+
+    if (!explorerRoots.length) {
+      throw new Error("No server slide roots are configured on the backend.");
+    }
+
+    const existingRoots = explorerRoots.filter((root) => root.exists);
+    if (!existingRoots.length) {
+      throw new Error("Configured server slide roots are unavailable on this machine.");
+    }
+
+    let nextRoot = existingRoots[0].path;
+    if (preferredPath) {
+      const matched = existingRoots.find((root) => preferredPath === root.path || preferredPath.startsWith(`${root.path}/`));
+      if (matched) nextRoot = matched.path;
+    }
+
+    if (explorerRootSelect) {
+      explorerRootSelect.value = nextRoot;
+    }
+
+    return nextRoot;
+  }
+
+  async function loadExplorerPath(path) {
+    if (!path) return;
+    setExplorerBusyState(true);
+    setExplorerError("");
+    try {
+      const data = await apiServerList(path);
+      explorerCurrentPathValue = data.current_path || path;
+      explorerParentPathValue = data.parent_path || "";
+      explorerEntries = Array.isArray(data.entries) ? data.entries : [];
+      explorerBreadcrumbItems = Array.isArray(data.breadcrumbs) ? data.breadcrumbs : [];
+      if (!explorerSelectedFilePath.startsWith(`${explorerCurrentPathValue}/`)) {
+        explorerSelectedFilePath = "";
+        explorerSelectedFileName = "";
+      }
+      if (explorerCurrentPath) {
+        explorerCurrentPath.textContent = explorerCurrentPathValue;
+      }
+      if (explorerRootSelect && data.root_path) {
+        explorerRootSelect.value = data.root_path;
+      }
+      renderExplorerBreadcrumbs();
+      renderExplorerList();
+      updateExplorerSelectionPreview();
+    } catch (e) {
+      explorerEntries = [];
+      explorerBreadcrumbItems = [];
+      renderExplorerBreadcrumbs();
+      renderExplorerList();
+      setExplorerError(String(e && e.message ? e.message : e));
+    } finally {
+      setExplorerBusyState(false);
+    }
+  }
+
+  async function resolveExplorerSelection(path) {
+    if (!path) return;
+    setExplorerBusyState(true);
+    setExplorerError("");
+    try {
+      const resolved = await apiResolveServerSelection(path);
+      setServerSelection({
+        requestedPath: resolved.requested_path,
+        slidePath: resolved.slide_path,
+        slideFilename: resolved.slide_filename,
+        selectionKind: resolved.selection_kind,
+        selectionLabel: resolved.selection_label,
+      });
+      closeExplorer();
+      runLabelEl.textContent = `Selected ${resolved.slide_filename} from server.`;
+    } catch (e) {
+      setExplorerError(String(e && e.message ? e.message : e));
+    } finally {
+      setExplorerBusyState(false);
+    }
+  }
+
+  async function openExplorer() {
+    if (!explorerModal) return;
+    explorerModal.hidden = false;
+    setExplorerError("");
+    explorerEntries = [];
+    renderExplorerList();
+
+    try {
+      const rawPreferredPath = (serverSelection && serverSelection.requestedPath) || explorerCurrentPathValue || "";
+      const lastSlash = rawPreferredPath.lastIndexOf("/");
+      const preferredPath = rawPreferredPath && extOf(rawPreferredPath) && lastSlash > 0
+        ? rawPreferredPath.slice(0, lastSlash)
+        : rawPreferredPath;
+      const rootPath = await loadExplorerRoots(preferredPath);
+      const initialPath = preferredPath || rootPath;
+      await loadExplorerPath(initialPath);
+    } catch (e) {
+      setExplorerError(String(e && e.message ? e.message : e));
+    }
+  }
+
+  function closeExplorer() {
+    if (!explorerModal) return;
+    explorerModal.hidden = true;
+    setExplorerError("");
   }
 
   function upsertLiveStep(stepId, title, subText) {
@@ -2196,6 +2659,7 @@ If you cannot find a suspicious lesion after exploring representative areas at a
   async function startFlow() {
     const v = computeModeAndValidation();
     if (!v.ok) return;
+    const usingServerSelection = !!serverSelection;
 
     resetRunUI();
     closeStatusActionsMenu();
@@ -2223,16 +2687,29 @@ If you cannot find a suspicious lesion after exploring representative areas at a
       setModelStatus("created", currentModelName);
       syncTerminateButtonState();
 
-      // Upload files one by one
-      setPill(statusPill, "run", "Uploading…");
-      syncLiveRunStatusStep("uploading");
+      if (usingServerSelection) {
+        setPill(statusPill, "run", "Preparing server slide…");
+        upsertLiveStatusStep(
+          "Attaching server slide",
+          serverSelection ? serverSelection.requestedPath : "Resolving server selection…"
+        );
+        await apiAttachServerSelection(currentRunId, serverSelection.requestedPath);
+        if (terminateRequested) throw new Error("Run terminated by user.");
+      } else {
+        // Upload files one by one
+        setPill(statusPill, "run", "Uploading…");
+        syncLiveRunStatusStep("uploading");
 
-      await uploadAllFilesPerRequest(currentRunId);
-      if (terminateRequested) throw new Error("Run terminated by user.");
+        await uploadAllFilesPerRequest(currentRunId);
+        if (terminateRequested) throw new Error("Run terminated by user.");
+      }
 
       // Finalize + start
-      setPill(statusPill, "run", "Finalizing…");
-      upsertLiveStatusStep("Finalizing run", "Validating bundle and starting agent…");
+      setPill(statusPill, "run", usingServerSelection ? "Starting…" : "Finalizing…");
+      upsertLiveStatusStep(
+        usingServerSelection ? "Starting run" : "Finalizing run",
+        usingServerSelection ? "Validating server slide and starting agent…" : "Validating bundle and starting agent…"
+      );
       setModelStatus("pending", currentModelName);
 
       await apiFinalize(currentRunId);
@@ -2424,7 +2901,7 @@ If you cannot find a suspicious lesion after exploring representative areas at a
       optionBtn.addEventListener("click", () => {
         triggerUploadAction(action);
         if (uploadActionTrigger) {
-          uploadActionTrigger.textContent = optionBtn.textContent || "Select upload action";
+          uploadActionTrigger.textContent = optionBtn.textContent || "Select slide source";
         }
         closeUploadActionMenu();
       });
@@ -2444,9 +2921,54 @@ If you cannot find a suspicious lesion after exploring representative areas at a
   });
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") {
+      closeExplorer();
       closeUploadActionMenu();
     }
   });
+
+  if (explorerCloseBtn) {
+    explorerCloseBtn.addEventListener("click", closeExplorer);
+  }
+  if (explorerBackdrop) {
+    explorerBackdrop.addEventListener("click", closeExplorer);
+  }
+  if (explorerRootSelect) {
+    explorerRootSelect.addEventListener("change", () => {
+      explorerSelectedFilePath = "";
+      explorerSelectedFileName = "";
+      loadExplorerPath(explorerRootSelect.value);
+    });
+  }
+  if (explorerUpBtn) {
+    explorerUpBtn.addEventListener("click", () => {
+      if (explorerParentPathValue) {
+        explorerSelectedFilePath = "";
+        explorerSelectedFileName = "";
+        loadExplorerPath(explorerParentPathValue);
+      }
+    });
+  }
+  if (explorerRefreshBtn) {
+    explorerRefreshBtn.addEventListener("click", () => {
+      if (explorerCurrentPathValue) {
+        loadExplorerPath(explorerCurrentPathValue);
+      }
+    });
+  }
+  if (explorerUseFolderBtn) {
+    explorerUseFolderBtn.addEventListener("click", () => {
+      if (explorerCurrentPathValue) {
+        resolveExplorerSelection(explorerCurrentPathValue);
+      }
+    });
+  }
+  if (explorerUseFileBtn) {
+    explorerUseFileBtn.addEventListener("click", () => {
+      if (explorerSelectedFilePath) {
+        resolveExplorerSelection(explorerSelectedFilePath);
+      }
+    });
+  }
 
   if (modelSelect) {
     modelSelect.addEventListener("change", () => {
@@ -2514,6 +3036,8 @@ If you cannot find a suspicious lesion after exploring representative areas at a
   setModelStatus("idle");
   syncStatusPillVisibility("idle");
   setDarkRegionsEnabled(false);
+  setExplorerBusyState(false);
+  updateExplorerSelectionPreview();
   render();
   fetchServiceModelName();
 })();

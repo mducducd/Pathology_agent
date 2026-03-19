@@ -6,7 +6,7 @@
   <title>WSI Agent Prototype</title>
   <link rel="icon" type="image/svg+xml" href="/static/assets/STAMP_logo.svg?v=1" />
   <link rel="shortcut icon" href="/static/assets/STAMP_logo.svg?v=1" />
-  <link rel="stylesheet" href="/static/styles.css?v=43" />
+  <link rel="stylesheet" href="/static/styles.css?v=44" />
 </head>
 <body>
   <header class="topbar">
@@ -24,23 +24,24 @@
       <aside class="panel panel-left">
         <div class="card panel-card sticky-card">
           <div class="card-head">
-            <h2>Upload & Run</h2>
+            <h2>Input & Run</h2>
             <div id="mode-pill" class="pill pill-idle">No files</div>
           </div>
 
           <div id="dropzone" class="dropzone" tabindex="0" aria-label="Drop files here">
             <div class="dropzone-inner">
-              <div class="dz-title">Drop files or folders here</div>
+              <div class="dz-title">Upload a slide bundle or browse the HPC server</div>
               <div class="dz-actions">
                 <div class="dz-actions-picker">
                   <div class="upload-action-shell">
                     <button id="upload-action-trigger" type="button" class="picker-list upload-action-trigger" aria-haspopup="listbox" aria-expanded="false">
-                      Select upload action
+                      Select slide source
                     </button>
                     <div id="upload-action-menu" class="upload-action-menu" role="listbox" hidden>
                       <button type="button" class="upload-action-option" data-upload-action="files">Choose file(s)</button>
                       <button type="button" class="upload-action-option" data-upload-action="folder">Choose folder (MIRAX)</button>
                       <button type="button" class="upload-action-option" data-upload-action="zip">Choose zip (MIRAX)</button>
+                      <button type="button" class="upload-action-option" data-upload-action="server">Browse server (Explorer)</button>
                     </div>
                   </div>
                   <button id="btn-clear" type="button" class="ghost icon-btn icon-clear" aria-label="Clear selected files" title="Clear selected files">
@@ -93,7 +94,7 @@
             </div>
 
             <div class="field actions run-actions">
-              <button id="btn-start" type="button" class="primary" disabled>Upload & Start run</button>
+              <button id="btn-start" type="button" class="primary" disabled>Start run</button>
               <div id="run-label" class="muted small"></div>
             </div>
           </div>
@@ -189,6 +190,45 @@
     </section>
   </main>
 
-  <script src="/static/app.js?v=77"></script>
+  <div id="explorer-modal" class="modal-shell" hidden>
+    <div id="explorer-backdrop" class="modal-backdrop" aria-hidden="true"></div>
+    <section class="modal-card explorer-modal-card" role="dialog" aria-modal="true" aria-labelledby="explorer-title">
+      <div class="modal-head">
+        <div>
+          <h2 id="explorer-title">Explorer</h2>
+          <div class="muted small">Browse HPC slide roots and choose either a file or a MIRAX folder.</div>
+        </div>
+        <button id="explorer-close" type="button" class="ghost tiny-btn">Close</button>
+      </div>
+
+      <div class="explorer-toolbar">
+        <div class="field">
+          <label for="explorer-root-select">Root</label>
+          <select id="explorer-root-select" class="picker-list" aria-label="Server root selector"></select>
+        </div>
+        <div class="explorer-actions">
+          <button id="explorer-up" type="button" class="ghost tiny-btn">Up</button>
+          <button id="explorer-refresh" type="button" class="ghost tiny-btn">Refresh</button>
+        </div>
+      </div>
+
+      <div id="explorer-breadcrumbs" class="explorer-breadcrumbs"></div>
+      <div id="explorer-current-path" class="explorer-current-path"></div>
+
+      <div id="explorer-error" class="explorer-error" hidden></div>
+      <div id="explorer-empty" class="empty-state explorer-empty" hidden>No entries yet.</div>
+      <ul id="explorer-list" class="explorer-list"></ul>
+
+      <div class="explorer-footer">
+        <div id="explorer-selection-preview" class="muted small">Choose a file or navigate into a MIRAX folder.</div>
+        <div class="explorer-footer-actions">
+          <button id="explorer-use-folder" type="button" class="ghost">Use current folder</button>
+          <button id="explorer-use-file" type="button" class="primary" disabled>Use selected file</button>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <script src="/static/app.js?v=78"></script>
 </body>
 </html>
