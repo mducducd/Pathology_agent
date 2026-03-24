@@ -19,15 +19,12 @@ load_dotenv()
 DEFAULT_SLIDE_PATH = os.path.abspath("341476.svs")
 MODEL_NAME = "GPT-OSS-120B"
 
-print("API KEY:", os.getenv("OPENAI_API_KEY", "sk-y4X1YI9feTF_7KqflLuPPg"))
-print("API BASE:", os.getenv("OPENAI_API_BASE", "http://pluto/v1"))
-
 client_async = AsyncOpenAI(
-    api_key=os.getenv("OPENAI_API_KEY", "sk-y4X1YI9feTF_7KqflLuPPg"),
+    api_key=os.getenv("OPENAI_API_KEY"),
     base_url=os.getenv("OPENAI_API_BASE", "http://pluto/v1"),
 )
 client_sync = OpenAI(
-    api_key=os.getenv("OPENAI_API_KEY", "sk-y4X1YI9feTF_7KqflLuPPg"),
+    api_key=os.getenv("OPENAI_API_KEY"),
     base_url=os.getenv("OPENAI_API_BASE", "http://pluto/v1"),
 )
 
