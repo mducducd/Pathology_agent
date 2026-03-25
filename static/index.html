@@ -6,7 +6,7 @@
   <title>WSI Agent Prototype</title>
   <link rel="icon" type="image/svg+xml" href="/static/assets/STAMP_logo.svg?v=1" />
   <link rel="shortcut icon" href="/static/assets/STAMP_logo.svg?v=1" />
-  <link rel="stylesheet" href="/static/styles.css?v=44" />
+  <link rel="stylesheet" href="/static/styles.css?v=46" />
 </head>
 <body>
   <header class="topbar">
@@ -85,6 +85,41 @@
                 <option value="qwen3.5-35b-a3b">qwen3.5-35b-a3b</option>
                 <option value="Qwen3.5-397B-A17B-FP8">Qwen3.5-397B-A17B-FP8</option>
               </select>
+            </div>
+
+            <div class="field-row">
+              <div class="field compact-field">
+                <label>Feature Extractor</label>
+                <select id="extractor-select" class="picker-list extractor-picker" aria-label="Feature extractor selector">
+                  <option value="uni2" selected>UNI2-h</option>
+                  <option value="dinobloom">DinoBloom-S</option>
+                  <option value="reddino">RedDino-Small</option>
+                </select>
+              </div>
+
+              <div class="field compact-field">
+                <label>Tile size (px)</label>
+                <select id="tile-size-select" class="picker-list tile-size-picker" aria-label="Tile size selector">
+                  <option value="128">128</option>
+                  <option value="224" selected>224</option>
+                  <option value="256">256</option>
+                  <option value="512">512</option>
+                </select>
+              </div>
+              
+              <div class="field compact-field">
+                <label>Batch size</label>
+                <input
+                  id="batch-size-select"
+                  class="picker-list batch-size-input"
+                  type="number"
+                  min="1"
+                  step="1"
+                  value="32"
+                  inputmode="numeric"
+                  aria-label="Batch size input"
+                />
+              </div>
             </div>
 
             <div class="field prompt-field">
@@ -229,6 +264,6 @@
     </section>
   </div>
 
-  <script src="/static/app.js?v=78"></script>
+  <script src="/static/app.js?v=80"></script>
 </body>
 </html>

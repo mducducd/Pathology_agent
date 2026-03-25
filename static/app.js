@@ -19,6 +19,9 @@
   const promptEl = document.getElementById("prompt");
   const agentSelect = document.getElementById("agent-select");
   const modelSelect = document.getElementById("model-select");
+  const extractorSelect = document.getElementById("extractor-select");
+  const tileSizeSelect = document.getElementById("tile-size-select");
+  const batchSizeSelect = document.getElementById("batch-size-select");
 
   const statusPill = document.getElementById("status-pill");
   const btnActions = document.getElementById("btn-actions");
@@ -152,6 +155,14 @@ If you cannot find a suspicious lesion after exploring representative areas at a
 
   function selectedModelName() {
     return (modelSelect && modelSelect.value) ? modelSelect.value : "GPT-OSS-120B";
+  }
+
+  function selectedBatchSize() {
+    const parsed = Number.parseInt(
+      (batchSizeSelect && batchSizeSelect.value) ? batchSizeSelect.value : "32",
+      10
+    );
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 32;
   }
 
   function uploadHintForAction(action) {
@@ -2586,6 +2597,9 @@ If you cannot find a suspicious lesion after exploring representative areas at a
     fd.append("agent_type", selectedAgentType());
     fd.append("model_name", selectedModelName());
     fd.append("prompt", promptEl.value || "");
+    fd.append("extractor_name", extractorSelect ? extractorSelect.value : "uni2");
+    fd.append("tile_size_px", tileSizeSelect ? tileSizeSelect.value : "224");
+    fd.append("batch_size", String(selectedBatchSize()));
     const res = await fetch("/api/runs/create", { method: "POST", body: fd });
     if (!res.ok) throw new Error(await res.text());
     return await res.json();
