@@ -12,6 +12,11 @@ from .config import DEBUG_ROOT_DIR, DEFAULT_SLIDE_PATH, OUTPUTS_ROOT_DIR
 SLIDE_PATH = DEFAULT_SLIDE_PATH
 RUN_ID: Optional[str] = None
 AGENT_TYPE: str = "wsi"
+EXTRACTOR_NAME: str = "uni2"
+TILE_SIZE_UM: float = 256.0
+TILE_SIZE_PX: int = 224
+BATCH_SIZE: int = 32
+TILE_PREFILTER_METHOD: str = "quality"
 
 _slide: Optional[openslide.AbstractSlide] = None
 
@@ -50,8 +55,15 @@ HAS_FATAL_ERROR = False
 LAST_FATAL_ERROR: Optional[str] = None
 
 
-def reset_wsi_state(run_id: str) -> None:
-    global RUN_ID, AGENT_TYPE, _debug_img_counter, DEBUG_SAVE_DIR
+def reset_wsi_state(
+    run_id: str,
+    extractor_name: str = "uni2",
+    tile_size_um: float = 256.0,
+    tile_size_px: int = 224,
+    batch_size: int = 32,
+    tile_prefilter_method: str = "quality",
+) -> None:
+    global RUN_ID, AGENT_TYPE, EXTRACTOR_NAME, TILE_SIZE_UM, TILE_SIZE_PX, BATCH_SIZE, TILE_PREFILTER_METHOD, _debug_img_counter, DEBUG_SAVE_DIR
     global _step_log, _roi_marks, _view_history
     global _current_view, _overview_cache, _last_overview_with_box_path, _last_overview_debug_path
     global _slide, _saved_good_tiles, _saved_bad_tiles, _example_tiles_injected, _example_rois_injected
@@ -63,6 +75,11 @@ def reset_wsi_state(run_id: str) -> None:
 
     RUN_ID = run_id
     AGENT_TYPE = "wsi"
+    EXTRACTOR_NAME = extractor_name
+    TILE_SIZE_UM = tile_size_um
+    TILE_SIZE_PX = tile_size_px
+    BATCH_SIZE = int(batch_size)
+    TILE_PREFILTER_METHOD = str(tile_prefilter_method or "quality").strip().lower()
 
     _debug_img_counter = 0
     DEBUG_SAVE_DIR = os.path.join(DEBUG_ROOT_DIR, RUN_ID, "wsi_debug")
@@ -111,7 +128,7 @@ def clear_wsi_outputs_state() -> None:
     """
     Clear generated WSI run outputs shown in UI without changing run id/slide path.
     """
-    global AGENT_TYPE, _step_log, _roi_marks, _view_history
+    global AGENT_TYPE, BATCH_SIZE, TILE_PREFILTER_METHOD, _step_log, _roi_marks, _view_history
     global _current_view, _overview_cache, _last_overview_with_box_path, _last_overview_debug_path
     global _saved_good_tiles, _saved_bad_tiles, _example_tiles_injected, _example_rois_injected
     global _roi_ranker_index, _roi_ranker_meta, _roi_candidate_prep
@@ -121,6 +138,8 @@ def clear_wsi_outputs_state() -> None:
 
     _step_log = []
     AGENT_TYPE = "wsi"
+    BATCH_SIZE = 32
+    TILE_PREFILTER_METHOD = "quality"
     _roi_marks = []
     _view_history = []
     _current_view = {}
@@ -148,6 +167,8 @@ def get_public_state_snapshot() -> Dict[str, Any]:
         "run_id": RUN_ID,
         "agent_type": AGENT_TYPE,
         "current_view": dict(_current_view) if _current_view else None,
+        "batch_size": BATCH_SIZE,
+        "tile_prefilter_method": TILE_PREFILTER_METHOD,
         "overview_cache": dict(_overview_cache) if _overview_cache else None,
         "step_log": list(_step_log),
         "roi_marks": list(_roi_marks),

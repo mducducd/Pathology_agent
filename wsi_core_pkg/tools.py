@@ -38,14 +38,61 @@ from .slide_utils import (
 )
 
 ROI_CANDIDATE_TOP_K = int(os.getenv("ROI_CANDIDATE_TOP_K", "24"))
-ROI_CANDIDATE_MIN_SEPARATION_PX = int(os.getenv("ROI_CANDIDATE_MIN_SEPARATION_PX", "512"))
+ROI_CANDIDATE_MIN_SEPARATION_PX = int(os.getenv("ROI_CANDIDATE_MIN_SEPARATION_PX", "192"))
 ROI_MARK_CANDIDATE_TOLERANCE_NORM = int(os.getenv("ROI_MARK_CANDIDATE_TOLERANCE_NORM", "170"))
 ROI_CANDIDATE_ALLOW_FALLBACK = os.getenv("ROI_CANDIDATE_ALLOW_FALLBACK", "0").strip().lower() in {"1", "true", "yes", "y"}
 # Hard cap on how many candidates the VLM sees in AML mode after raw retrieval ranking.
 ROI_CANDIDATE_TOP_K_AML = int(os.getenv("ROI_CANDIDATE_TOP_K_AML", "15"))
 ROI_RANKER_BATCH_SIZE = int(os.getenv("ROI_RANKER_BATCH_SIZE", "32"))
 ROI_RANKER_MAX_WORKERS = int(os.getenv("ROI_RANKER_MAX_WORKERS", "4"))
+ROI_COARSE_PREFILTER_TRIGGER_SUPERTILES = int(os.getenv("ROI_COARSE_PREFILTER_TRIGGER_SUPERTILES", "128"))
+ROI_COARSE_PREFILTER_KEEP_RATIO = float(os.getenv("ROI_COARSE_PREFILTER_KEEP_RATIO", "0.40"))
+ROI_COARSE_PREFILTER_MIN_KEEP_SUPERTILES = int(os.getenv("ROI_COARSE_PREFILTER_MIN_KEEP_SUPERTILES", "48"))
+ROI_COARSE_PREFILTER_MAX_KEEP_SUPERTILES = int(os.getenv("ROI_COARSE_PREFILTER_MAX_KEEP_SUPERTILES", "96"))
+ROI_QUALITY_PREFILTER_KEEP_RATIO = float(os.getenv("ROI_QUALITY_PREFILTER_KEEP_RATIO", "0.35"))
+ROI_QUALITY_PREFILTER_MIN_KEEP_TILES = int(os.getenv("ROI_QUALITY_PREFILTER_MIN_KEEP_TILES", "4"))
+ROI_QUALITY_PREFILTER_TRIGGER_TILES = int(os.getenv("ROI_QUALITY_PREFILTER_TRIGGER_TILES", "12"))
+ROI_QUALITY_PREFILTER_RANDOM_RESERVE_RATIO = float(os.getenv("ROI_QUALITY_PREFILTER_RANDOM_RESERVE_RATIO", "0.08"))
 ROI_TILE_CACHE_DIR = os.getenv("ROI_TILE_CACHE_DIR", "").strip()
+
+
+def _selected_batch_size() -> int:
+    try:
+        return max(1, int(getattr(state, "BATCH_SIZE", ROI_RANKER_BATCH_SIZE) or ROI_RANKER_BATCH_SIZE))
+    except Exception:
+        return int(ROI_RANKER_BATCH_SIZE)
+
+
+def _selected_extractor_label() -> str:
+    return getattr(state, "EXTRACTOR_NAME", "uni2").replace("_onnx", " (ONNX)").title()
+
+
+def _selected_tile_prefilter_method() -> str:
+    raw = str(getattr(state, "TILE_PREFILTER_METHOD", "quality") or "quality").strip().lower()
+    return raw if raw in {"none", "coarse", "quality", "hybrid"} else "quality"
+
+
+def _use_coarse_prefilter(method: str | None = None) -> bool:
+    return (method or _selected_tile_prefilter_method()) in {"coarse", "hybrid"}
+
+
+def _use_quality_prefilter(method: str | None = None) -> bool:
+    return (method or _selected_tile_prefilter_method()) in {"quality", "hybrid"}
+
+
+def _tile_prefilter_label(method: str | None = None) -> str:
+    value = method or _selected_tile_prefilter_method()
+    return {
+        "none": "No extra prefilter",
+        "coarse": "Thumbnail coarse-to-fine",
+        "quality": "Raw-tile quality score",
+        "hybrid": "Hybrid coarse + quality",
+    }.get(value, "Raw-tile quality score")
+
+
+def _selected_candidate_source(aml_mode: bool) -> str:
+    extractor_name = str(getattr(state, "EXTRACTOR_NAME", "uni2") or "uni2").strip().lower()
+    return f"{extractor_name}_exact_retrieval" if aml_mode else f"{extractor_name}_knn"
 
 
 def _set_roi_candidate_prep(
@@ -77,7 +124,9 @@ def _ensure_unsupervised_roi_index():
     cached = state._roi_ranker_index
     meta = state._roi_ranker_meta or {}
     if cached is not None and meta.get("slide_path") == state.SLIDE_PATH:
-        cached_source = "uni2_exact_retrieval" if str(getattr(state, "AGENT_TYPE", "") or "").lower() == "aml" else "uni2_knn"
+        cached_source = _selected_candidate_source(
+            str(getattr(state, "AGENT_TYPE", "") or "").lower() == "aml"
+        )
         _set_roi_candidate_prep(
             phase="ready",
             status="done",
@@ -87,22 +136,51 @@ def _ensure_unsupervised_roi_index():
         return cached
 
     aml_mode = str(getattr(state, "AGENT_TYPE", "") or "").lower() == "aml"
-    candidate_source = "uni2_exact_retrieval" if aml_mode else "uni2_knn"
-    pipeline_desc = (
-        "UNI2 tile embeddings -> exact good/bad exemplar retrieval -> rank by raw nearest bad similarity -> top-K per view"
-        if aml_mode
-        else "UNI2 tile embeddings -> kNN novelty ranking -> top-K per view"
-    )
+    candidate_source = _selected_candidate_source(aml_mode)
+    extractor_label = _selected_extractor_label()
+    tile_prefilter_method = _selected_tile_prefilter_method()
+    use_coarse_prefilter = _use_coarse_prefilter(tile_prefilter_method)
+    use_quality_prefilter = _use_quality_prefilter(tile_prefilter_method)
+    if aml_mode:
+        if tile_prefilter_method == "hybrid":
+            pipeline_desc = (
+                f"Thumbnail coarse region filter -> raw-tile quality score filter -> {extractor_label} tile embeddings -> exact good/bad exemplar retrieval -> rank by raw nearest bad similarity -> top-K per view"
+            )
+        elif tile_prefilter_method == "quality":
+            pipeline_desc = (
+                f"Raw-tile quality score filter -> {extractor_label} tile embeddings -> exact good/bad exemplar retrieval -> rank by raw nearest bad similarity -> top-K per view"
+            )
+        elif tile_prefilter_method == "coarse":
+            pipeline_desc = (
+                f"Thumbnail coarse region filter -> {extractor_label} tile embeddings -> exact good/bad exemplar retrieval -> rank by raw nearest bad similarity -> top-K per view"
+            )
+        else:
+            pipeline_desc = (
+                f"{extractor_label} tile embeddings -> exact good/bad exemplar retrieval -> rank by raw nearest bad similarity -> top-K per view"
+            )
+    else:
+        if tile_prefilter_method == "hybrid":
+            pipeline_desc = f"Thumbnail coarse region filter -> raw-tile quality score filter -> {extractor_label} tile embeddings -> kNN novelty ranking -> top-K per view"
+        elif tile_prefilter_method == "quality":
+            pipeline_desc = f"Raw-tile quality score filter -> {extractor_label} tile embeddings -> kNN novelty ranking -> top-K per view"
+        elif tile_prefilter_method == "coarse":
+            pipeline_desc = f"Thumbnail coarse region filter -> {extractor_label} tile embeddings -> kNN novelty ranking -> top-K per view"
+        else:
+            pipeline_desc = f"{extractor_label} tile embeddings -> kNN novelty ranking -> top-K per view"
     cache_dir = Path(ROI_TILE_CACHE_DIR) if ROI_TILE_CACHE_DIR else Path(OUTPUTS_ROOT_DIR) / "_tile_cache"
     _set_roi_candidate_prep(
         phase="starting",
         status="starting",
         message="Preparing ROI candidates from slide tiles...",
-        extra={"source": candidate_source, "slide_path": state.SLIDE_PATH},
+        extra={
+            "source": candidate_source,
+            "slide_path": state.SLIDE_PATH,
+            "tile_prefilter_method": tile_prefilter_method,
+        },
     )
     _log_step(
         "wsi_prepare_roi_candidates",
-        "Start ROI candidate preparation: UNI2 embedding extraction + kNN build.",
+        f"Start ROI candidate preparation: {extractor_label} embedding extraction + kNN build.",
         {
             "roi_candidate_stage": "index_running",
             "roi_candidate_pipeline": pipeline_desc,
@@ -118,12 +196,37 @@ def _ensure_unsupervised_roi_index():
         def _on_progress(evt: Dict[str, Any]) -> None:
             phase = str(evt.get("phase") or "working")
             status = str(evt.get("status") or "running")
-            if phase == "load_extractor":
-                msg = "Loading UNI2 foundation model..."
+            if phase == "coarse_prefilter":
+                total = evt.get("coarse_total_supertile_count")
+                kept = evt.get("coarse_selected_supertile_count")
+                used = bool(evt.get("coarse_prefilter_used"))
+                if not use_coarse_prefilter:
+                    if total is not None:
+                        msg = f"Scanning all {total} foreground slide regions..."
+                    else:
+                        msg = "Scanning foreground slide regions..."
+                elif used and total is not None and kept is not None:
+                    msg = f"Coarse pass kept {kept}/{total} slide regions for fine embedding..."
+                elif total is not None:
+                    msg = f"Coarse pass kept all {total} slide regions..."
+                else:
+                    msg = "Running thumbnail coarse pass..."
+            elif phase == "quality_prefilter":
+                total = evt.get("quality_total_tiles")
+                kept = evt.get("quality_kept_tiles")
+                hard_rejected = evt.get("quality_hard_rejected_tiles")
+                if total is not None and kept is not None:
+                    msg = f"Quality prefilter kept {kept}/{total} tiles for embedding..."
+                    if hard_rejected is not None:
+                        msg += f" hard_reject={hard_rejected}"
+                else:
+                    msg = "Scoring raw tiles for focus, stain, and texture..."
+            elif phase == "load_extractor":
+                msg = f"Loading {_selected_extractor_label()} foundation model..."
             elif phase == "extract_embeddings":
                 pt = evt.get("processed_tiles")
                 pb = evt.get("processed_batches")
-                msg = "Extracting UNI2 tile embeddings..."
+                msg = f"Extracting {_selected_extractor_label()} tile embeddings..."
                 if pt is not None:
                     msg += f" tiles={pt}"
                 if pb is not None:
@@ -155,14 +258,24 @@ def _ensure_unsupervised_roi_index():
 
         index = build_unsupervised_roi_index(
             slide_path=state.SLIDE_PATH,
-            tile_size_um=TILE_SIZE_UM,
-            tile_size_px=TILE_PX,
-            batch_size=ROI_RANKER_BATCH_SIZE,
+            extractor_name=state.EXTRACTOR_NAME,
+            tile_size_um=state.TILE_SIZE_UM,
+            tile_size_px=state.TILE_SIZE_PX,
+            batch_size=_selected_batch_size(),
             cache_dir=cache_dir,
             max_workers=ROI_RANKER_MAX_WORKERS,
             brightness_cutoff=240,
             canny_cutoff=0.02,
             default_slide_mpp=float(default_mpp),
+            tile_prefilter_method=tile_prefilter_method,
+            coarse_trigger_supertile_count=ROI_COARSE_PREFILTER_TRIGGER_SUPERTILES if use_coarse_prefilter else None,
+            coarse_keep_ratio=ROI_COARSE_PREFILTER_KEEP_RATIO if use_coarse_prefilter else None,
+            coarse_min_keep_supertile_count=ROI_COARSE_PREFILTER_MIN_KEEP_SUPERTILES if use_coarse_prefilter else 0,
+            coarse_max_keep_supertile_count=ROI_COARSE_PREFILTER_MAX_KEEP_SUPERTILES if use_coarse_prefilter else None,
+            quality_keep_ratio=ROI_QUALITY_PREFILTER_KEEP_RATIO if use_quality_prefilter else None,
+            quality_min_keep_tile_count=ROI_QUALITY_PREFILTER_MIN_KEEP_TILES if use_quality_prefilter else 0,
+            quality_trigger_tile_count=ROI_QUALITY_PREFILTER_TRIGGER_TILES if use_quality_prefilter else None,
+            quality_random_reserve_ratio=ROI_QUALITY_PREFILTER_RANDOM_RESERVE_RATIO if use_quality_prefilter else None,
             k_neighbors=20,
             use_reference_labels=aml_mode,
             reference_tiles_root=EXAMPLE_TILES_ROOT if aml_mode else None,
@@ -176,6 +289,7 @@ def _ensure_unsupervised_roi_index():
             "extractor_id": index.extractor_id,
             "tile_size_px": index.tile_size_px,
             "tile_size_um": index.tile_size_um,
+            "tile_prefilter_method": tile_prefilter_method,
             "agent_type": getattr(state, "AGENT_TYPE", None),
             "reference_mode": getattr(index, "reference_mode", "none"),
             "reference_stats": dict(getattr(index, "reference_stats", {}) or {}),
@@ -192,13 +306,14 @@ def _ensure_unsupervised_roi_index():
                 "extractor_id": index.extractor_id,
                 "num_tiles": index.num_tiles,
                 "feature_dim": index.feature_dim,
+                "tile_prefilter_method": tile_prefilter_method,
                 "reference_mode": getattr(index, "reference_mode", "none"),
                 "reference_stats": dict(getattr(index, "reference_stats", {}) or {}),
             },
         )
         _log_step(
             "wsi_prepare_roi_candidates",
-            "Extract UNI2 tile embeddings, build kNN index, then rank top-K ROI candidates per view.",
+            f"Extract {_selected_extractor_label()} tile embeddings, build kNN index, then rank top-K ROI candidates per view.",
             {
                 "roi_candidate_stage": "index_built",
                 "roi_candidate_pipeline": pipeline_desc,
@@ -225,7 +340,7 @@ def _ensure_unsupervised_roi_index():
         if prev_meta.get("slide_path") != state.SLIDE_PATH or prev_meta.get("error") != err_text:
             _log_step(
                 "wsi_prepare_roi_candidates",
-                "Extract UNI2 tile embeddings, build kNN index, then rank top-K ROI candidates per view.",
+                f"Extract {_selected_extractor_label()} tile embeddings, build kNN index, then rank top-K ROI candidates per view.",
                 {
                     "roi_candidate_stage": "index_failed",
                     "roi_candidate_pipeline": pipeline_desc,
@@ -415,7 +530,7 @@ def _refresh_roi_candidates_for_current_view(top_k: int = ROI_CANDIDATE_TOP_K) -
             top_k=top_k,
             min_center_separation_px=max(64, ROI_CANDIDATE_MIN_SEPARATION_PX),
         )
-        source = "uni2_exact_retrieval" if str(getattr(state, "AGENT_TYPE", "") or "").lower() == "aml" else "uni2_knn"
+        source = _selected_candidate_source(str(getattr(state, "AGENT_TYPE", "") or "").lower() == "aml")
 
     if not candidates and ROI_CANDIDATE_ALLOW_FALLBACK:
         candidates = _fallback_candidates_from_current_view(top_k)
@@ -535,18 +650,19 @@ def _attach_roi_candidates(info: Dict[str, Any], top_k: int = ROI_CANDIDATE_TOP_
     info["roi_candidate_source"] = state._last_roi_candidate_source
     info["roi_candidate_prep"] = dict(state._roi_candidate_prep) if state._roi_candidate_prep else None
     info["roi_candidate_overlay_path"] = state._last_roi_candidate_overlay_path
+    extractor_label = _selected_extractor_label()
     if aml_mode:
         info["roi_candidate_pipeline"] = (
-            "UNI2 tile embeddings -> exact good/bad exemplar retrieval -> rank by raw nearest bad similarity -> top-K per current view"
+            f"{extractor_label} tile embeddings -> exact good/bad exemplar retrieval -> rank by raw nearest bad similarity -> top-K per current view"
         )
     else:
-        info["roi_candidate_pipeline"] = "UNI2 tile embeddings -> kNN novelty ranking -> top-K per current view"
+        info["roi_candidate_pipeline"] = f"{extractor_label} tile embeddings -> kNN novelty ranking -> top-K per current view"
     if state._roi_ranker_meta:
         info["roi_candidate_index_meta"] = dict(state._roi_ranker_meta)
         ref_stats = state._roi_ranker_meta.get("reference_stats")
         if aml_mode and isinstance(ref_stats, dict):
             info["aml_reference_stats"] = dict(ref_stats)
-    expected_source = "uni2_exact_retrieval" if aml_mode else "uni2_knn"
+    expected_source = _selected_candidate_source(aml_mode)
     if state._last_roi_candidate_source != expected_source:
         info["roi_candidate_warning"] = (
             "Primary candidate source unavailable for this view."

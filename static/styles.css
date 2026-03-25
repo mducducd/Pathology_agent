@@ -797,6 +797,39 @@ button.primary:disabled{
   color: var(--muted);
   margin-bottom:6px;
 }
+.field-row{
+  display:grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(108px, .8fr) minmax(104px, .65fr);
+  gap:12px;
+  align-items:end;
+}
+.field-row .field{
+  min-width:0;
+}
+.compact-field label{
+  margin-bottom:6px;
+}
+.batch-size-input{
+  width:100%;
+}
+.batch-size-input::-webkit-outer-spin-button,
+.batch-size-input::-webkit-inner-spin-button{
+  margin:0;
+}
+.run-prefilter-picker{
+  display:flex;
+  align-items:center;
+  gap:10px;
+  flex:0 0 auto;
+}
+.run-prefilter-label{
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.run-method-select{
+  min-width: 154px;
+}
 textarea{
   width:100%;
   min-height: 180px;
@@ -856,6 +889,12 @@ textarea:focus{
   bottom: 0;
   padding-top: 8px;
   background: linear-gradient(180deg, rgba(18,25,35,0), rgba(18,25,35,1) 36%);
+}
+.run-actions-main{
+  display:flex;
+  align-items:center;
+  gap:12px;
+  min-width:0;
 }
 
 .status-row{
@@ -1064,6 +1103,7 @@ textarea:focus{
 }
 @media (max-width: 980px){
   .grid2{grid-template-columns: 1fr}
+  .field-row{grid-template-columns: 1fr}
 }
 
 .img{

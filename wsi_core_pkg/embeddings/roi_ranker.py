@@ -415,6 +415,7 @@ def _novelty_scores_from_knn(
 def build_unsupervised_roi_index(
     *,
     slide_path: str | Path,
+    extractor_name: str = "uni2",
     tile_size_um: float = 256.0,
     tile_size_px: int = 224,
     batch_size: int = 32,
@@ -425,6 +426,15 @@ def build_unsupervised_roi_index(
     brightness_cutoff: int | None = 240,
     canny_cutoff: float | None = 0.02,
     default_slide_mpp: float | None = None,
+    tile_prefilter_method: str = "none",
+    coarse_trigger_supertile_count: int | None = None,
+    coarse_keep_ratio: float | None = None,
+    coarse_min_keep_supertile_count: int = 0,
+    coarse_max_keep_supertile_count: int | None = None,
+    quality_keep_ratio: float | None = None,
+    quality_min_keep_tile_count: int = 0,
+    quality_trigger_tile_count: int | None = None,
+    quality_random_reserve_ratio: float | None = None,
     k_neighbors: int = 20,
     use_reference_labels: bool = False,
     reference_tiles_root: str | Path | None = None,
@@ -433,7 +443,10 @@ def build_unsupervised_roi_index(
     slide_path = Path(slide_path).resolve()
     if progress_cb is not None:
         progress_cb({"phase": "load_extractor", "status": "running"})
-    extractor = uni2()
+
+    # Load the specified extractor
+    from wsi_core_pkg.embeddings import get_embedding_extractor
+    extractor = get_embedding_extractor(extractor_name)
     if progress_cb is not None:
         progress_cb(
             {
@@ -458,7 +471,17 @@ def build_unsupervised_roi_index(
         brightness_cutoff=brightness_cutoff,
         canny_cutoff=canny_cutoff,
         default_slide_mpp=default_slide_mpp,
+        tile_prefilter_method=tile_prefilter_method,
+        coarse_trigger_supertile_count=coarse_trigger_supertile_count,
+        coarse_keep_ratio=coarse_keep_ratio,
+        coarse_min_keep_supertile_count=coarse_min_keep_supertile_count,
+        coarse_max_keep_supertile_count=coarse_max_keep_supertile_count,
+        quality_keep_ratio=quality_keep_ratio,
+        quality_min_keep_tile_count=quality_min_keep_tile_count,
+        quality_trigger_tile_count=quality_trigger_tile_count,
+        quality_random_reserve_ratio=quality_random_reserve_ratio,
         progress_cb=progress_cb,
+        use_amp=True,
     )
 
     features = result.features.numpy().astype(np.float32, copy=False)
@@ -723,7 +746,7 @@ def select_topk_candidates_for_view(
     # Keep candidates spatially distinct: require near-tile-sized center spacing.
     # This reduces heavy overlap even when tile_size_level0_px is larger than the
     # external min_center_separation_px setting.
-    adaptive_min_sep_px = max(int(max(1, min_center_separation_px)), int(round(index.tile_size_level0_px * 0.85)))
+    adaptive_min_sep_px = max(int(max(1, min_center_separation_px)), int(round(index.tile_size_level0_px * 0.55)))
     min_sep_sq = float(adaptive_min_sep_px ** 2)
 
     def _bbox_iou(

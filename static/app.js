@@ -22,6 +22,8 @@
   const extractorSelect = document.getElementById("extractor-select");
   const tileSizeSelect = document.getElementById("tile-size-select");
   const batchSizeSelect = document.getElementById("batch-size-select");
+  const tilePrefilterMethodSelect = document.getElementById("tile-prefilter-method-select");
+  const tilePrefilterMethodStorageKey = "slide-agent.tile-prefilter-method";
 
   const statusPill = document.getElementById("status-pill");
   const btnActions = document.getElementById("btn-actions");
@@ -163,6 +165,27 @@ If you cannot find a suspicious lesion after exploring representative areas at a
       10
     );
     return Number.isFinite(parsed) && parsed > 0 ? parsed : 32;
+  }
+
+  function selectedTilePrefilterMethod() {
+    return (tilePrefilterMethodSelect && tilePrefilterMethodSelect.value) ? tilePrefilterMethodSelect.value : "quality";
+  }
+
+  function loadStoredValue(key) {
+    try {
+      return window.localStorage.getItem(key);
+    } catch (_e) {
+      // Ignore localStorage access issues.
+    }
+    return null;
+  }
+
+  function saveStoredValue(key, value) {
+    try {
+      window.localStorage.setItem(key, value);
+    } catch (_e) {
+      // Ignore localStorage access issues.
+    }
   }
 
   function uploadHintForAction(action) {
@@ -2329,6 +2352,14 @@ If you cannot find a suspicious lesion after exploring representative areas at a
       const data = await res.json();
       const run = data.run;
       const st = data.wsi_state;
+      const tilePrefilterMethod =
+        (run && typeof run.tile_prefilter_method === "string" && run.tile_prefilter_method)
+          ? String(run.tile_prefilter_method)
+          : ((st && typeof st.tile_prefilter_method === "string" && st.tile_prefilter_method) ? String(st.tile_prefilter_method) : null);
+      if (tilePrefilterMethodSelect && tilePrefilterMethod) {
+        tilePrefilterMethodSelect.value = tilePrefilterMethod;
+        saveStoredValue(tilePrefilterMethodStorageKey, tilePrefilterMethod);
+      }
       activeRunStatus = run.status || "";
       lastCurrentViewState = (st && st.current_view) ? st.current_view : null;
       overviewCacheState = (st && st.overview_cache) ? st.overview_cache : null;
@@ -2600,6 +2631,7 @@ If you cannot find a suspicious lesion after exploring representative areas at a
     fd.append("extractor_name", extractorSelect ? extractorSelect.value : "uni2");
     fd.append("tile_size_px", tileSizeSelect ? tileSizeSelect.value : "224");
     fd.append("batch_size", String(selectedBatchSize()));
+    fd.append("tile_prefilter_method", selectedTilePrefilterMethod());
     const res = await fetch("/api/runs/create", { method: "POST", body: fd });
     if (!res.ok) throw new Error(await res.text());
     return await res.json();
@@ -2838,6 +2870,15 @@ If you cannot find a suspicious lesion after exploring representative areas at a
   // Buttons
   btnClear.addEventListener("click", clearSelection);
   btnStart.addEventListener("click", startFlow);
+  if (tilePrefilterMethodSelect) {
+    const storedTilePrefilterMethod = loadStoredValue(tilePrefilterMethodStorageKey);
+    if (storedTilePrefilterMethod) {
+      tilePrefilterMethodSelect.value = storedTilePrefilterMethod;
+    }
+    tilePrefilterMethodSelect.addEventListener("change", () => {
+      saveStoredValue(tilePrefilterMethodStorageKey, selectedTilePrefilterMethod());
+    });
+  }
   if (btnActions && statusActionsMenu) {
     btnActions.addEventListener("click", (e) => {
       e.stopPropagation();

@@ -20,6 +20,7 @@ import torch
 from PIL import Image
 
 from . import Extractor
+from .tile_prefilter import select_informative_tile_indices
 
 ImageExtension: TypeAlias = Literal["png", "jpg"]
 EXTENSION_TO_FORMAT: Final[dict[ImageExtension, str]] = {"png": "PNG", "jpg": "JPEG"}
@@ -60,6 +61,15 @@ class _TilerParams(TypedDict):
     tile_size_px: TilePixels
     max_supertile_size_slide_px: SlidePixels
     brightness_cutoff: int | None
+    tile_prefilter_method: str
+    coarse_trigger_supertile_count: int | None
+    coarse_keep_ratio: float | None
+    coarse_min_keep_supertile_count: int
+    coarse_max_keep_supertile_count: int | None
+    quality_keep_ratio: float | None
+    quality_min_keep_tile_count: int
+    quality_trigger_tile_count: int | None
+    quality_random_reserve_ratio: float | None
     code_sha256: str
     tile_ext: ImageExtension
 
@@ -90,6 +100,16 @@ def tiles_with_cache(
     brightness_cutoff: int | None,
     canny_cutoff: float | None,
     default_slide_mpp: SlideMPP | None,
+    tile_prefilter_method: str,
+    coarse_trigger_supertile_count: int | None,
+    coarse_keep_ratio: float | None,
+    coarse_min_keep_supertile_count: int,
+    coarse_max_keep_supertile_count: int | None,
+    quality_keep_ratio: float | None,
+    quality_min_keep_tile_count: int,
+    quality_trigger_tile_count: int | None,
+    quality_random_reserve_ratio: float | None,
+    progress_cb: Callable[[dict[str, Any]], None] | None,
 ) -> Iterator[_Tile[Microns]]:
     """Iterate over tiles in a WSI, using cache if configured."""
     slide_path = Path(slide_path)
@@ -106,6 +126,16 @@ def tiles_with_cache(
                 brightness_cutoff=brightness_cutoff,
                 canny_cutoff=canny_cutoff,
                 default_slide_mpp=default_slide_mpp,
+                tile_prefilter_method=tile_prefilter_method,
+                coarse_trigger_supertile_count=coarse_trigger_supertile_count,
+                coarse_keep_ratio=coarse_keep_ratio,
+                coarse_min_keep_supertile_count=coarse_min_keep_supertile_count,
+                coarse_max_keep_supertile_count=coarse_max_keep_supertile_count,
+                quality_keep_ratio=quality_keep_ratio,
+                quality_min_keep_tile_count=quality_min_keep_tile_count,
+                quality_trigger_tile_count=quality_trigger_tile_count,
+                quality_random_reserve_ratio=quality_random_reserve_ratio,
+                progress_cb=progress_cb,
             )
         finally:
             slide.close()
@@ -118,6 +148,15 @@ def tiles_with_cache(
         "tile_size_px": tile_size_px,
         "max_supertile_size_slide_px": max_supertile_size_slide_px,
         "brightness_cutoff": brightness_cutoff,
+        "tile_prefilter_method": tile_prefilter_method,
+        "coarse_trigger_supertile_count": coarse_trigger_supertile_count,
+        "coarse_keep_ratio": coarse_keep_ratio,
+        "coarse_min_keep_supertile_count": coarse_min_keep_supertile_count,
+        "coarse_max_keep_supertile_count": coarse_max_keep_supertile_count,
+        "quality_keep_ratio": quality_keep_ratio,
+        "quality_min_keep_tile_count": quality_min_keep_tile_count,
+        "quality_trigger_tile_count": quality_trigger_tile_count,
+        "quality_random_reserve_ratio": quality_random_reserve_ratio,
         "code_sha256": _CODE_HASH,
         "tile_ext": cache_tiles_ext,
     }
@@ -147,6 +186,16 @@ def tiles_with_cache(
                     brightness_cutoff=brightness_cutoff,
                     canny_cutoff=canny_cutoff,
                     default_slide_mpp=default_slide_mpp,
+                    tile_prefilter_method=tile_prefilter_method,
+                    coarse_trigger_supertile_count=coarse_trigger_supertile_count,
+                    coarse_keep_ratio=coarse_keep_ratio,
+                    coarse_min_keep_supertile_count=coarse_min_keep_supertile_count,
+                    coarse_max_keep_supertile_count=coarse_max_keep_supertile_count,
+                    quality_keep_ratio=quality_keep_ratio,
+                    quality_min_keep_tile_count=quality_min_keep_tile_count,
+                    quality_trigger_tile_count=quality_trigger_tile_count,
+                    quality_random_reserve_ratio=quality_random_reserve_ratio,
+                    progress_cb=progress_cb,
                 ):
                     with zip_fp.open(
                         f"tile_({float(tile.coordinates.x)}, {float(tile.coordinates.y)}).{cache_tiles_ext}",
@@ -177,8 +226,40 @@ def _tiles_with_tissue(
     brightness_cutoff: int | None,
     canny_cutoff: float | None,
     default_slide_mpp: SlideMPP | None,
+    tile_prefilter_method: str,
+    coarse_trigger_supertile_count: int | None,
+    coarse_keep_ratio: float | None,
+    coarse_min_keep_supertile_count: int,
+    coarse_max_keep_supertile_count: int | None,
+    quality_keep_ratio: float | None,
+    quality_min_keep_tile_count: int,
+    quality_trigger_tile_count: int | None,
+    quality_random_reserve_ratio: float | None,
+    progress_cb: Callable[[dict[str, Any]], None] | None,
 ) -> Iterator[_Tile[Microns]]:
-    for tile in _tiles(
+    use_quality_prefilter = (
+        quality_keep_ratio is not None
+        and quality_keep_ratio > 0.0
+        and tile_prefilter_method in {"quality", "hybrid"}
+    )
+    quality_total_tiles = 0
+    quality_kept_tiles = 0
+    quality_pool_tiles = 0
+    quality_hard_rejected_tiles = 0
+
+    if use_quality_prefilter and progress_cb is not None:
+        progress_cb(
+            {
+                "phase": "quality_prefilter",
+                "status": "running",
+                "quality_total_tiles": 0,
+                "quality_kept_tiles": 0,
+                "quality_pool_tiles": 0,
+                "quality_hard_rejected_tiles": 0,
+            }
+        )
+
+    for supertile, supertile_coords_um, _ in _supertiles(
         slide=slide,
         tile_size_um=tile_size_um,
         tile_size_px=tile_size_px,
@@ -186,9 +267,94 @@ def _tiles_with_tissue(
         max_workers=max_workers,
         brightness_cutoff=brightness_cutoff,
         default_slide_mpp=default_slide_mpp,
+        coarse_trigger_supertile_count=coarse_trigger_supertile_count,
+        coarse_keep_ratio=coarse_keep_ratio,
+        coarse_min_keep_supertile_count=coarse_min_keep_supertile_count,
+        coarse_max_keep_supertile_count=coarse_max_keep_supertile_count,
+        progress_cb=progress_cb,
     ):
-        if canny_cutoff is None or _has_enough_texture(tile.image, cutoff=canny_cutoff):
+        tiles = _split_supertile_into_tiles(
+            supertile=supertile,
+            supertile_coords_um=supertile_coords_um,
+            tile_size_um=tile_size_um,
+            tile_size_px=tile_size_px,
+        )
+        if canny_cutoff is not None:
+            tiles = [tile for tile in tiles if _has_enough_texture(tile.image, cutoff=canny_cutoff)]
+
+        if use_quality_prefilter and tiles:
+            selection = select_informative_tile_indices(
+                [tile.image for tile in tiles],
+                keep_ratio=float(quality_keep_ratio),
+                min_keep_tiles=int(quality_min_keep_tile_count),
+                trigger_tile_count=max(1, int(quality_trigger_tile_count or 1)),
+                random_reserve_ratio=float(quality_random_reserve_ratio or 0.0),
+            )
+            quality_total_tiles += selection.total_tiles
+            quality_kept_tiles += len(selection.selected_indices)
+            quality_pool_tiles += selection.pool_tiles
+            quality_hard_rejected_tiles += selection.hard_rejected_tiles
+            if progress_cb is not None:
+                progress_cb(
+                    {
+                        "phase": "quality_prefilter",
+                        "status": "running",
+                        "quality_total_tiles": quality_total_tiles,
+                        "quality_kept_tiles": quality_kept_tiles,
+                        "quality_pool_tiles": quality_pool_tiles,
+                        "quality_hard_rejected_tiles": quality_hard_rejected_tiles,
+                    }
+                )
+            tiles = [tiles[idx] for idx in selection.selected_indices]
+
+        for tile in tiles:
             yield tile
+
+    if use_quality_prefilter and progress_cb is not None:
+        progress_cb(
+            {
+                "phase": "quality_prefilter",
+                "status": "done",
+                "quality_total_tiles": quality_total_tiles,
+                "quality_kept_tiles": quality_kept_tiles,
+                "quality_pool_tiles": quality_pool_tiles,
+                "quality_hard_rejected_tiles": quality_hard_rejected_tiles,
+            }
+        )
+
+
+def _split_supertile_into_tiles(
+    *,
+    supertile: Image.Image,
+    supertile_coords_um: _XYCoords[Microns],
+    tile_size_um: Microns,
+    tile_size_px: TilePixels,
+) -> list[_Tile[Microns]]:
+    assert supertile.size[0] == supertile.size[1], "supertile must be square"
+    assert supertile.size[0] % tile_size_px == 0, "supertile must divide into tiles"
+    no_tiles = supertile.size[0] // tile_size_px
+    out: list[_Tile[Microns]] = []
+    for y in range(no_tiles):
+        for x in range(no_tiles):
+            tile = supertile.crop(
+                (
+                    x * tile_size_px,
+                    y * tile_size_px,
+                    (x + 1) * tile_size_px,
+                    (y + 1) * tile_size_px,
+                )
+            )
+            out.append(
+                _Tile(
+                    image=tile,
+                    coordinates=_XYCoords(
+                        x=Microns(supertile_coords_um.x + x * tile_size_um),
+                        y=Microns(supertile_coords_um.y + y * tile_size_um),
+                    ),
+                    size=tile_size_um,
+                )
+            )
+    return out
 
 
 def _tiles(
@@ -200,6 +366,11 @@ def _tiles(
     max_workers: int,
     brightness_cutoff: int | None,
     default_slide_mpp: SlideMPP | None,
+    coarse_trigger_supertile_count: int | None,
+    coarse_keep_ratio: float | None,
+    coarse_min_keep_supertile_count: int,
+    coarse_max_keep_supertile_count: int | None,
+    progress_cb: Callable[[dict[str, Any]], None] | None,
 ) -> Iterator[_Tile[Microns]]:
     for supertile, supertile_coords_um, supertile_size_um in _supertiles(
         slide=slide,
@@ -209,36 +380,25 @@ def _tiles(
         max_workers=max_workers,
         brightness_cutoff=brightness_cutoff,
         default_slide_mpp=default_slide_mpp,
+        coarse_trigger_supertile_count=coarse_trigger_supertile_count,
+        coarse_keep_ratio=coarse_keep_ratio,
+        coarse_min_keep_supertile_count=coarse_min_keep_supertile_count,
+        coarse_max_keep_supertile_count=coarse_max_keep_supertile_count,
+        progress_cb=progress_cb,
     ):
-        assert supertile.size[0] == supertile.size[1], "supertile must be square"
-        assert supertile.size[0] % tile_size_px == 0, "supertile must divide into tiles"
-        no_tiles = supertile.size[0] // tile_size_px
-
-        for y in range(no_tiles):
-            for x in range(no_tiles):
-                tile = supertile.crop(
-                    (
-                        x * tile_size_px,
-                        y * tile_size_px,
-                        (x + 1) * tile_size_px,
-                        (y + 1) * tile_size_px,
-                    )
-                )
-                yield _Tile(
-                    image=tile,
-                    coordinates=_XYCoords(
-                        x=Microns(supertile_coords_um.x + x * tile_size_um),
-                        y=Microns(supertile_coords_um.y + y * tile_size_um),
-                    ),
-                    size=tile_size_um,
-                )
+        yield from _split_supertile_into_tiles(
+            supertile=supertile,
+            supertile_coords_um=supertile_coords_um,
+            tile_size_um=tile_size_um,
+            tile_size_px=tile_size_px,
+        )
 
 
-def _foreground_coords(
+def _foreground_grid(
     slide: openslide.AbstractSlide,
     tile_size_slide_px: SlidePixels,
     brightness_cutoff: int | None,
-) -> Iterator[_XYCoords[SlidePixels]]:
+) -> tuple[npt.NDArray[np.bool_], npt.NDArray[np.int32]]:
     supertile_thumb_size = np.ceil(np.array(slide.dimensions) / int(tile_size_slide_px)).astype(np.uint32)
 
     thumb_grayscale = np.array(
@@ -254,10 +414,140 @@ def _foreground_coords(
         else cast(npt.NDArray[np.bool_], np.full_like(thumb_grayscale, True, dtype=bool))
     )
 
+    return is_foreground, thumb_grayscale
+
+
+def _foreground_coords(
+    slide: openslide.AbstractSlide,
+    tile_size_slide_px: SlidePixels,
+    brightness_cutoff: int | None,
+) -> Iterator[_XYCoords[SlidePixels]]:
+    is_foreground, _ = _foreground_grid(
+        slide=slide,
+        tile_size_slide_px=tile_size_slide_px,
+        brightness_cutoff=brightness_cutoff,
+    )
+
     for y_slide_px in range(0, slide.dimensions[1], int(tile_size_slide_px)):
         for x_slide_px in range(0, slide.dimensions[0], int(tile_size_slide_px)):
             if is_foreground[y_slide_px // int(tile_size_slide_px), x_slide_px // int(tile_size_slide_px)]:
                 yield _XYCoords(SlidePixels(x_slide_px), SlidePixels(y_slide_px))
+
+
+def _mean_filter3(x: npt.NDArray[np.float32]) -> npt.NDArray[np.float32]:
+    padded = np.pad(x, 1, mode="edge")
+    acc = np.zeros_like(x, dtype=np.float32)
+    for dy in range(3):
+        for dx in range(3):
+            acc += padded[dy : dy + x.shape[0], dx : dx + x.shape[1]]
+    return acc / 9.0
+
+
+def _select_supertile_coords(
+    slide: openslide.AbstractSlide,
+    *,
+    supertile_size_slide_px: SlidePixels,
+    brightness_cutoff: int | None,
+    coarse_trigger_supertile_count: int | None,
+    coarse_keep_ratio: float | None,
+    coarse_min_keep_supertile_count: int,
+    coarse_max_keep_supertile_count: int | None,
+    progress_cb: Callable[[dict[str, Any]], None] | None,
+) -> list[_XYCoords[SlidePixels]]:
+    is_foreground, thumb_grayscale = _foreground_grid(
+        slide=slide,
+        tile_size_slide_px=supertile_size_slide_px,
+        brightness_cutoff=brightness_cutoff,
+    )
+
+    ys, xs = np.nonzero(is_foreground)
+    total = int(ys.size)
+    if total == 0:
+        if progress_cb is not None:
+            progress_cb(
+                {
+                    "phase": "coarse_prefilter",
+                    "status": "done",
+                    "coarse_total_supertile_count": 0,
+                    "coarse_selected_supertile_count": 0,
+                    "coarse_prefilter_used": False,
+                }
+            )
+        return []
+
+    trigger = max(0, int(coarse_trigger_supertile_count or 0))
+    ratio = float(coarse_keep_ratio) if coarse_keep_ratio is not None else 1.0
+    min_keep = max(1, int(coarse_min_keep_supertile_count))
+    max_keep = None if coarse_max_keep_supertile_count is None or coarse_max_keep_supertile_count <= 0 else int(coarse_max_keep_supertile_count)
+
+    use_prefilter = trigger > 0 and total >= trigger and (ratio < 1.0 or (max_keep is not None and total > max_keep))
+    keep_count = total
+    if use_prefilter:
+        keep_count = max(min_keep, int(np.ceil(total * max(0.0, min(1.0, ratio)))))
+        if max_keep is not None:
+            keep_count = min(keep_count, max_keep)
+        keep_count = max(1, min(total, keep_count))
+
+        gray = thumb_grayscale.astype(np.float32, copy=False)
+        fg_float = is_foreground.astype(np.float32, copy=False)
+        darkness = np.clip((255.0 - gray) / 255.0, 0.0, 1.0)
+        density = _mean_filter3(fg_float)
+        local_contrast = np.abs(gray - _mean_filter3(gray)) / 255.0
+        score_map = (0.55 * darkness + 0.30 * density + 0.15 * local_contrast).astype(np.float32, copy=False)
+        candidate_scores = score_map[ys, xs]
+        order = np.argsort(candidate_scores)[::-1]
+
+        min_sep = 2 if total > keep_count * 2 else 1
+        selected: list[tuple[int, int]] = []
+        for idx in order:
+            yy = int(ys[idx])
+            xx = int(xs[idx])
+            if all(max(abs(yy - sy), abs(xx - sx)) >= min_sep for sy, sx in selected):
+                selected.append((yy, xx))
+                if len(selected) >= keep_count:
+                    break
+        if len(selected) < keep_count:
+            seen = set(selected)
+            for idx in order:
+                yy = int(ys[idx])
+                xx = int(xs[idx])
+                point = (yy, xx)
+                if point in seen:
+                    continue
+                selected.append(point)
+                seen.add(point)
+                if len(selected) >= keep_count:
+                    break
+        selected.sort()
+        coords = [
+            _XYCoords(
+                SlidePixels(int(xx * int(supertile_size_slide_px))),
+                SlidePixels(int(yy * int(supertile_size_slide_px))),
+            )
+            for yy, xx in selected
+        ]
+    else:
+        coords = [
+            _XYCoords(
+                SlidePixels(int(x_slide_px)),
+                SlidePixels(int(y_slide_px)),
+            )
+            for y_slide_px in range(0, slide.dimensions[1], int(supertile_size_slide_px))
+            for x_slide_px in range(0, slide.dimensions[0], int(supertile_size_slide_px))
+            if is_foreground[y_slide_px // int(supertile_size_slide_px), x_slide_px // int(supertile_size_slide_px)]
+        ]
+
+    if progress_cb is not None:
+        progress_cb(
+            {
+                "phase": "coarse_prefilter",
+                "status": "done",
+                "coarse_total_supertile_count": total,
+                "coarse_selected_supertile_count": len(coords),
+                "coarse_prefilter_used": bool(use_prefilter),
+            }
+        )
+    return coords
 
 
 def _has_enough_texture(tile: Image.Image, cutoff: float) -> bool:
@@ -280,6 +570,11 @@ def _supertiles(
     max_workers: int,
     brightness_cutoff: int | None,
     default_slide_mpp: SlideMPP | None,
+    coarse_trigger_supertile_count: int | None,
+    coarse_keep_ratio: float | None,
+    coarse_min_keep_supertile_count: int,
+    coarse_max_keep_supertile_count: int | None,
+    progress_cb: Callable[[dict[str, Any]], None] | None,
 ) -> Iterator[_Tile[Microns]]:
     slide_mpp = cast(SlideMPP, get_slide_mpp_(slide, default_mpp=default_slide_mpp))
 
@@ -307,17 +602,22 @@ def _supertiles(
             size=supertile_size_um,
         )
 
-    coords_iter = _foreground_coords(
+    selected_coords = _select_supertile_coords(
         slide=slide,
-        tile_size_slide_px=supertile_size_slide_px,
+        supertile_size_slide_px=supertile_size_slide_px,
         brightness_cutoff=brightness_cutoff,
+        coarse_trigger_supertile_count=coarse_trigger_supertile_count,
+        coarse_keep_ratio=coarse_keep_ratio,
+        coarse_min_keep_supertile_count=coarse_min_keep_supertile_count,
+        coarse_max_keep_supertile_count=coarse_max_keep_supertile_count,
+        progress_cb=progress_cb,
     )
 
     if max_workers > 1:
         with futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-            yield from executor.map(_read_supertile, coords_iter)
+            yield from executor.map(_read_supertile, selected_coords)
     else:
-        for coords in coords_iter:
+        for coords in selected_coords:
             yield _read_supertile(coords)
 
 
@@ -470,9 +770,23 @@ def extract_wsi_features_by_tiles(
     brightness_cutoff: int | None = 240,
     canny_cutoff: float | None = 0.02,
     default_slide_mpp: float | None = None,
+    tile_prefilter_method: str = "none",
+    coarse_trigger_supertile_count: int | None = None,
+    coarse_keep_ratio: float | None = None,
+    coarse_min_keep_supertile_count: int = 0,
+    coarse_max_keep_supertile_count: int | None = None,
+    quality_keep_ratio: float | None = None,
+    quality_min_keep_tile_count: int = 0,
+    quality_trigger_tile_count: int | None = None,
+    quality_random_reserve_ratio: float | None = None,
     progress_cb: Callable[[dict[str, Any]], None] | None = None,
+    use_amp: bool = True,
 ) -> TileFeatureMatrix:
-    """Read a WSI, tile it, and extract tile-level feature vectors with the given extractor."""
+    """Read a WSI, tile it, and extract tile-level feature vectors with the given extractor.
+
+    Optimizations:
+    - use_amp: Automatic Mixed Precision for ~1.5-2x faster GPU inference (default: True)
+    """
     if batch_size <= 0:
         raise ValueError("batch_size must be > 0.")
     if tile_size_px <= 0:
@@ -494,6 +808,16 @@ def extract_wsi_features_by_tiles(
         brightness_cutoff=brightness_cutoff,
         canny_cutoff=canny_cutoff,
         default_slide_mpp=default_mpp,
+        tile_prefilter_method=tile_prefilter_method,
+        coarse_trigger_supertile_count=coarse_trigger_supertile_count,
+        coarse_keep_ratio=coarse_keep_ratio,
+        coarse_min_keep_supertile_count=coarse_min_keep_supertile_count,
+        coarse_max_keep_supertile_count=coarse_max_keep_supertile_count,
+        quality_keep_ratio=quality_keep_ratio,
+        quality_min_keep_tile_count=quality_min_keep_tile_count,
+        quality_trigger_tile_count=quality_trigger_tile_count,
+        quality_random_reserve_ratio=quality_random_reserve_ratio,
+        progress_cb=progress_cb,
     )
 
     if device is None:
@@ -529,7 +853,7 @@ def extract_wsi_features_by_tiles(
         if not batch_tensors:
             return
         x = torch.stack(batch_tensors, dim=0).to(run_device, non_blocking=True)
-        with torch.no_grad():
+        with torch.no_grad(), torch.autocast(run_device.type, enabled=use_amp and run_device.type == "cuda"):
             output = model(x)
         features = _normalize_feature_output(output).detach().cpu()
         feature_chunks.append(features)

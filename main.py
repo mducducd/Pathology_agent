@@ -42,7 +42,8 @@ ALLOWED_MODEL_NAMES = {
     "qwen3.5-35b-a3b",
     "Qwen3.5-397B-A17B-FP8",
 }
-ALLOWED_EMBEDDING_EXTRACTORS = {"uni2"}
+ALLOWED_EMBEDDING_EXTRACTORS = {"uni2", "dinobloom", "reddino"}
+ALLOWED_TILE_PREFILTER_METHODS = {"none", "coarse", "quality", "hybrid"}
 DEFAULT_SERVER_SLIDE_ROOTS = [
     Path("/mnt/copernicus3/PATHOLOGY/others/private/haemadata/ALL_WSIs/"),
 ]
@@ -72,6 +73,11 @@ class RunStatus(BaseModel):
     agent_type: str
     model_name: str
     prompt: Optional[str]
+    extractor_name: str = "uni2"
+    tile_size_px: int = 224
+    tile_size_um: float = 256.0
+    batch_size: int = 32
+    tile_prefilter_method: str = "quality"
     slide_filename: str       # filled after finalize
     slide_path: Optional[str] = None
     final_output: Optional[str] = None
@@ -234,7 +240,14 @@ def _get_embedding_extractor(extractor_name: str):
 
         try:
             if key == "uni2":
-                extractor = uni2()
+                from wsi_core_pkg.embeddings.extractors.uni2 import uni2 as uni2_fn
+                extractor = uni2_fn()
+            elif key == "dinobloom":
+                from wsi_core_pkg.embeddings.extractors.dinobloom import dinobloom
+                extractor = dinobloom()
+            elif key == "reddino":
+                from wsi_core_pkg.embeddings.extractors.reddino import reddino
+                extractor = reddino()
             else:
                 raise HTTPException(status_code=400, detail=f"Unsupported extractor: {extractor_name}")
         except HTTPException:
@@ -659,6 +672,11 @@ def run_worker(
             agent_type=agent_type,
             run_id=run_id,
             model_name=model_name,
+            extractor_name=run.extractor_name,
+            tile_size_um=run.tile_size_um,
+            tile_size_px=run.tile_size_px,
+            batch_size=run.batch_size,
+            tile_prefilter_method=run.tile_prefilter_method,
         )
         fatal_error: Optional[str] = None
         if isinstance(result, dict):
@@ -733,6 +751,11 @@ async def create_run(
     prompt: str = Form(""),
     agent_type: str = Form("wsi"),
     model_name: str = Form(MODEL_NAME),
+    extractor_name: str = Form("uni2"),
+    tile_size_px: int = Form(224),
+    tile_size_um: float = Form(256.0),
+    batch_size: int = Form(32),
+    tile_prefilter_method: str = Form("quality"),
 ):
     agent_type_lower = agent_type.lower()
     if agent_type_lower not in {"tile", "wsi", "aml"}:
@@ -742,6 +765,23 @@ async def create_run(
             status_code=400,
             detail=f"model_name must be one of: {', '.join(sorted(ALLOWED_MODEL_NAMES))}",
         )
+    if extractor_name not in ALLOWED_EMBEDDING_EXTRACTORS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"extractor_name must be one of: {', '.join(sorted(ALLOWED_EMBEDDING_EXTRACTORS))}",
+        )
+    tile_prefilter_method = tile_prefilter_method.strip().lower()
+    if tile_prefilter_method not in ALLOWED_TILE_PREFILTER_METHODS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"tile_prefilter_method must be one of: {', '.join(sorted(ALLOWED_TILE_PREFILTER_METHODS))}",
+        )
+    if tile_size_px <= 0:
+        raise HTTPException(status_code=400, detail="tile_size_px must be > 0.")
+    if tile_size_um <= 0:
+        raise HTTPException(status_code=400, detail="tile_size_um must be > 0.")
+    if batch_size <= 0:
+        raise HTTPException(status_code=400, detail="batch_size must be > 0.")
 
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S_") + uuid.uuid4().hex[:6]
     run_dir = BASE_RUN_DIR / run_id / "uploads"
@@ -754,6 +794,11 @@ async def create_run(
         agent_type=agent_type_lower,
         model_name=model_name,
         prompt=prompt or None,
+        extractor_name=extractor_name,
+        tile_size_px=tile_size_px,
+        tile_size_um=tile_size_um,
+        batch_size=batch_size,
+        tile_prefilter_method=tile_prefilter_method,
         slide_filename="(upload pending)",
         slide_path=None,
         upload_count=0,
@@ -1048,8 +1093,8 @@ def get_dark_regions(
 @app.post("/api/runs/{run_id}/embed_wsi")
 def embed_wsi(
     run_id: str,
-    extractor_name: str = "uni2",
-    tile_size_um: float = 256.0,
+    extractor_name: Optional[str] = None,
+    tile_size_um: Optional[float] = None,
     patch_size_px: int = 512,
     tile_size_px: Optional[int] = None,
     batch_size: int = 32,
@@ -1067,6 +1112,12 @@ def embed_wsi(
         raise HTTPException(status_code=404, detail="Run not found")
     if not run.slide_path:
         raise HTTPException(status_code=400, detail="Slide path not available for this run.")
+
+    # Use run's stored parameters if not provided
+    if extractor_name is None:
+        extractor_name = run.extractor_name
+    if tile_size_um is None:
+        tile_size_um = run.tile_size_um
 
     slide_path = Path(run.slide_path).resolve()
     if not slide_path.exists():

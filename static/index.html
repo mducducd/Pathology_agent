@@ -6,7 +6,7 @@
   <title>WSI Agent Prototype</title>
   <link rel="icon" type="image/svg+xml" href="/static/assets/STAMP_logo.svg?v=1" />
   <link rel="shortcut icon" href="/static/assets/STAMP_logo.svg?v=1" />
-  <link rel="stylesheet" href="/static/styles.css?v=46" />
+  <link rel="stylesheet" href="/static/styles.css?v=47" />
 </head>
 <body>
   <header class="topbar">
@@ -129,8 +129,19 @@
             </div>
 
             <div class="field actions run-actions">
-              <button id="btn-start" type="button" class="primary" disabled>Start run</button>
-              <div id="run-label" class="muted small"></div>
+              <div class="run-actions-main">
+                <button id="btn-start" type="button" class="primary" disabled>Start run</button>
+                <div id="run-label" class="muted small"></div>
+              </div>
+              <div class="run-prefilter-picker">
+                <label class="run-prefilter-label" for="tile-prefilter-method-select">Tile filter</label>
+                <select id="tile-prefilter-method-select" class="picker-list run-method-select" aria-label="Tile filtering method selector">
+                  <option value="quality" selected>Quality score</option>
+                  <option value="coarse">Coarse to fine</option>
+                  <option value="hybrid">Hybrid</option>
+                  <option value="none">None</option>
+                </select>
+              </div>
             </div>
           </div>
 
@@ -264,6 +275,6 @@
     </section>
   </div>
 
-  <script src="/static/app.js?v=80"></script>
+  <script src="/static/app.js?v=81"></script>
 </body>
 </html>

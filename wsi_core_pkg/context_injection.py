@@ -31,6 +31,10 @@ def _agent_type() -> str:
     return str(getattr(state, "AGENT_TYPE", "") or "").lower()
 
 
+def _selected_extractor_name() -> str:
+    return str(getattr(state, "EXTRACTOR_NAME", "uni2") or "uni2").strip().lower()
+
+
 def _encode_image_as_data_url(path: str) -> Optional[str]:
     if not path or not os.path.exists(path):
         return None
@@ -301,12 +305,16 @@ def _inject_wsi_images(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 parts.append(f"strong_bad_like_fraction={float(strong_bad_frac):.2f}")
             if parts:
                 aml_meta_line = "\nAML quality summary: " + ", ".join(parts)
+        extractor_name = _selected_extractor_name()
+        extractor_label = extractor_name.replace("_onnx", " (ONNX)").title()
         expected_source = (
-            "UNI2 tile embeddings + exact good/bad exemplar retrieval ranked by raw nearest bad similarity."
+            f"{extractor_label} tile embeddings + exact good/bad exemplar retrieval ranked by raw nearest bad similarity."
             if _agent_type() == "aml"
-            else "UNI2 tile embeddings + kNN ranking."
+            else f"{extractor_label} tile embeddings + kNN ranking."
         )
-        expected_source_name = "uni2_exact_retrieval" if _agent_type() == "aml" else "uni2_knn"
+        expected_source_name = (
+            f"{extractor_name}_exact_retrieval" if _agent_type() == "aml" else f"{extractor_name}_knn"
+        )
         cand_text = (
             "Top ROI candidates for CURRENT VIEW (normalized 0-999 coordinates). "
             f"Candidate source: {source}. "

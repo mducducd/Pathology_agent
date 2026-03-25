@@ -22,10 +22,22 @@ def run_wsi_agent_for_web(
     run_id: str,
     model_name: Optional[str] = None,
     max_turns: int = MAX_TURNS,
+    extractor_name: str = "uni2",
+    tile_size_um: float = 256.0,
+    tile_size_px: int = 224,
+    batch_size: int = 32,
+    tile_prefilter_method: str = "quality",
 ) -> Dict[str, Any]:
     agent_type_l = (agent_type or "wsi").lower()
     set_slide_path(slide_path)
-    reset_wsi_state(run_id)
+    reset_wsi_state(
+        run_id,
+        extractor_name=extractor_name,
+        tile_size_um=tile_size_um,
+        tile_size_px=tile_size_px,
+        batch_size=batch_size,
+        tile_prefilter_method=tile_prefilter_method,
+    )
     state.AGENT_TYPE = agent_type_l
 
     if not prompt:
