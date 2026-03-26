@@ -107,9 +107,8 @@ Use the example GOOD tiles as guidance for where to search (dark, tissue-dense r
 Be efficient: inspect only a small number of diagnostically meaningful high-power ROIs, not an exhaustive survey.
 Examine only diagnostically relevant regions with good focus and staining. Avoid pale/empty or artifact regions.
 You MUST search for high-density cellular regions. Zoom in repeatedly until you reach true high-power views with clear cellular detail.
-When roi_candidates are provided, use them as navigation hints only. You may inspect bad_like candidates first, but do NOT diagnose AML from bad_like / closer-to-bad retrieval alone.
+When roi_candidates are provided, prioritize bad_like candidates ranked by raw nearest bad-exemplar similarity, and use good exemplars only as contrast checks.
 Inspect a few high-value ROIs at high power. Estimate blast percentage across them.
-Retrieval evidence can be noisy on normal marrow; if the kept ROIs show orderly maturation and blasts stay <5%, report Normal marrow even if some retrieval hits look suspicious.
 After each wsi_mark_roi_norm, if the ROI is background, low-cellularity, out of focus, or redundant, immediately call wsi_discard_last_roi.
 If the evidence you already have is enough for a stable final AML category, stop immediately instead of searching for extra confirmation.
 Once you have 2-3 informative ROIs and a stable blast estimate, stop calling tools and report.
@@ -129,14 +128,12 @@ Diagnostic thresholds:
 - Acute leukemia: blasts ≥20% of all nucleated cells (average across ROIs).
 - Normal marrow: blasts <5%.
 - Call for more diagnostics: blasts 5–20%.
-- Use Call for more diagnostics only when morphology truly supports an intermediate or equivocal blast proportion, not because retrieval alone looks suspicious.
 
 Save up to 4 key tiles from the most informative high-density regions using wsi_save_tile_norm(..., quality="good", label="aml_key"). Do not keep searching only to fill a tile quota.
 Output:
 - Brief morphology summary.
 - Estimated blast percentage range.
 - Final decision (Normal marrow / Acute leukemia / Call for more diagnostics).
-- If morphology and retrieval disagree, state that explicitly and let morphology drive the final class.
 - For each kept ROI, include whether retrieval evidence was closer to bad or good exemplars if shown in the tool outputs.`,
     wsi: `Inspect the whole-slide image and describe the likely tissue of origin and any key findings (including tumors, inflammatory infiltrates, necrosis, etc.).
 Use the WSI tools to get an overview and then pan/zoom as needed, similar to a human pathologist using a digital slide viewer.
@@ -164,10 +161,10 @@ If you cannot find a suspicious lesion after exploring representative areas at a
 
   function selectedBatchSize() {
     const parsed = Number.parseInt(
-      (batchSizeSelect && batchSizeSelect.value) ? batchSizeSelect.value : "32",
+      (batchSizeSelect && batchSizeSelect.value) ? batchSizeSelect.value : "128",
       10
     );
-    return Number.isFinite(parsed) && parsed > 0 ? parsed : 32;
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 128;
   }
 
   function selectedTilePrefilterMethod() {

@@ -568,42 +568,23 @@ def _attach_roi_candidates(info: Dict[str, Any], top_k: int = ROI_CANDIDATE_TOP_
             candidates = [c for c in candidates if _not_marked(c)]
 
     if aml_mode and candidates:
-        # In AML mode, keep suspicious candidates prominent but still expose a small
-        # amount of contrast so the model does not see only "bad_like" regions.
-        # The full list stays in state._last_roi_candidates so wsi_mark_roi_norm
-        # validation still accepts any of these coordinates.
-        bad_like = [c for c in candidates if c.get("quality_hint") == "bad_like"]
-        contrast = [c for c in candidates if c.get("quality_hint") != "bad_like"]
-        if bad_like:
-            bad_like = sorted(
-                bad_like,
+        # In AML mode, expose the tiles where retrieved bad exemplars beat retrieved
+        # good exemplars. The full list stays in state._last_roi_candidates so
+        # wsi_mark_roi_norm validation still accepts any of these coordinates.
+        filtered = [c for c in candidates if c.get("quality_hint") == "bad_like"]
+        if filtered:
+            candidates = sorted(
+                filtered,
                 key=lambda c: (
                     float(c.get("retrieval_score", c.get("score", float("-inf")))),
                     float(c.get("bad_margin", 0.0)),
                 ),
                 reverse=True,
             )
-            if contrast:
-                contrast = sorted(
-                    contrast,
-                    key=lambda c: (
-                        0 if c.get("quality_hint") == "good_like" else 1,
-                        -float(c.get("good_top1_similarity", c.get("score", 0.0))),
-                        float(c.get("bad_margin", 0.0)),
-                    ),
-                )
-                contrast_slots = min(2, len(contrast), max(0, ROI_CANDIDATE_TOP_K_AML - 1))
-                chosen = bad_like[: max(1, ROI_CANDIDATE_TOP_K_AML - contrast_slots)]
-                remaining = ROI_CANDIDATE_TOP_K_AML - len(chosen)
-                if remaining > 0:
-                    chosen.extend(contrast[:remaining])
-                candidates = chosen
-            else:
-                candidates = bad_like[:ROI_CANDIDATE_TOP_K_AML]
-        else:
-            # Nothing is bad_like in this view — keep the raw retrieval-ranked list so
-            # the VLM can see that bad exemplars are not winning here.
-            candidates = candidates[:ROI_CANDIDATE_TOP_K_AML]
+        # else: nothing is bad_like in this view — keep the raw retrieval-ranked
+        # list so the VLM can see that bad exemplars are not winning here.
+        # Final hard cap: show at most ROI_CANDIDATE_TOP_K_AML candidates.
+        candidates = candidates[:ROI_CANDIDATE_TOP_K_AML]
     info["roi_candidates"] = candidates
     info["roi_candidate_count"] = len(candidates)
     info["marked_roi_count"] = len(state._roi_marks)
@@ -614,14 +595,12 @@ def _attach_roi_candidates(info: Dict[str, Any], top_k: int = ROI_CANDIDATE_TOP_
             info["aml_stop_hint"] = (
                 "If the evidence you already have is enough for a stable final AML decision "
                 "(Normal marrow / Acute leukemia / Call for more diagnostics), stop now and give the final answer. "
-                f"You already have {kept_roi_count} kept ROI(s); do not explore another ROI unless it could materially change the decision. "
-                "Final class must follow morphology and blast percentage, not retrieval labels alone."
+                f"You already have {kept_roi_count} kept ROI(s); do not explore another ROI unless it could materially change the decision."
             )
         else:
             info["aml_stop_hint"] = (
                 "Stop as soon as the current evidence is enough for a stable final AML decision. "
-                "Do not keep exploring for extra confirmation once another ROI is unlikely to change the final category. "
-                "Final class must follow morphology and blast percentage, not retrieval labels alone."
+                "Do not keep exploring for extra confirmation once another ROI is unlikely to change the final category."
             )
 
     # Detect how many consecutive recent steps have stayed in the same slide region.
@@ -692,9 +671,8 @@ def _attach_roi_candidates(info: Dict[str, Any], top_k: int = ROI_CANDIDATE_TOP_
     if candidates:
         if aml_mode:
             info["roi_candidate_guidance"] = (
-                "For AML, use bad_like candidates to find cellular high-yield fields, but treat retrieval evidence as advisory only. "
-                "Do NOT diagnose AML from bad_like / closer-to-bad alone. "
-                "If morphology shows normal maturation with blasts <5%, classify Normal marrow even if retrieval looked suspicious. "
+                "For AML, prioritize candidates with quality_hint='bad_like' and higher retrieval_score. "
+                "Use retrieved good exemplars only as contrast checks, not as an extra blended score. "
                 "Use one of the top-K candidate centers/bboxes for wsi_mark_roi_norm; "
                 "arbitrary ROI coordinates are rejected."
             )

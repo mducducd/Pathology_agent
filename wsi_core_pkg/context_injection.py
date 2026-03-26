@@ -220,23 +220,8 @@ def _inject_wsi_images(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
     if _agent_type() == "aml":
         kept_roi_count = len(state._roi_marks)
-        closer_to_bad = sum(
-            1
-            for roi in state._roi_marks
-            if isinstance(roi.get("aml_reference_evidence"), dict)
-            and roi["aml_reference_evidence"].get("match_label") == "closer_to_bad"
-        )
-        closer_to_good = sum(
-            1
-            for roi in state._roi_marks
-            if isinstance(roi.get("aml_reference_evidence"), dict)
-            and roi["aml_reference_evidence"].get("match_label") == "closer_to_good"
-        )
         aml_stop_lines = [
             "AML efficiency reminder:",
-            "- Final AML class must be driven by visible morphology and estimated blast percentage, not by bad_like / closer-to-bad retrieval labels alone.",
-            "- Normal orderly maturation across representative ROIs should be reported as Normal marrow even if some retrieval hits look suspicious.",
-            "- Use Call for more diagnostics only when morphology truly supports an intermediate or equivocal blast proportion.",
             "- If the evidence you already have is enough to make the final AML decision "
             "(Normal marrow / Acute leukemia / Call for more diagnostics), stop calling tools now and give the final answer.",
             "- Do NOT explore another ROI unless it could materially change the final category or blast estimate.",
@@ -245,10 +230,13 @@ def _inject_wsi_images(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             aml_stop_lines.append(
                 f"- You already have {kept_roi_count} kept ROI(s); this is often enough for a final AML decision."
             )
-        if kept_roi_count and (closer_to_bad or closer_to_good):
-            aml_stop_lines.append(
-                f"- Retrieval evidence exists for kept ROIs ({closer_to_bad} closer-to-bad, {closer_to_good} closer-to-good), but it is secondary to morphology in the ROI images."
-            )
+        if kept_roi_count:
+            aml_stop_lines.append("- Kept ROI reference evidence:")
+            for roi in state._roi_marks[-min(3, kept_roi_count):]:
+                ref_evidence = roi.get("aml_reference_evidence") if isinstance(roi.get("aml_reference_evidence"), dict) else None
+                summary = ref_evidence.get("summary") if ref_evidence else None
+                if isinstance(summary, str) and summary:
+                    aml_stop_lines.append(f"- ROI #{roi.get('roi_id')}: {summary}")
         new_messages.insert(
             insert_pos,
             {"role": "user", "content": [{"type": "text", "text": "\n".join(aml_stop_lines)}]},

@@ -15,7 +15,7 @@ AGENT_TYPE: str = "wsi"
 EXTRACTOR_NAME: str = "uni2"
 TILE_SIZE_UM: float = 256.0
 TILE_SIZE_PX: int = 224
-BATCH_SIZE: int = 32
+BATCH_SIZE: int = 128
 TILE_PREFILTER_METHOD: str = "quality"
 
 _slide: Optional[openslide.AbstractSlide] = None
@@ -60,7 +60,7 @@ def reset_wsi_state(
     extractor_name: str = "uni2",
     tile_size_um: float = 256.0,
     tile_size_px: int = 224,
-    batch_size: int = 32,
+    batch_size: int = 128,
     tile_prefilter_method: str = "quality",
 ) -> None:
     global RUN_ID, AGENT_TYPE, EXTRACTOR_NAME, TILE_SIZE_UM, TILE_SIZE_PX, BATCH_SIZE, TILE_PREFILTER_METHOD, _debug_img_counter, DEBUG_SAVE_DIR
@@ -138,7 +138,7 @@ def clear_wsi_outputs_state() -> None:
 
     _step_log = []
     AGENT_TYPE = "wsi"
-    BATCH_SIZE = 32
+    BATCH_SIZE = 128
     TILE_PREFILTER_METHOD = "quality"
     _roi_marks = []
     _view_history = []
