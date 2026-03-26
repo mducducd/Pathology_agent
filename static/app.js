@@ -81,9 +81,11 @@
 
 Use the example good and bad tiles that I provided to you. First evaluate the difference between provided good and bad tiles. Understand the difference.
 
-Prioritize the darker, tissue-dense marrow regions (these are the most informative). Avoid pale/empty areas and debris-dominated fields.
+Prefer dark-ish or basophilic cellular marrow regions only when the darkness comes from packed viable cells with visible nuclear detail. Darkness alone is only a rough cue. Avoid pale/empty areas and debris-dominated fields.
 
-Do not save tiles with large pale/white areas or sparse cells as good tiles. If a view looks pale/low density, do NOT save tiles there; instead keep zooming or move to a darker, more cellular region.
+Do not save tiles with large pale/white areas or sparse cells as good tiles. If a view looks pale/low density, do NOT save tiles there; instead keep zooming or move to a more cellular region with preserved nuclei.
+
+Do not treat a field as informative just because it is dark. Reject dark regions caused by stain precipitate, tissue folds, hemorrhagic/clotted material, necrotic debris, out-of-focus dense areas, or smudged/crushed cells.
 
 Use the WSI navigation tools to explore the slide. When you see a diagnostically useful region, call:
 wsi_save_tile_norm(..., quality="good", label="...")
@@ -92,9 +94,9 @@ Stop when you have saved 60 good tiles or when you can no longer find good tiles
 
 A good tile must:
 - Be sharply focused and clearly stained.
-- Show evenly distributed cells with distinguishable morphology.
+- Show preserved nuclear detail and distinguishable cell morphology.
 - Have adequate cellularity.
-- Avoid artifacts (folding/crush, empty/white areas, necrosis, peripheral/non-representative zones, dark crumbly debris).
+- Avoid artifacts (folding/crush, empty/white areas, necrosis, peripheral/non-representative zones, dark crumbly debris, hemorrhagic clot, precipitate).
 
 Typical cells expected: erythroid precursors, myeloid cells, megakaryocytes (if present).
 Reject areas dominated by fat, background, damaged tissue, or poor stain/focus.`,
@@ -103,10 +105,11 @@ Reject areas dominated by fat, background, damaged tissue, or poor stain/focus.`
 - Acute leukemia
 - Call for more diagnostics (if blast % is between 5% and 20%).
 
-Use the example GOOD tiles as guidance for where to search (dark, tissue-dense regions).
+Use the example GOOD tiles as guidance for where to search. Blast-rich regions are often dark-ish or basophilic because they are densely cellular, but darkness alone is not the definition.
 Be efficient: inspect only a small number of diagnostically meaningful high-power ROIs, not an exhaustive survey.
 Examine only diagnostically relevant regions with good focus and staining. Avoid pale/empty or artifact regions.
-You MUST search for high-density cellular regions. Zoom in repeatedly until you reach true high-power views with clear cellular detail.
+You MUST search for high-density cellular regions. A region is blast-rich only if the darkness comes from packed viable leukemic cells with visible nuclei/nucleoli, good focus, and low artifact. Zoom in repeatedly until you reach true high-power views with clear cellular detail.
+Do not treat stain precipitate, tissue folds, hemorrhagic/clotted areas, necrotic debris, out-of-focus dense regions, or smudged/crushed cells as blast-rich.
 When roi_candidates are provided, prioritize bad_like candidates ranked by raw nearest bad-exemplar similarity, and use good exemplars only as contrast checks.
 Inspect a few high-value ROIs at high power. Estimate blast percentage across them.
 After each wsi_mark_roi_norm, if the ROI is background, low-cellularity, out of focus, or redundant, immediately call wsi_discard_last_roi.
@@ -2052,6 +2055,25 @@ If you cannot find a suspicious lesion after exploring representative areas at a
     }
     ctx.clearRect(0, 0, overviewCanvas.width, overviewCanvas.height);
 
+    if (darkRegionsEnabled && darkRegionsLoaded && darkImg && darkImg.src && overviewImg.src === darkImg.src) {
+      ctx.save();
+      ctx.lineWidth = Math.max(1, Math.round(Math.min(imgW, imgH) * 0.003));
+      ctx.strokeStyle = "rgba(124,240,193,0.92)";
+      ctx.setLineDash([10, 7]);
+      for (const b of darkBoxes) {
+        if (!b || !Number.isFinite(Number(b.x)) || !Number.isFinite(Number(b.y)) ||
+            !Number.isFinite(Number(b.w)) || !Number.isFinite(Number(b.h))) {
+          continue;
+        }
+        ctx.strokeRect(Number(b.x), Number(b.y), Number(b.w), Number(b.h));
+      }
+      ctx.setLineDash([]);
+      ctx.fillStyle = "rgba(124,240,193,0.98)";
+      ctx.font = "bold 11px sans-serif";
+      ctx.fillText("Dark-region heuristic", 10, 18);
+      ctx.restore();
+    }
+
     const roiEntries = Array.from(roiById.values())
       .filter((roi) => roi && Number.isFinite(Number(roi.roi_id)))
       .sort((a, b) => Number(a.roi_id) - Number(b.roi_id));
@@ -2564,7 +2586,7 @@ If you cannot find a suspicious lesion after exploring representative areas at a
   async function fetchDarkRegions(runId) {
     if (!runId || darkRegionsLoaded || !darkRegionsEnabled) return;
     try {
-      const res = await fetch(`/api/runs/${encodeURIComponent(runId)}/dark_regions`);
+      const res = await fetch(`/api/runs/${encodeURIComponent(runId)}/dark_regions`, { cache: "no-store" });
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
       if (!data.image_url) throw new Error("No overview image returned.");
@@ -2573,8 +2595,8 @@ If you cannot find a suspicious lesion after exploring representative areas at a
       darkBoxes = Array.isArray(data.boxes) ? data.boxes : [];
       darkImg.hidden = true;
       darkImg.onload = () => {
-        renderDarkOverlay();
         applyOverviewDisplaySource();
+        renderOverviewRoiOverlay();
       };
       darkImg.src = data.image_url;
       setDarkEmptyState("Showing in Overview.");
@@ -2920,6 +2942,9 @@ If you cannot find a suspicious lesion after exploring representative areas at a
         setDarkRegionsEnabled(!darkRegionsEnabled);
       }
     });
+  }
+  if (overviewImg) {
+    overviewImg.addEventListener("load", renderOverviewRoiOverlay);
   }
 
   if (uploadActionTrigger && uploadActionMenu) {

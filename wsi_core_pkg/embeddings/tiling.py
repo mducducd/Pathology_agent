@@ -491,9 +491,18 @@ def _select_supertile_coords(
         gray = thumb_grayscale.astype(np.float32, copy=False)
         fg_float = is_foreground.astype(np.float32, copy=False)
         darkness = np.clip((255.0 - gray) / 255.0, 0.0, 1.0)
+        dark_core = np.clip((200.0 - gray) / 200.0, 0.0, 1.0)
         density = _mean_filter3(fg_float)
         local_contrast = np.abs(gray - _mean_filter3(gray)) / 255.0
-        score_map = (0.55 * darkness + 0.30 * density + 0.15 * local_contrast).astype(np.float32, copy=False)
+        # Hybrid coarse pass should deliberately pull search toward darker
+        # marrow territories first; the later tile-quality pass will remove
+        # blur, clot, crushed cells, and other artifact-driven dark fields.
+        score_map = (
+            0.56 * darkness
+            + 0.20 * dark_core
+            + 0.18 * density
+            + 0.06 * local_contrast
+        ).astype(np.float32, copy=False)
         candidate_scores = score_map[ys, xs]
         order = np.argsort(candidate_scores)[::-1]
 

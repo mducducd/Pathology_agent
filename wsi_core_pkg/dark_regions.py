@@ -1,6 +1,7 @@
 import os
 from typing import Any, Dict, List
 
+import numpy as np
 import openslide
 
 from .config import DEBUG_ROOT_DIR
@@ -18,6 +19,15 @@ def _percentile_from_hist(hist: List[int], pct: float) -> int:
         if running >= target:
             return i
     return 255
+
+
+def _mean_filter3(x: np.ndarray) -> np.ndarray:
+    padded = np.pad(x, 1, mode="edge")
+    acc = np.zeros_like(x, dtype=np.float32)
+    for dy in range(3):
+        for dx in range(3):
+            acc += padded[dy : dy + x.shape[0], dx : dx + x.shape[1]]
+    return acc / 9.0
 
 
 def _find_connected_components(mask: List[bool], w: int, h: int, min_area: int) -> List[Dict[str, int]]:
@@ -100,12 +110,28 @@ def detect_dark_regions(
         region = _read_region_rgb(slide, 0, 0, level, (level_w, level_h))
         region, out_w, out_h = _resize_to_max_dim(region, max_dim=max_dim)
 
-        gray = region.convert("L")
-        hist = gray.histogram()
-        threshold = _percentile_from_hist(hist, float(threshold_pct))
+        rgb = np.asarray(region.convert("RGB"), dtype=np.float32)
+        gray = 0.299 * rgb[..., 0] + 0.587 * rgb[..., 1] + 0.114 * rgb[..., 2]
+        tissue_mask = gray < 242.0
+        if np.any(tissue_mask):
+            darkness = np.clip((255.0 - gray) / 255.0, 0.0, 1.0)
+            dark_core = np.clip((200.0 - gray) / 200.0, 0.0, 1.0)
+            density = _mean_filter3(tissue_mask.astype(np.float32, copy=False))
+            local_contrast = np.abs(gray - _mean_filter3(gray)) / 255.0
+            score = (
+                0.56 * darkness
+                + 0.20 * dark_core
+                + 0.18 * density
+                + 0.06 * local_contrast
+            ).astype(np.float32, copy=False)
+            threshold = float(np.percentile(score[tissue_mask], float(threshold_pct)))
+            mask_np = tissue_mask & (score >= threshold)
+        else:
+            hist = region.convert("L").histogram()
+            threshold = float(_percentile_from_hist(hist, float(threshold_pct)))
+            mask_np = gray <= threshold
 
-        pixels = list(gray.getdata())
-        mask = [px <= threshold for px in pixels]
+        mask = mask_np.reshape(-1).tolist()
 
         boxes = _find_connected_components(mask, out_w, out_h, min_area=min_area)
         boxes.sort(key=lambda b: b["area"], reverse=True)
@@ -134,7 +160,7 @@ def detect_dark_regions(
         return {
             "image_path": out_path,
             "image_dims": [out_w, out_h],
-            "threshold": int(threshold),
+            "threshold": float(threshold),
             "threshold_pct": int(threshold_pct),
             "boxes": boxes,
             "boxes_level0": boxes_level0,

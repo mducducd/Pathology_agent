@@ -47,12 +47,18 @@ def _tile_metrics(image: Image.Image) -> dict[str, float]:
 
     channel_max = np.max(rgb, axis=2)
     channel_min = np.min(rgb, axis=2)
-    saturation = float(np.mean(channel_max - channel_min))
+    chroma = channel_max - channel_min
+    saturation = float(np.mean(chroma))
     brightness = float(np.mean(gray))
 
     od = -np.log(np.clip(rgb, 1.0 / 255.0, 1.0))
     stain_strength = float(np.mean(od))
-    nuclear_stain = float(np.mean(np.clip(0.65 * od[:, :, 2] + 0.35 * od[:, :, 0] - 0.55 * od[:, :, 1], 0.0, None)))
+    nuclear_signal = np.clip(
+        0.65 * od[:, :, 2] + 0.35 * od[:, :, 0] - 0.55 * od[:, :, 1],
+        0.0,
+        None,
+    )
+    nuclear_stain = float(np.mean(nuclear_signal))
 
     grad_x = np.abs(np.diff(gray, axis=1))
     grad_y = np.abs(np.diff(gray, axis=0))
@@ -62,24 +68,65 @@ def _tile_metrics(image: Image.Image) -> dict[str, float]:
     grad_energy = float(np.mean((np.pad(grad_x, ((0, 0), (0, 1)), mode="constant") ** 2) + (np.pad(grad_y, ((0, 1), (0, 0)), mode="constant") ** 2)))
 
     pen_mask = (
-        (channel_max - channel_min > 0.45)
+        (chroma > 0.45)
         & (
             ((rgb[:, :, 2] > 0.62) & (rgb[:, :, 0] < 0.58))
             | ((rgb[:, :, 1] > 0.65) & (rgb[:, :, 0] < 0.58))
             | ((rgb[:, :, 0] > 0.74) & (rgb[:, :, 1] < 0.5) & (rgb[:, :, 2] < 0.5))
         )
     )
-    dark_fold_mask = (gray < 0.08) & ((channel_max - channel_min) < 0.15)
-    artifact_fraction = float(np.mean(pen_mask | dark_fold_mask))
+    dark_fold_mask = (gray < 0.08) & (chroma < 0.15) & (edge_mag < 0.03)
 
     if _rgb2hed is not None:
         try:
             hed = _rgb2hed(np.clip(rgb, 0.0, 1.0))
-            hematoxylin = float(np.mean(np.clip(hed[..., 0], 0.0, None)))
+            hematoxylin_map = np.clip(hed[..., 0], 0.0, None)
         except Exception:
-            hematoxylin = 0.0
+            hematoxylin_map = nuclear_signal
     else:
-        hematoxylin = 0.0
+        hematoxylin_map = nuclear_signal
+
+    hematoxylin = float(np.mean(hematoxylin_map))
+
+    nuclear_floor = max(0.05, float(np.percentile(hematoxylin_map, 70)))
+    nuclear_mask = hematoxylin_map >= nuclear_floor
+    nuclear_fraction = float(np.mean(nuclear_mask))
+    nuclear_detail = float(np.mean(edge_mag[nuclear_mask])) if np.any(nuclear_mask) else 0.0
+
+    purple_cellular_mask = (
+        (gray < 0.72)
+        & (chroma > 0.08)
+        & (hematoxylin_map >= max(0.05, nuclear_floor * 0.85))
+        & (edge_mag > 0.04)
+    )
+    purple_cellular_fraction = float(np.mean(purple_cellular_mask))
+    dark_cellular_mask = (
+        (gray < 0.60)
+        & (chroma > 0.08)
+        & (hematoxylin_map >= max(0.05, nuclear_floor * 0.90))
+        & (edge_mag > 0.04)
+    )
+    dark_cellular_fraction = float(np.mean(dark_cellular_mask))
+
+    empty_fraction = float(np.mean((gray > 0.82) & (hematoxylin_map < 0.03)))
+    red_dominant_fraction = float(
+        np.mean(
+            (gray < 0.72)
+            & ((rgb[:, :, 0] - np.maximum(rgb[:, :, 1], rgb[:, :, 2])) > 0.06)
+            & (edge_mag < 0.08)
+        )
+    )
+    dark_blur_mask = (gray < 0.22) & (edge_mag < 0.025)
+    dark_blur_fraction = float(np.mean(dark_blur_mask))
+    crushed_dense_mask = (
+        (gray < 0.55)
+        & (hematoxylin_map >= max(0.08, nuclear_floor))
+        & (edge_mag < 0.02)
+    )
+    crushed_dense_fraction = float(np.mean(crushed_dense_mask))
+    artifact_fraction = float(
+        np.mean(pen_mask | dark_fold_mask | dark_blur_mask | crushed_dense_mask)
+    )
 
     return {
         "focus": focus,
@@ -91,6 +138,14 @@ def _tile_metrics(image: Image.Image) -> dict[str, float]:
         "nuclear_stain": nuclear_stain,
         "hematoxylin": hematoxylin,
         "edge_density": edge_density,
+        "nuclear_fraction": nuclear_fraction,
+        "nuclear_detail": nuclear_detail,
+        "purple_cellular_fraction": purple_cellular_fraction,
+        "dark_cellular_fraction": dark_cellular_fraction,
+        "empty_fraction": empty_fraction,
+        "red_dominant_fraction": red_dominant_fraction,
+        "dark_blur_fraction": dark_blur_fraction,
+        "crushed_dense_fraction": crushed_dense_fraction,
         "artifact_fraction": artifact_fraction,
     }
 
@@ -137,18 +192,30 @@ def select_informative_tile_indices(
     nuclear_stain = np.asarray([m["nuclear_stain"] for m in metrics], dtype=np.float32)
     hematoxylin = np.asarray([m["hematoxylin"] for m in metrics], dtype=np.float32)
     edge_density = np.asarray([m["edge_density"] for m in metrics], dtype=np.float32)
+    nuclear_fraction = np.asarray([m["nuclear_fraction"] for m in metrics], dtype=np.float32)
+    nuclear_detail = np.asarray([m["nuclear_detail"] for m in metrics], dtype=np.float32)
+    purple_cellular_fraction = np.asarray([m["purple_cellular_fraction"] for m in metrics], dtype=np.float32)
+    dark_cellular_fraction = np.asarray([m["dark_cellular_fraction"] for m in metrics], dtype=np.float32)
+    empty_fraction = np.asarray([m["empty_fraction"] for m in metrics], dtype=np.float32)
+    red_dominant_fraction = np.asarray([m["red_dominant_fraction"] for m in metrics], dtype=np.float32)
+    dark_blur_fraction = np.asarray([m["dark_blur_fraction"] for m in metrics], dtype=np.float32)
+    crushed_dense_fraction = np.asarray([m["crushed_dense_fraction"] for m in metrics], dtype=np.float32)
     artifact_fraction = np.asarray([m["artifact_fraction"] for m in metrics], dtype=np.float32)
 
     focus_floor = max(float(np.percentile(focus, 15)) * 0.35, 1e-6)
     focus_energy_floor = max(float(np.percentile(focus_energy, 15)) * 0.35, 1e-6)
     hematoxylin_active = bool(np.any(hematoxylin > 1e-6))
+    nuclear_fraction_floor = float(np.percentile(nuclear_fraction, 10)) if total_tiles > 1 else 0.0
     hard_keep = (
         (brightness <= 0.94)
         & (saturation >= 0.025)
         & (stain_strength >= 0.035)
-        & (artifact_fraction <= 0.20)
+        & (artifact_fraction <= 0.22)
+        & (empty_fraction <= 0.72)
+        & (dark_blur_fraction <= 0.35)
         & (focus >= focus_floor)
         & (focus_energy >= focus_energy_floor)
+        & (nuclear_fraction >= nuclear_fraction_floor)
     )
     if hematoxylin_active:
         hematoxylin_floor = float(np.percentile(hematoxylin, 10))
@@ -174,17 +241,36 @@ def select_informative_tile_indices(
     nuclear_score = _robust_unit_scale(nuclear_stain[pool])
     hematoxylin_score = _robust_unit_scale(hematoxylin[pool]) if hematoxylin_active else nuclear_score
     edge_score = _robust_unit_scale(edge_density[pool])
+    nuclear_fraction_score = _robust_unit_scale(nuclear_fraction[pool])
+    nuclear_detail_score = _robust_unit_scale(nuclear_detail[pool])
+    purple_cellular_score = _robust_unit_scale(purple_cellular_fraction[pool])
+    dark_cellular_score = _robust_unit_scale(dark_cellular_fraction[pool])
+    empty_penalty = _robust_unit_scale(empty_fraction[pool])
+    red_penalty = _robust_unit_scale(red_dominant_fraction[pool])
+    dark_blur_penalty = _robust_unit_scale(dark_blur_fraction[pool])
+    crushed_penalty = _robust_unit_scale(crushed_dense_fraction[pool])
     artifact_penalty = _robust_unit_scale(artifact_fraction[pool])
 
+    # Blast-rich marrow fields are often darker and more basophilic. Keep that
+    # bias, but only reward darker fields when they also preserve nuclear detail
+    # and dense cellular structure rather than artifact-darkness alone.
     combined = (
-        0.20 * focus_score
-        + 0.10 * focus_energy_score
-        + 0.18 * entropy_score
-        + 0.18 * stain_score
-        + 0.17 * edge_score
+        0.15 * focus_score
+        + 0.05 * focus_energy_score
+        + 0.06 * entropy_score
+        + 0.10 * stain_score
+        + 0.09 * edge_score
         + 0.09 * nuclear_score
-        + 0.10 * hematoxylin_score
-        - 0.18 * artifact_penalty
+        + 0.08 * hematoxylin_score
+        + 0.12 * nuclear_fraction_score
+        + 0.12 * nuclear_detail_score
+        + 0.10 * purple_cellular_score
+        + 0.12 * dark_cellular_score
+        - 0.16 * artifact_penalty
+        - 0.09 * empty_penalty
+        - 0.06 * red_penalty
+        - 0.09 * dark_blur_penalty
+        - 0.07 * crushed_penalty
     )
 
     keep_top = max(int(min_keep_tiles), int(np.ceil(float(pool.size) * max(0.0, min(1.0, keep_ratio)))))
