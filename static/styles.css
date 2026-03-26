@@ -803,6 +803,12 @@ button.primary:disabled{
   gap:12px;
   align-items:end;
 }
+.field-row-two{
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+}
+.field-row-controls{
+  grid-template-columns: minmax(62px, 72px) minmax(66px, 78px) minmax(0, 1fr);
+}
 .field-row .field{
   min-width:0;
 }
@@ -812,23 +818,19 @@ button.primary:disabled{
 .batch-size-input{
   width:100%;
 }
+.tile-size-picker,
+.batch-size-input{
+  min-width:0;
+  padding-left: 6px;
+  padding-right: 6px;
+}
+.tile-filter-picker{
+  width:100%;
+  min-width:0;
+}
 .batch-size-input::-webkit-outer-spin-button,
 .batch-size-input::-webkit-inner-spin-button{
   margin:0;
-}
-.run-prefilter-picker{
-  display:flex;
-  align-items:center;
-  gap:10px;
-  flex:0 0 auto;
-}
-.run-prefilter-label{
-  font-size: 12px;
-  color: var(--muted);
-  white-space: nowrap;
-}
-.run-method-select{
-  min-width: 154px;
 }
 textarea{
   width:100%;

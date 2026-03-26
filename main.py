@@ -76,7 +76,7 @@ class RunStatus(BaseModel):
     extractor_name: str = "uni2"
     tile_size_px: int = 224
     tile_size_um: float = 256.0
-    batch_size: int = 32
+    batch_size: int = 128
     tile_prefilter_method: str = "quality"
     slide_filename: str       # filled after finalize
     slide_path: Optional[str] = None
@@ -754,7 +754,7 @@ async def create_run(
     extractor_name: str = Form("uni2"),
     tile_size_px: int = Form(224),
     tile_size_um: float = Form(256.0),
-    batch_size: int = Form(32),
+    batch_size: int = Form(128),
     tile_prefilter_method: str = Form("quality"),
 ):
     agent_type_lower = agent_type.lower()
@@ -1097,7 +1097,7 @@ def embed_wsi(
     tile_size_um: Optional[float] = None,
     patch_size_px: int = 512,
     tile_size_px: Optional[int] = None,
-    batch_size: int = 32,
+    batch_size: int = 128,
     device: Optional[str] = None,
     use_tile_cache: bool = True,
     cache_tiles_ext: str = "jpg",

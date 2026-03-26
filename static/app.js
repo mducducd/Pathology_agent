@@ -161,10 +161,10 @@ If you cannot find a suspicious lesion after exploring representative areas at a
 
   function selectedBatchSize() {
     const parsed = Number.parseInt(
-      (batchSizeSelect && batchSizeSelect.value) ? batchSizeSelect.value : "32",
+      (batchSizeSelect && batchSizeSelect.value) ? batchSizeSelect.value : "128",
       10
     );
-    return Number.isFinite(parsed) && parsed > 0 ? parsed : 32;
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 128;
   }
 
   function selectedTilePrefilterMethod() {

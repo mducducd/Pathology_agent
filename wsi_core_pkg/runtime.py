@@ -25,7 +25,7 @@ def run_wsi_agent_for_web(
     extractor_name: str = "uni2",
     tile_size_um: float = 256.0,
     tile_size_px: int = 224,
-    batch_size: int = 32,
+    batch_size: int = 128,
     tile_prefilter_method: str = "quality",
 ) -> Dict[str, Any]:
     agent_type_l = (agent_type or "wsi").lower()
