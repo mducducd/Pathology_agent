@@ -49,3 +49,44 @@ The Explorer supports:
 ```bash
 python main.py
 ```
+
+The web app starts on port `3008` by default. If that port is already in use, the server will fall back to the next available port.
+
+## Workbench
+
+The web workbench has three main panels:
+
+- **Input & Run**: select slide source, configure the agent, model, embedding extractor, tile size, batch size, and tile filtering method, then start the run.
+- **Slide Viewer**: shows the slide overview plus ROI snapshots collected during navigation.
+- **Run Status**: shows live step updates, current model state, errors, and the final report link.
+
+### Slide Sources
+
+You can start a run from:
+
+- uploaded slide files such as `.svs`, `.tif`, `.tiff`, `.ndpi`
+- MIRAX folders or zip bundles
+- the built-in server Explorer for server-local/HPC slide roots
+
+### Run Controls
+
+- **Agent**: choose between Tile Selector, AML Detector, and General WSI Agent.
+- **Model**: choose which VLM is exposed in the workbench.
+- **Feature Extractor**: choose the embedding backbone used for ROI candidate preparation.
+- **Tile size (px)**: controls the patch size used by the extractor path.
+- **Batch size**: controls embedding throughput during tile feature extraction.
+- **Tile filter**: controls how candidate tiles are reduced before expensive embedding.
+
+Tile filter options:
+
+- **Quality score**: ranks raw tiles by cheap focus, stain, texture, and artifact heuristics, then keeps the strongest subset plus a small safety reserve.
+- **Coarse to fine**: uses a thumbnail-level region prefilter first, then embeds tiles only inside the selected regions.
+- **Hybrid**: combines coarse region filtering with the raw-tile quality prefilter.
+- **None**: disables the extra tile prefilter stage and keeps the baseline foreground/texture gating only.
+
+### Typical Workbench Flow
+
+1. Choose a slide source or browse the server Explorer.
+2. Pick the agent, model, feature extractor, tile size, batch size, and tile filter.
+3. Click **Start run**.
+4. Follow live status updates in the right panel while reviewing the overview and ROI panes.
