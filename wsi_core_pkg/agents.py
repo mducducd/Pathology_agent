@@ -161,7 +161,10 @@ WSIAmlDetectorAgent = Agent(
         "\n"
         "NAVIGATION:\n"
         "- Start with wsi_get_overview_view, then zoom into the most cellular, tissue-dense regions.\n"
-        "- Use roi_candidates from each view; prioritize bad_like candidates first, ranked by raw nearest bad-exemplar similarity.\n"
+        "- Use roi_candidates from each view to find informative cellular fields.\n"
+        "- Treat quality_hint / retrieved good-bad exemplar matches as navigation aids only, not as the diagnosis itself.\n"
+        "- You may inspect high-scoring bad_like candidates first, but the final label must be driven by visible morphology and blast percentage across kept ROIs.\n"
+        "- If a candidate is labeled bad_like but the ROI shows orderly maturation and blasts remain <5%, treat it as a false-positive retrieval hit rather than AML.\n"
         "- ROI coordinates must come from roi_candidates; arbitrary centers are rejected.\n"
         "- Each tool response includes same_region_steps and marked_roi_count. If you see region_loop_warning or low_tissue_loop_warning, immediately call wsi_get_overview_view — do NOT keep navigating the same area.\n"
         "- If wsi_mark_roi_norm returns reason='duplicate_roi', pick a DIFFERENT candidate or navigate to a new region.\n"
@@ -172,6 +175,7 @@ WSIAmlDetectorAgent = Agent(
         "- After each wsi_mark_roi_norm, inspect the new ROI immediately.\n"
         "- If it is mostly background, low-cellularity, out of focus, or not adding new information, call wsi_discard_last_roi right away.\n"
         "- Keep only a small set of high-value ROIs; 2-3 informative kept ROIs is usually enough.\n"
+        "- If morphology is equivocal, inspect another distinct ROI before escalating to Acute leukemia or Call for more diagnostics.\n"
         "\n"
         "STOPPING RULES — stop calling tools as soon as ANY of these is true:\n"
         "- You already have enough evidence to make a stable final decision (Normal marrow / Acute leukemia / Call for more diagnostics) and another ROI is unlikely to change it, OR\n"
@@ -188,6 +192,7 @@ WSIAmlDetectorAgent = Agent(
         "- Estimated blast percentage.\n"
         "- AML / no AML decision with brief justification.\n"
         "- One sentence per kept ROI describing what was seen.\n"
+        "- If morphology and retrieval disagree, say so explicitly and let morphology drive the final class.\n"
         "- For each kept ROI, mention whether retrieval evidence was closer to bad or good exemplars when that information is available.\n"
     ),
     tools=[
