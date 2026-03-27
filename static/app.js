@@ -119,27 +119,16 @@ These heuristics are for selecting visually informative marrow tiles or blast-su
 - Acute leukemia
 - Call for more diagnostics (if blast % is between 5% and 20%).
 
-CRITICAL PRIORITY: Always navigate to the DENSEST deep blue-purple basophilic cellular regions first. These are the most diagnostically informative areas. Never waste time on sparse, pale, or low-density tissue when dense cellular regions exist.
-
-Search hierarchy:
-1. Tissue vs background — skip white/pale/empty areas entirely.
-2. Dense deep blue-purple regions vs pink-red RBC-rich or sparse areas — always prefer the densest basophilic zones. Dark red-pink is only a rare fallback when clearly cellular.
-3. Within dense regions, prefer candidate blast-rich fields with dense relatively monomorphic immature cells, larger nuclei/high N:C when visible, good focus, and low artifact.
-A very good ROI contains MANY separate crisp round purple cells across much of the field. Reject ROIs dominated by broad gray/brown clumps or smears even if a few purple cells are present.
-
-Color is only a proxy. White/pale = background/fat/empty; smooth pink-red = RBC-rich/clotted/hemorrhagic; deep blue-purple = nuclei-rich marrow (PRIMARY TARGET); gray-black/charcoal low-chroma darkness usually means debris, fold, crush, or precipitate and is NOT a target unless clear nuclei are visible.
+Use the example GOOD tiles as guidance for where to search (dark, tissue-dense regions).
 Be efficient: inspect only a small number of diagnostically meaningful high-power ROIs, not an exhaustive survey.
-You MUST search for high-density cellular regions. A region is blast-rich only if the darkness comes from packed viable leukemic cells with visible nuclei/nucleoli, good focus, and low artifact. Zoom in repeatedly until you reach true high-power views with clear cellular detail.
-Do not treat stain precipitate, tissue folds, hemorrhagic/clotted areas, necrotic debris, gray-black low-chroma junk, out-of-focus dense regions, or smudged/crushed cells as blast-rich.
-When roi_candidates are provided, use good_like candidates first and uncertain candidates only when they are still cellular and informative. Treat good_like as a soft ROI-quality hint from curated good references, not the diagnosis itself.
-When blast_top1_similarity or retrieved_blast_refs are provided, use them as supportive blast-morphology evidence from curated blast cells in blast_cells/ to help distinguish blasts from normal hematopoietic precursors.
-A good AML ROI is hypercellular + deep blue-purple/basophilic + blast-enriched + in focus + low artifact. A bad AML ROI is gray-black or black low-chroma junk, dark but uninterpretable, cell-poor, RBC/clot-dominant, artifact-dominated, or non-representative.
-These heuristics select visually informative, blast-suspected ROIs; they do not by themselves prove AML. Final AML diagnosis still depends on broader marrow/blood blast assessment and ancillary testing, not image tiles alone.
-One ROI is useful for screening only, not for final AML determination. Two to five ROIs are supportive evidence, but multiple representative top-ranked ROIs across distinct slide regions are better for estimating whether the slide is consistently blast-suspicious.
-Inspect multiple high-value ROIs at high power across the slide. Estimate blast percentage across them.
+Examine only diagnostically relevant regions with good focus and staining. Avoid pale/empty or artifact regions.
+You MUST search for high-density cellular regions. Zoom in repeatedly until you reach true high-power views with clear cellular detail.
+Navigation outputs may include roi_candidates with quality_hint and retrieved nearest good/bad exemplars from exact reference-tile search; use these as navigation hints only. You may inspect bad_like candidates first, but do NOT diagnose AML from bad_like / closer-to-bad retrieval alone.
+Inspect a few high-value ROIs at high power and estimate blast percentage across them.
+Retrieval evidence can be noisy on normal marrow; if the kept ROIs show orderly maturation and blasts stay <5%, report Normal marrow even if some retrieval hits look suspicious.
 After each wsi_mark_roi_norm, if the ROI is background, low-cellularity, out of focus, or redundant, immediately call wsi_discard_last_roi.
 If the evidence you already have is enough for a stable final AML category, stop immediately instead of searching for extra confirmation.
-Do not make a confident final AML category from a single ROI alone. Prefer at least 4 representative informative ROIs when feasible; if fewer were available, explicitly treat the assessment as limited-sampling support only.
+Once you have 2-3 informative ROIs and a stable blast estimate, stop calling tools and report.
 
 Normal marrow features:
 - ~60% granulocytic precursors, ~20% erythroid precursors, ~15% lymphocytes/plasma cells/monocytes/megakaryocytes.
@@ -156,14 +145,15 @@ Diagnostic thresholds:
 - Acute leukemia: blasts ≥20% of all nucleated cells (average across ROIs).
 - Normal marrow: blasts <5%.
 - Call for more diagnostics: blasts 5–20%.
-Exact blast percentage is the hardest image estimate; report only a rough morphology-based estimate from representative informative ROIs.
+- Use Call for more diagnostics only when morphology truly supports an intermediate or equivocal blast proportion, not because retrieval alone looks suspicious.
 
-Save up to 6 key tiles from the most informative high-density regions using wsi_save_tile_norm(..., quality="good", label="aml_key"). Do not keep searching only to fill a tile quota.
+Save up to 4 key tiles from the most informative high-density regions using wsi_save_tile_norm(..., quality="good", label="aml_key"). Do not keep searching only to fill a tile quota.
 Output:
 - Brief morphology summary.
 - Estimated blast percentage range.
 - Final decision (Normal marrow / Acute leukemia / Call for more diagnostics).
-- For each kept ROI, include whether retrieval evidence was closer to good-quality or bad-quality ROI exemplars if shown in the tool outputs.`,
+- If morphology and retrieval disagree, state that explicitly and let morphology drive the final class.
+- For each kept ROI, include whether retrieval evidence was closer to bad or good exemplars if shown in the tool outputs.`,
     wsi: `Inspect the whole-slide image and describe the likely tissue of origin and any key findings (including tumors, inflammatory infiltrates, necrosis, etc.).
 Use the WSI tools to get an overview and then pan/zoom as needed, similar to a human pathologist using a digital slide viewer.
 Use the approximate field width in micrometers and tissue_fraction to ensure you reach true high-power views on tissue when you need cellular detail.
