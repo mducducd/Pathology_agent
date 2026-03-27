@@ -90,3 +90,24 @@ Tile filter options:
 2. Pick the agent, model, feature extractor, tile size, batch size, and tile filter.
 3. Click **Start run**.
 4. Follow live status updates in the right panel while reviewing the overview and ROI panes.
+
+## Reference Embeddings (AML Mode)
+
+For AML detection, the agent uses retrieval-based ranking against curated reference tiles. Pre-building embeddings significantly speeds up startup time.
+
+**Quick start:**
+
+```bash
+# Pre-build embeddings with reddino (recommended - fast)
+python -m wsi_core_pkg.embeddings.prebuild_reference_embeddings \
+    --tiles-root ./Selected_Tiles \
+    --output-dir ./outputs/cache/reference_hnsw \
+    --extractor reddino
+```
+
+**Documentation:** See [REFERENCE_EMBEDDINGS.md](REFERENCE_EMBEDDINGS.md) for detailed instructions on:
+- Organizing curated tiles
+- Extractor options (reddino, dinobloom, uni2)
+- Cache management and invalidation
+- Environment variable configuration
+- Dynamic prototype bank updates

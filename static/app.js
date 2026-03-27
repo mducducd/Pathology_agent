@@ -81,40 +81,65 @@
 
 Use the example good and bad tiles that I provided to you. First evaluate the difference between provided good and bad tiles. Understand the difference.
 
-Prefer dark-ish or basophilic cellular marrow regions only when the darkness comes from packed viable cells with visible nuclear detail. Darkness alone is only a rough cue. Avoid pale/empty areas and debris-dominated fields.
+Use a practical image hierarchy: first separate tissue from white/pale background, then prefer nucleated-cell-rich deep blue-purple regions over pink-red RBC-rich or empty areas, and treat dark red-pink regions only as a rare fallback when they are clearly cellular and not smooth clot/RBC material. Then within nucleated regions prefer morphologically informative fields that may be blast-enriched.
+
+Color is only a proxy. White/pale often means background, fat, or low tissue; smooth pink-red often means RBC-rich/hemorrhagic/clotted material; deep blue-purple usually means nuclei-rich marrow and is the PRIMARY target; gray-black/charcoal low-chroma darkness is usually debris, fold, crush, or precipitate and should be avoided unless clear nuclear detail is visible.
+
+PRIORITY: Always seek the DENSEST deep blue-purple cellular regions first. High cellularity with packed nucleated cells is the primary selection criterion. Never settle for sparse or low-density tissue when denser regions exist on the slide.
+
+A very good field contains MANY separate crisp round purple cells across much of the image. Reject fields dominated by broad gray/brown clumps or smears even if a few purple cells are present.
+
+Prefer deep dark blue-purple cellular marrow regions only when the darkness comes from packed viable cells with visible nuclear detail. Darkness alone is only a rough cue. Avoid pale/empty areas, gray-black low-chroma junk, and debris-dominated fields.
 
 Do not save tiles with large pale/white areas or sparse cells as good tiles. If a view looks pale/low density, do NOT save tiles there; instead keep zooming or move to a more cellular region with preserved nuclei.
 
-Do not treat a field as informative just because it is dark. Reject dark regions caused by stain precipitate, tissue folds, hemorrhagic/clotted material, necrotic debris, out-of-focus dense areas, or smudged/crushed cells.
+Do not treat a field as informative just because it is dark. Reject gray-black or black low-chroma regions caused by stain precipitate, tissue folds, hemorrhagic/clotted material, necrotic debris, out-of-focus dense areas, or smudged/crushed cells.
 
 Use the WSI navigation tools to explore the slide. When you see a diagnostically useful region, call:
 wsi_save_tile_norm(..., quality="good", label="...")
 
 Stop when you have saved 60 good tiles or when you can no longer find good tiles.
 
+For AML-style marrow selection, think of good vs bad like this:
+- Good tile/ROI: hypercellular, basophilic, nucleated, in focus, low artifact, and morphologically informative.
+- Bad tile/ROI: dark but uninterpretable, gray-black/low-chroma junk, empty/background-heavy, RBC/clot-dominant, artifact-dominated, blurred, or non-representative edge/debris.
+
 A good tile must:
 - Be sharply focused and clearly stained.
 - Show preserved nuclear detail and distinguishable cell morphology.
-- Have adequate cellularity.
+- Have high enough cellularity to be informative, with limited empty background.
 - Avoid artifacts (folding/crush, empty/white areas, necrosis, peripheral/non-representative zones, dark crumbly debris, hemorrhagic clot, precipitate).
+- Avoid regions dominated by red blood cells, clot, blur, scanner defects, or isolated edge fragments.
 
 Typical cells expected: erythroid precursors, myeloid cells, megakaryocytes (if present).
-Reject areas dominated by fat, background, damaged tissue, or poor stain/focus.`,
+Reject areas dominated by fat, background, damaged tissue, or poor stain/focus.
+These heuristics are for selecting visually informative marrow tiles or blast-suspected ROIs, not for proving AML or an exact blast percentage.`,
     aml: `You are an AML detector. Your task is to review a May–Grünwald–Giemsa stained bone marrow WSI and decide:
 - Normal marrow
 - Acute leukemia
 - Call for more diagnostics (if blast % is between 5% and 20%).
 
-Use the example GOOD tiles as guidance for where to search. Blast-rich regions are often dark-ish or basophilic because they are densely cellular, but darkness alone is not the definition.
+CRITICAL PRIORITY: Always navigate to the DENSEST deep blue-purple basophilic cellular regions first. These are the most diagnostically informative areas. Never waste time on sparse, pale, or low-density tissue when dense cellular regions exist.
+
+Search hierarchy:
+1. Tissue vs background — skip white/pale/empty areas entirely.
+2. Dense deep blue-purple regions vs pink-red RBC-rich or sparse areas — always prefer the densest basophilic zones. Dark red-pink is only a rare fallback when clearly cellular.
+3. Within dense regions, prefer candidate blast-rich fields with dense relatively monomorphic immature cells, larger nuclei/high N:C when visible, good focus, and low artifact.
+A very good ROI contains MANY separate crisp round purple cells across much of the field. Reject ROIs dominated by broad gray/brown clumps or smears even if a few purple cells are present.
+
+Color is only a proxy. White/pale = background/fat/empty; smooth pink-red = RBC-rich/clotted/hemorrhagic; deep blue-purple = nuclei-rich marrow (PRIMARY TARGET); gray-black/charcoal low-chroma darkness usually means debris, fold, crush, or precipitate and is NOT a target unless clear nuclei are visible.
 Be efficient: inspect only a small number of diagnostically meaningful high-power ROIs, not an exhaustive survey.
-Examine only diagnostically relevant regions with good focus and staining. Avoid pale/empty or artifact regions.
 You MUST search for high-density cellular regions. A region is blast-rich only if the darkness comes from packed viable leukemic cells with visible nuclei/nucleoli, good focus, and low artifact. Zoom in repeatedly until you reach true high-power views with clear cellular detail.
-Do not treat stain precipitate, tissue folds, hemorrhagic/clotted areas, necrotic debris, out-of-focus dense regions, or smudged/crushed cells as blast-rich.
-When roi_candidates are provided, prioritize bad_like candidates ranked by raw nearest bad-exemplar similarity, and use good exemplars only as contrast checks.
-Inspect a few high-value ROIs at high power. Estimate blast percentage across them.
+Do not treat stain precipitate, tissue folds, hemorrhagic/clotted areas, necrotic debris, gray-black low-chroma junk, out-of-focus dense regions, or smudged/crushed cells as blast-rich.
+When roi_candidates are provided, use good_like candidates first and uncertain candidates only when they are still cellular and informative. Treat good_like as a soft ROI-quality hint from curated good references, not the diagnosis itself.
+When blast_top1_similarity or retrieved_blast_refs are provided, use them as supportive blast-morphology evidence from curated blast cells in blast_cells/ to help distinguish blasts from normal hematopoietic precursors.
+A good AML ROI is hypercellular + deep blue-purple/basophilic + blast-enriched + in focus + low artifact. A bad AML ROI is gray-black or black low-chroma junk, dark but uninterpretable, cell-poor, RBC/clot-dominant, artifact-dominated, or non-representative.
+These heuristics select visually informative, blast-suspected ROIs; they do not by themselves prove AML. Final AML diagnosis still depends on broader marrow/blood blast assessment and ancillary testing, not image tiles alone.
+One ROI is useful for screening only, not for final AML determination. Two to five ROIs are supportive evidence, but multiple representative top-ranked ROIs across distinct slide regions are better for estimating whether the slide is consistently blast-suspicious.
+Inspect multiple high-value ROIs at high power across the slide. Estimate blast percentage across them.
 After each wsi_mark_roi_norm, if the ROI is background, low-cellularity, out of focus, or redundant, immediately call wsi_discard_last_roi.
 If the evidence you already have is enough for a stable final AML category, stop immediately instead of searching for extra confirmation.
-Once you have 2-3 informative ROIs and a stable blast estimate, stop calling tools and report.
+Do not make a confident final AML category from a single ROI alone. Prefer at least 4 representative informative ROIs when feasible; if fewer were available, explicitly treat the assessment as limited-sampling support only.
 
 Normal marrow features:
 - ~60% granulocytic precursors, ~20% erythroid precursors, ~15% lymphocytes/plasma cells/monocytes/megakaryocytes.
@@ -131,13 +156,14 @@ Diagnostic thresholds:
 - Acute leukemia: blasts ≥20% of all nucleated cells (average across ROIs).
 - Normal marrow: blasts <5%.
 - Call for more diagnostics: blasts 5–20%.
+Exact blast percentage is the hardest image estimate; report only a rough morphology-based estimate from representative informative ROIs.
 
-Save up to 4 key tiles from the most informative high-density regions using wsi_save_tile_norm(..., quality="good", label="aml_key"). Do not keep searching only to fill a tile quota.
+Save up to 6 key tiles from the most informative high-density regions using wsi_save_tile_norm(..., quality="good", label="aml_key"). Do not keep searching only to fill a tile quota.
 Output:
 - Brief morphology summary.
 - Estimated blast percentage range.
 - Final decision (Normal marrow / Acute leukemia / Call for more diagnostics).
-- For each kept ROI, include whether retrieval evidence was closer to bad or good exemplars if shown in the tool outputs.`,
+- For each kept ROI, include whether retrieval evidence was closer to good-quality or bad-quality ROI exemplars if shown in the tool outputs.`,
     wsi: `Inspect the whole-slide image and describe the likely tissue of origin and any key findings (including tumors, inflammatory infiltrates, necrosis, etc.).
 Use the WSI tools to get an overview and then pan/zoom as needed, similar to a human pathologist using a digital slide viewer.
 Use the approximate field width in micrometers and tissue_fraction to ensure you reach true high-power views on tissue when you need cellular detail.
@@ -2071,6 +2097,25 @@ If you cannot find a suspicious lesion after exploring representative areas at a
       ctx.fillStyle = "rgba(124,240,193,0.98)";
       ctx.font = "bold 11px sans-serif";
       ctx.fillText("Dark-region heuristic", 10, 18);
+      // Dim non-dark regions by overlaying a translucent dark layer,
+      // then carve out the dark-region boxes so they remain fully visible.
+      try {
+        ctx.save();
+        ctx.fillStyle = "rgba(0,0,0,0.45)"; // adjust dimming here
+        ctx.fillRect(0, 0, overviewCanvas.width, overviewCanvas.height);
+        ctx.globalCompositeOperation = "destination-out";
+        for (const b of darkBoxes) {
+          if (!b || !Number.isFinite(Number(b.x)) || !Number.isFinite(Number(b.y)) ||
+              !Number.isFinite(Number(b.w)) || !Number.isFinite(Number(b.h))) {
+            continue;
+          }
+          ctx.fillRect(Number(b.x), Number(b.y), Number(b.w), Number(b.h));
+        }
+      } catch (e) {
+        // ignore drawing errors
+      } finally {
+        ctx.restore();
+      }
       ctx.restore();
     }
 

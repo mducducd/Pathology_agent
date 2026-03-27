@@ -21,6 +21,7 @@ from .config import (
     TILE_PX,
     TILE_SIZE_UM,
 )
+from .dark_regions import detect_dark_regions
 from .embeddings.roi_ranker import (
     build_unsupervised_roi_index,
     select_topk_candidates_for_view,
@@ -37,12 +38,12 @@ from .slide_utils import (
     _safe_filename,
 )
 
-ROI_CANDIDATE_TOP_K = int(os.getenv("ROI_CANDIDATE_TOP_K", "24"))
-ROI_CANDIDATE_MIN_SEPARATION_PX = int(os.getenv("ROI_CANDIDATE_MIN_SEPARATION_PX", "192"))
+ROI_CANDIDATE_TOP_K = int(os.getenv("ROI_CANDIDATE_TOP_K", "36"))
+ROI_CANDIDATE_MIN_SEPARATION_PX = int(os.getenv("ROI_CANDIDATE_MIN_SEPARATION_PX", "120"))
 ROI_MARK_CANDIDATE_TOLERANCE_NORM = int(os.getenv("ROI_MARK_CANDIDATE_TOLERANCE_NORM", "170"))
-ROI_CANDIDATE_ALLOW_FALLBACK = os.getenv("ROI_CANDIDATE_ALLOW_FALLBACK", "0").strip().lower() in {"1", "true", "yes", "y"}
+ROI_CANDIDATE_ALLOW_FALLBACK = os.getenv("ROI_CANDIDATE_ALLOW_FALLBACK", "1").strip().lower() in {"1", "true", "yes", "y"}
 # Hard cap on how many candidates the VLM sees in AML mode after raw retrieval ranking.
-ROI_CANDIDATE_TOP_K_AML = int(os.getenv("ROI_CANDIDATE_TOP_K_AML", "15"))
+ROI_CANDIDATE_TOP_K_AML = int(os.getenv("ROI_CANDIDATE_TOP_K_AML", "30"))
 ROI_RANKER_BATCH_SIZE = int(os.getenv("ROI_RANKER_BATCH_SIZE", "32"))
 ROI_RANKER_MAX_WORKERS = int(os.getenv("ROI_RANKER_MAX_WORKERS", "4"))
 ROI_COARSE_PREFILTER_TRIGGER_SUPERTILES = int(os.getenv("ROI_COARSE_PREFILTER_TRIGGER_SUPERTILES", "128"))
@@ -54,6 +55,10 @@ ROI_QUALITY_PREFILTER_MIN_KEEP_TILES = int(os.getenv("ROI_QUALITY_PREFILTER_MIN_
 ROI_QUALITY_PREFILTER_TRIGGER_TILES = int(os.getenv("ROI_QUALITY_PREFILTER_TRIGGER_TILES", "12"))
 ROI_QUALITY_PREFILTER_RANDOM_RESERVE_RATIO = float(os.getenv("ROI_QUALITY_PREFILTER_RANDOM_RESERVE_RATIO", "0.08"))
 ROI_TILE_CACHE_DIR = os.getenv("ROI_TILE_CACHE_DIR", "").strip()
+DARK_REGION_THRESHOLD_PCT = int(os.getenv("DARK_REGION_THRESHOLD_PCT", "85"))
+DARK_REGION_MIN_AREA = int(os.getenv("DARK_REGION_MIN_AREA", "800"))
+DARK_REGION_MAX_REGIONS = int(os.getenv("DARK_REGION_MAX_REGIONS", "30"))
+DARK_REGION_MAX_DIM = int(os.getenv("DARK_REGION_MAX_DIM", "1024"))
 
 
 def _selected_batch_size() -> int:
@@ -80,6 +85,10 @@ def _use_quality_prefilter(method: str | None = None) -> bool:
     return (method or _selected_tile_prefilter_method()) in {"quality", "hybrid"}
 
 
+def _use_dark_region_gating(method: str | None = None, *, aml_mode: bool = False) -> bool:
+    return bool(aml_mode and (method or _selected_tile_prefilter_method()) != "none")
+
+
 def _tile_prefilter_label(method: str | None = None) -> str:
     value = method or _selected_tile_prefilter_method()
     return {
@@ -93,6 +102,142 @@ def _tile_prefilter_label(method: str | None = None) -> str:
 def _selected_candidate_source(aml_mode: bool) -> str:
     extractor_name = str(getattr(state, "EXTRACTOR_NAME", "uni2") or "uni2").strip().lower()
     return f"{extractor_name}_exact_retrieval" if aml_mode else f"{extractor_name}_knn"
+
+
+def _quality_hint_bonus(candidate: Dict[str, Any]) -> float:
+    hint = str(candidate.get("quality_hint") or "uncertain")
+    if hint == "good_like":
+        return 1.0
+    if hint == "uncertain":
+        return 0.5
+    if hint == "bad_like":
+        return 0.0
+    return 0.25
+
+
+def _postprocess_roi_candidates_for_view(
+    candidates: List[Dict[str, Any]],
+    *,
+    top_k: int,
+    aml_mode: bool,
+    source: Optional[str],
+) -> tuple[List[Dict[str, Any]], Optional[str], Dict[str, Any]]:
+    processed = list(candidates)
+    meta: Dict[str, Any] = {
+        "bad_like_only_view": False,
+        "bad_like_hidden_count": 0,
+    }
+
+    if processed and state._roi_marks:
+        marked_centers = []
+        for roi in state._roi_marks:
+            bbox = roi.get("view_bbox_level0")
+            if bbox:
+                marked_centers.append((bbox[0] + bbox[2] // 2, bbox[1] + bbox[3] // 2))
+        if marked_centers:
+            min_sep_sq = (ROI_TARGET_SIDE_PX * 0.3) ** 2
+
+            def _not_marked(candidate: Dict[str, Any]) -> bool:
+                center = candidate.get("center_level0")
+                if not center:
+                    return True
+                cx, cy = center[0], center[1]
+                return all((cx - mx) ** 2 + (cy - my) ** 2 >= min_sep_sq for mx, my in marked_centers)
+
+            processed = [candidate for candidate in processed if _not_marked(candidate)]
+            if not processed and ROI_CANDIDATE_ALLOW_FALLBACK:
+                fallback = _fallback_candidates_from_current_view(top_k)
+                if fallback:
+                    processed = fallback
+                    source = "fallback_heuristic"
+
+    if aml_mode and processed:
+        # HARD REJECT: Filter out bad_like candidates BEFORE ranking
+        # Quality hint now combines embedding retrieval + SSIM agreement
+        non_bad_candidates = [
+            candidate for candidate in processed
+            if str(candidate.get("quality_hint") or "uncertain") != "bad_like"
+        ]
+
+        # Additional hard reject: tiles with very low dark_roi_score (acellular / light stain)
+        # Even if marked good_like by kNN, a tile with very low cellularity is NOT useful for AML
+        acellular_threshold = 0.22
+        cellular_candidates = []
+        for c in non_bad_candidates:
+            dark_score = float(c.get("dark_roi_score") or 0.0)
+            if dark_score >= acellular_threshold:
+                cellular_candidates.append(c)
+            # NO bypass for good_like — kNN can be fooled by stain artifacts
+
+        if not cellular_candidates and ROI_CANDIDATE_ALLOW_FALLBACK:
+            # If all candidates are rejected, fall back to original list but warn
+            cellular_candidates = non_bad_candidates if non_bad_candidates else processed
+
+        candidates_ranked = sorted(
+            cellular_candidates,
+            key=lambda candidate: (
+                float(candidate.get("combined_rank_score", candidate.get("score", float("-inf")))),
+                float(candidate.get("dark_roi_score", float("-inf"))),
+                float(candidate.get("blast_top1_similarity", float("-inf"))),
+                float(candidate.get("blast_similarity_score", float("-inf"))),
+                _quality_hint_bonus(candidate),
+                float(candidate.get("inside_dark_region", False)),
+                float(candidate.get("good_top1_similarity", float("-inf"))),
+                float(candidate.get("bad_margin", float("-inf"))),
+                float(candidate.get("retrieval_score", candidate.get("score", float("-inf")))),
+            ),
+            reverse=True,
+        )
+
+        good_like_candidates = [
+            candidate for candidate in candidates_ranked
+            if str(candidate.get("quality_hint") or "uncertain") == "good_like"
+        ]
+        uncertain_candidates = [
+            candidate for candidate in candidates_ranked
+            if str(candidate.get("quality_hint") or "uncertain") == "uncertain"
+        ]
+        meta["bad_like_hidden_count"] = max(0, len(processed) - len(non_bad_candidates))
+
+        if good_like_candidates:
+            processed = (good_like_candidates + uncertain_candidates)[:ROI_CANDIDATE_TOP_K_AML]
+        elif uncertain_candidates:
+            processed = uncertain_candidates[:ROI_CANDIDATE_TOP_K_AML]
+        else:
+            meta["bad_like_only_view"] = True
+            processed = []
+
+    return processed, source, meta
+
+
+def _ensure_dark_region_boxes_level0() -> List[Dict[str, Any]]:
+    cached_boxes = getattr(state, "_dark_region_boxes_level0", None)
+    cached_slide = getattr(state, "_dark_region_slide_path", None)
+    if isinstance(cached_boxes, list) and cached_slide == state.SLIDE_PATH:
+        return cached_boxes
+    if not state.SLIDE_PATH or not os.path.exists(state.SLIDE_PATH) or not state.RUN_ID:
+        state._dark_region_boxes_level0 = []
+        state._dark_region_slide_path = state.SLIDE_PATH
+        return []
+
+    try:
+        result = detect_dark_regions(
+            slide_path=state.SLIDE_PATH,
+            run_id=state.RUN_ID,
+            max_dim=DARK_REGION_MAX_DIM,
+            threshold_pct=DARK_REGION_THRESHOLD_PCT,
+            min_area=DARK_REGION_MIN_AREA,
+            max_regions=DARK_REGION_MAX_REGIONS,
+        )
+        boxes = result.get("boxes_level0")
+        if not isinstance(boxes, list):
+            boxes = []
+    except Exception:
+        boxes = []
+
+    state._dark_region_boxes_level0 = boxes
+    state._dark_region_slide_path = state.SLIDE_PATH
+    return boxes
 
 
 def _set_roi_candidate_prep(
@@ -139,26 +284,45 @@ def _ensure_unsupervised_roi_index():
     candidate_source = _selected_candidate_source(aml_mode)
     extractor_label = _selected_extractor_label()
     tile_prefilter_method = _selected_tile_prefilter_method()
-    use_coarse_prefilter = _use_coarse_prefilter(tile_prefilter_method)
-    use_quality_prefilter = _use_quality_prefilter(tile_prefilter_method)
+    use_dark_region_gating = _use_dark_region_gating(tile_prefilter_method, aml_mode=aml_mode)
+    # When dark region gating is active, disable coarse/quality prefilters.
+    # Dark region detection already selects the areas - we want ALL tiles from those regions.
+    use_coarse_prefilter = _use_coarse_prefilter(tile_prefilter_method) and not use_dark_region_gating
+    use_quality_prefilter = _use_quality_prefilter(tile_prefilter_method) and not use_dark_region_gating
+
+    # STRICT DARK REGION GATING: Detect dark regions FIRST and pass to embedding extraction
+    # Only tiles within dark regions will be embedded (for AML mode)
+    dark_region_boxes = _ensure_dark_region_boxes_level0() if use_dark_region_gating else []
+    if use_dark_region_gating and dark_region_boxes:
+        _log_step(
+            "wsi_dark_region_gating",
+            "Strict dark region gating: only tiles within detected deep blue-purple cellular regions will be embedded.",
+            {
+                "dark_region_count": len(dark_region_boxes),
+                "dark_region_boxes_level0": dark_region_boxes[:10],  # First 10 for brevity
+            },
+        )
+
     if aml_mode:
+        # STRICT DARK REGION GATING pipeline
         if tile_prefilter_method == "hybrid":
             pipeline_desc = (
-                f"Thumbnail coarse region filter -> raw-tile quality score filter -> {extractor_label} tile embeddings -> exact good/bad exemplar retrieval -> rank by raw nearest bad similarity -> top-K per view"
+                f"Detect deep blue-purple basophilic regions -> Thumbnail coarse region filter -> raw-tile quality score filter -> {extractor_label} tile embeddings (STRICT: only tiles within dark regions) -> ROI-quality exemplar retrieval + nuclei/dark-region heuristics -> top-K candidate blast-suspected ROIs per view"
             )
         elif tile_prefilter_method == "quality":
             pipeline_desc = (
-                f"Raw-tile quality score filter -> {extractor_label} tile embeddings -> exact good/bad exemplar retrieval -> rank by raw nearest bad similarity -> top-K per view"
+                f"Detect deep blue-purple basophilic regions -> Raw-tile quality score filter -> {extractor_label} tile embeddings (STRICT: only tiles within dark regions) -> ROI-quality exemplar retrieval + nuclei/dark-region heuristics -> top-K candidate blast-suspected ROIs per view"
             )
         elif tile_prefilter_method == "coarse":
             pipeline_desc = (
-                f"Thumbnail coarse region filter -> {extractor_label} tile embeddings -> exact good/bad exemplar retrieval -> rank by raw nearest bad similarity -> top-K per view"
+                f"Detect deep blue-purple basophilic regions -> Thumbnail coarse region filter -> {extractor_label} tile embeddings (STRICT: only tiles within dark regions) -> ROI-quality exemplar retrieval + nuclei/dark-region heuristics -> top-K candidate blast-suspected ROIs per view"
             )
         else:
             pipeline_desc = (
-                f"{extractor_label} tile embeddings -> exact good/bad exemplar retrieval -> rank by raw nearest bad similarity -> top-K per view"
+                f"No tile prefilter -> {extractor_label} tile embeddings -> ROI-quality exemplar retrieval + nuclei/dark-region heuristics -> top-K candidate blast-suspected ROIs per view"
             )
     else:
+        # Non-AML mode: no dark region gating
         if tile_prefilter_method == "hybrid":
             pipeline_desc = f"Thumbnail coarse region filter -> raw-tile quality score filter -> {extractor_label} tile embeddings -> kNN novelty ranking -> top-K per view"
         elif tile_prefilter_method == "quality":
@@ -276,9 +440,11 @@ def _ensure_unsupervised_roi_index():
             quality_min_keep_tile_count=ROI_QUALITY_PREFILTER_MIN_KEEP_TILES if use_quality_prefilter else 0,
             quality_trigger_tile_count=ROI_QUALITY_PREFILTER_TRIGGER_TILES if use_quality_prefilter else None,
             quality_random_reserve_ratio=ROI_QUALITY_PREFILTER_RANDOM_RESERVE_RATIO if use_quality_prefilter else None,
+            dark_region_boxes_level0=dark_region_boxes if use_dark_region_gating else None,
             k_neighbors=20,
             use_reference_labels=aml_mode,
             reference_tiles_root=EXAMPLE_TILES_ROOT if aml_mode else None,
+            quality_method="ssim",  # SSIM only - embedding retrieval removed
             progress_cb=_on_progress,
         )
         state._roi_ranker_index = index
@@ -391,7 +557,7 @@ def _fallback_candidates_from_current_view(top_k: int) -> List[Dict[str, Any]]:
                 gy_edge = float(np.abs(np.diff(gray, axis=0)).mean()) if gray.shape[0] > 1 else 0.0
                 edge = (gx_edge + gy_edge) / 2.0
                 score = (0.70 * tissue) + (0.30 * edge)
-                if tissue < 0.08:
+                if tissue < 0.05:
                     continue
 
                 cx = int(round(((x0 + x1) / 2.0) / max(1, w - 1) * 999.0))
@@ -424,7 +590,7 @@ def _fallback_candidates_from_current_view(top_k: int) -> List[Dict[str, Any]]:
 
     raw.sort(key=lambda r: float(r["score"]), reverse=True)
     selected: List[Dict[str, Any]] = []
-    min_dist_sq = float(120 * 120)
+    min_dist_sq = float(96 * 96)
     for item in raw:
         cxi, cyi = item["center_norm"]
         keep = True
@@ -498,6 +664,7 @@ def _current_view_cache_key() -> Optional[tuple[Any, ...]]:
 def _refresh_roi_candidates_for_current_view(top_k: int = ROI_CANDIDATE_TOP_K) -> List[Dict[str, Any]]:
     if not state._current_view:
         state._last_roi_candidates = []
+        state._last_roi_candidate_meta = {}
         state._last_roi_candidate_source = None
         state._last_roi_candidate_overlay_path = None
         state._last_roi_candidate_view_key = None
@@ -515,6 +682,10 @@ def _refresh_roi_candidates_for_current_view(top_k: int = ROI_CANDIDATE_TOP_K) -
 
     candidates: List[Dict[str, Any]] = []
     source: Optional[str] = None
+    aml_mode = str(getattr(state, "AGENT_TYPE", "") or "").lower() == "aml"
+    tile_prefilter_method = _selected_tile_prefilter_method()
+    use_dark_region_gating = _use_dark_region_gating(tile_prefilter_method, aml_mode=aml_mode)
+    dark_region_boxes = _ensure_dark_region_boxes_level0() if use_dark_region_gating else []
 
     index = _ensure_unsupervised_roi_index()
     if index is not None and getattr(index, "num_tiles", 0) > 0:
@@ -529,15 +700,24 @@ def _refresh_roi_candidates_for_current_view(top_k: int = ROI_CANDIDATE_TOP_K) -
             view_bbox_level0=view_bbox,
             top_k=top_k,
             min_center_separation_px=max(64, ROI_CANDIDATE_MIN_SEPARATION_PX),
+            focus_boxes_level0=dark_region_boxes if use_dark_region_gating else None,
         )
-        source = _selected_candidate_source(str(getattr(state, "AGENT_TYPE", "") or "").lower() == "aml")
+        source = _selected_candidate_source(aml_mode)
 
     if not candidates and ROI_CANDIDATE_ALLOW_FALLBACK:
         candidates = _fallback_candidates_from_current_view(top_k)
         if candidates:
             source = "fallback_heuristic"
 
+    candidates, source, candidate_meta = _postprocess_roi_candidates_for_view(
+        candidates,
+        top_k=top_k,
+        aml_mode=aml_mode,
+        source=source,
+    )
+
     state._last_roi_candidates = candidates
+    state._last_roi_candidate_meta = candidate_meta
     state._last_roi_candidate_source = source
     state._last_roi_candidate_overlay_path = _build_roi_candidate_overlay(candidates)
     state._last_roi_candidate_view_key = view_key
@@ -548,59 +728,30 @@ def _refresh_roi_candidates_for_current_view(top_k: int = ROI_CANDIDATE_TOP_K) -
 def _attach_roi_candidates(info: Dict[str, Any], top_k: int = ROI_CANDIDATE_TOP_K) -> Dict[str, Any]:
     candidates = _refresh_roi_candidates_for_current_view(top_k=top_k)
     aml_mode = str(getattr(state, "AGENT_TYPE", "") or "").lower() == "aml"
-
-    # Strip candidates that overlap an already-marked ROI so the VLM is not tempted
-    # to re-navigate to or re-mark the same location.
-    if candidates and state._roi_marks:
-        marked_centers = []
-        for roi in state._roi_marks:
-            bbox = roi.get("view_bbox_level0")
-            if bbox:
-                marked_centers.append((bbox[0] + bbox[2] // 2, bbox[1] + bbox[3] // 2))
-        if marked_centers:
-            min_sep_sq = (ROI_TARGET_SIDE_PX * 0.5) ** 2
-            def _not_marked(c: Dict[str, Any]) -> bool:
-                cl = c.get("center_level0")
-                if not cl:
-                    return True
-                cx, cy = cl[0], cl[1]
-                return all((cx - mx) ** 2 + (cy - my) ** 2 >= min_sep_sq for mx, my in marked_centers)
-            candidates = [c for c in candidates if _not_marked(c)]
-
-    if aml_mode and candidates:
-        # In AML mode, expose the tiles where retrieved bad exemplars beat retrieved
-        # good exemplars. The full list stays in state._last_roi_candidates so
-        # wsi_mark_roi_norm validation still accepts any of these coordinates.
-        filtered = [c for c in candidates if c.get("quality_hint") == "bad_like"]
-        if filtered:
-            candidates = sorted(
-                filtered,
-                key=lambda c: (
-                    float(c.get("retrieval_score", c.get("score", float("-inf")))),
-                    float(c.get("bad_margin", 0.0)),
-                ),
-                reverse=True,
-            )
-        # else: nothing is bad_like in this view — keep the raw retrieval-ranked
-        # list so the VLM can see that bad exemplars are not winning here.
-        # Final hard cap: show at most ROI_CANDIDATE_TOP_K_AML candidates.
-        candidates = candidates[:ROI_CANDIDATE_TOP_K_AML]
+    candidate_meta = getattr(state, "_last_roi_candidate_meta", None)
+    if not isinstance(candidate_meta, dict):
+        candidate_meta = {}
+    bad_like_only_view = bool(candidate_meta.get("bad_like_only_view"))
+    bad_like_hidden_count = int(candidate_meta.get("bad_like_hidden_count") or 0)
     info["roi_candidates"] = candidates
     info["roi_candidate_count"] = len(candidates)
     info["marked_roi_count"] = len(state._roi_marks)
     info["marked_roi_labels"] = [r.get("label", "") for r in state._roi_marks]
     if aml_mode:
         kept_roi_count = len(state._roi_marks)
-        if kept_roi_count >= 2:
+        if kept_roi_count >= 4:
             info["aml_stop_hint"] = (
                 "If the evidence you already have is enough for a stable final AML decision "
                 "(Normal marrow / Acute leukemia / Call for more diagnostics), stop now and give the final answer. "
                 f"You already have {kept_roi_count} kept ROI(s); do not explore another ROI unless it could materially change the decision."
             )
+        elif kept_roi_count == 1:
+            info["aml_stop_hint"] = (
+                "One ROI is screening evidence only. Try to inspect additional representative top-ranked ROIs from distinct slide regions before a final AML category if feasible."
+            )
         else:
             info["aml_stop_hint"] = (
-                "Stop as soon as the current evidence is enough for a stable final AML decision. "
-                "Do not keep exploring for extra confirmation once another ROI is unlikely to change the final category."
+                "Two to five ROIs are supportive but still limited for diffuse AML assessment. Prefer additional representative top-ranked ROIs across the slide before the final category when feasible."
             )
 
     # Detect how many consecutive recent steps have stayed in the same slide region.
@@ -651,10 +802,47 @@ def _attach_roi_candidates(info: Dict[str, Any], top_k: int = ROI_CANDIDATE_TOP_
     info["roi_candidate_prep"] = dict(state._roi_candidate_prep) if state._roi_candidate_prep else None
     info["roi_candidate_overlay_path"] = state._last_roi_candidate_overlay_path
     extractor_label = _selected_extractor_label()
+    tile_prefilter_method = _selected_tile_prefilter_method()
+    use_dark_region_gating = _use_dark_region_gating(tile_prefilter_method, aml_mode=aml_mode)
+
+    # AML MODE: Check if current view is outside all dark regions
+    outside_dark_region_warning = False
+    dark_region_boxes = _ensure_dark_region_boxes_level0() if use_dark_region_gating else []
+    if use_dark_region_gating and state._current_view and dark_region_boxes:
+        cv_x0 = state._current_view["x0"]
+        cv_y0 = state._current_view["y0"]
+        cv_w = state._current_view["w"]
+        cv_h = state._current_view["h"]
+        cv_center_x = cv_x0 + cv_w // 2
+        cv_center_y = cv_y0 + cv_h // 2
+        # Check if view center falls within any dark region box
+        in_dark_region = False
+        for box in dark_region_boxes:
+            bx0, by0 = int(box["x0"]), int(box["y0"])
+            bw, bh = int(box["w"]), int(box["h"])
+            bx1, by1 = bx0 + bw, by0 + bh
+            if bx0 <= cv_center_x < bx1 and by0 <= cv_center_y < by1:
+                in_dark_region = True
+                break
+        if not in_dark_region:
+            outside_dark_region_warning = True
+
     if aml_mode:
-        info["roi_candidate_pipeline"] = (
-            f"{extractor_label} tile embeddings -> exact good/bad exemplar retrieval -> rank by raw nearest bad similarity -> top-K per current view"
-        )
+        if use_dark_region_gating:
+            info["roi_candidate_pipeline"] = (
+                f"Detect deep blue-purple basophilic regions -> {extractor_label} tile embeddings (STRICT: only tiles within dark regions) -> ROI-quality exemplar retrieval + nuclei/dark-region heuristics -> top-K candidate blast-suspected ROIs per current view"
+            )
+        else:
+            info["roi_candidate_pipeline"] = (
+                f"No tile prefilter -> {extractor_label} tile embeddings -> ROI-quality exemplar retrieval + nuclei/dark-region heuristics -> top-K candidate blast-suspected ROIs per current view"
+            )
+        if outside_dark_region_warning:
+            info["outside_dark_region_warning"] = (
+                "ALERT: Current view is OUTSIDE all detected deep blue-purple basophilic regions. "
+                "In AML mode, the backend ONLY provides roi_candidates within dark regions. "
+                "Use wsi_get_overview_view or wsi_zoom_full_norm to navigate to a dark region (look for deep blue-purple cellular tissue areas, not gray-black debris), "
+                "then use the roi_candidates from that view. Navigation outside dark regions will not yield valid candidates."
+            )
     else:
         info["roi_candidate_pipeline"] = f"{extractor_label} tile embeddings -> kNN novelty ranking -> top-K per current view"
     if state._roi_ranker_meta:
@@ -663,16 +851,47 @@ def _attach_roi_candidates(info: Dict[str, Any], top_k: int = ROI_CANDIDATE_TOP_
         if aml_mode and isinstance(ref_stats, dict):
             info["aml_reference_stats"] = dict(ref_stats)
     expected_source = _selected_candidate_source(aml_mode)
+    use_dark_region_gating = _use_dark_region_gating(_selected_tile_prefilter_method(), aml_mode=aml_mode)
     if state._last_roi_candidate_source != expected_source:
         info["roi_candidate_warning"] = (
             "Primary candidate source unavailable for this view."
             + (" Using fallback heuristic." if ROI_CANDIDATE_ALLOW_FALLBACK else " Fallback disabled.")
         )
+    if aml_mode and bad_like_hidden_count > 0:
+        msg = (
+            f"Hid {bad_like_hidden_count} bad_like ROI candidate(s). "
+            "Do not mark bad_like candidates when good_like or uncertain alternatives exist."
+        )
+        if info.get("roi_candidate_warning"):
+            info["roi_candidate_warning"] = f"{info['roi_candidate_warning']} {msg}"
+        else:
+            info["roi_candidate_warning"] = msg
+    if aml_mode and bad_like_only_view:
+        msg = (
+            "Current view only produced bad_like ROI candidates. "
+            "Do NOT mark them. Navigate to a different region or zoom level and look for good_like/uncertain candidates."
+        )
+        if info.get("roi_candidate_warning"):
+            info["roi_candidate_warning"] = f"{info['roi_candidate_warning']} {msg}"
+        else:
+            info["roi_candidate_warning"] = msg
     if candidates:
         if aml_mode:
+            guidance_intro = (
+                "For AML, the pipeline uses STRICT DARK REGION GATING: only tiles within detected deep blue-purple basophilic regions are embedded and ranked. "
+                "Treat roi_candidates as candidate blast-suspected ROIs selected from tissue, nucleated-cell, focus, RBC, and artifact heuristics WITHIN dark regions. Prioritize deep dark blue-purple cellular fields; dark red-pink is only a rare fallback when clearly cellular, and gray-black low-chroma junk should be rejected. "
+                if use_dark_region_gating else
+                "For AML with tile filter='none', roi_candidates are ranked from the full embedded tile set without dark-region gating. "
+                "Treat roi_candidates as candidate blast-suspected ROIs selected from tissue, nucleated-cell, focus, RBC, and artifact heuristics across the current view. Prioritize deep dark blue-purple cellular fields; dark red-pink is only a rare fallback when clearly cellular, and gray-black low-chroma junk should be rejected. "
+            )
             info["roi_candidate_guidance"] = (
-                "For AML, prioritize candidates with quality_hint='bad_like' and higher retrieval_score. "
-                "Use retrieved good exemplars only as contrast checks, not as an extra blended score. "
+                guidance_intro +
+                "Use good_like candidates first. Use uncertain candidates only if they are still cellular, in focus, and morphologically informative. "
+                "Treat quality_hint as good-reference support for ROI quality, not AML-vs-normal diagnosis labels and not proof of AML. "
+                "Use blast_top1_similarity and retrieved_blast_refs as separate blast-morphology evidence from curated blast cells in blast_cells/. "
+                "Higher blast similarity means the tile embedding is closer to curated blast examples; use this to help distinguish blasts from normal hematopoietic precursors, but still confirm with field-level morphology. "
+                "Follow the practical hierarchy: tissue first, then deep blue-purple nucleated-cell-rich vs RBC-rich/empty, then blast-suspected morphology. Prefer fields with many separate crisp round purple cells; reject broad gray/brown clumps or smears even if a few purple cells are present. "
+                "A single ROI is screening evidence only; 2-5 ROIs are supportive; multiple representative ROIs across distinct slide regions are better for AML assessment. "
                 "Use one of the top-K candidate centers/bboxes for wsi_mark_roi_norm; "
                 "arbitrary ROI coordinates are rejected."
             )
@@ -704,35 +923,53 @@ def _closest_candidate(
 
 
 def _aml_candidate_reference_evidence(candidate: Dict[str, Any]) -> Dict[str, Any]:
+    reference_mode = str(candidate.get("reference_mode") or "")
+    bad_refs_active = ("good_bad" in reference_mode) or ("bad_only" in reference_mode)
     bad_top1 = candidate.get("bad_top1_similarity")
     good_top1 = candidate.get("good_top1_similarity")
+    blast_top1 = candidate.get("blast_top1_similarity")
     bad_margin = candidate.get("bad_margin")
     retrieval_score = candidate.get("retrieval_score", candidate.get("score"))
+    blast_similarity_score = candidate.get("blast_similarity_score")
     quality_hint = str(candidate.get("quality_hint") or "uncertain")
     bad_refs = candidate.get("retrieved_bad_refs") if isinstance(candidate.get("retrieved_bad_refs"), list) else []
     good_refs = candidate.get("retrieved_good_refs") if isinstance(candidate.get("retrieved_good_refs"), list) else []
+    blast_refs = candidate.get("retrieved_blast_refs") if isinstance(candidate.get("retrieved_blast_refs"), list) else []
     top_bad = bad_refs[0] if bad_refs else None
     top_good = good_refs[0] if good_refs else None
+    top_blast = blast_refs[0] if blast_refs else None
 
     match_label = "uncertain"
-    if quality_hint == "bad_like":
+    if bad_refs_active and quality_hint == "bad_like":
         match_label = "closer_to_bad"
     elif quality_hint == "good_like":
         match_label = "closer_to_good"
 
-    parts: List[str] = [match_label.replace("_", " ")]
-    if isinstance(bad_top1, (int, float)):
+    summary_label = "uncertain"
+    if match_label == "closer_to_bad":
+        summary_label = "closer to bad-quality ROI examples"
+    elif match_label == "closer_to_good":
+        summary_label = "supported by good-quality ROI references"
+
+    parts: List[str] = [summary_label]
+    if bad_refs_active and isinstance(bad_top1, (int, float)):
         parts.append(f"bad_top1={float(bad_top1):.3f}")
     if isinstance(good_top1, (int, float)):
         parts.append(f"good_top1={float(good_top1):.3f}")
-    if isinstance(bad_margin, (int, float)):
+    if isinstance(blast_top1, (int, float)):
+        parts.append(f"blast_top1={float(blast_top1):.3f}")
+    if bad_refs_active and isinstance(bad_margin, (int, float)):
         parts.append(f"margin={float(bad_margin):.3f}")
     if isinstance(retrieval_score, (int, float)):
         parts.append(f"retrieval={float(retrieval_score):.3f}")
-    if isinstance(top_bad, dict) and top_bad.get("name"):
+    if isinstance(blast_similarity_score, (int, float)):
+        parts.append(f"blast_score={float(blast_similarity_score):.3f}")
+    if bad_refs_active and isinstance(top_bad, dict) and top_bad.get("name"):
         parts.append(f"nearest_bad={top_bad['name']}")
     if isinstance(top_good, dict) and top_good.get("name"):
         parts.append(f"nearest_good={top_good['name']}")
+    if isinstance(top_blast, dict) and top_blast.get("name"):
+        parts.append(f"nearest_blast={top_blast['name']}")
 
     return {
         "match_label": match_label,
@@ -742,10 +979,14 @@ def _aml_candidate_reference_evidence(candidate: Dict[str, Any]) -> Dict[str, An
         "bad_margin": float(bad_margin) if isinstance(bad_margin, (int, float)) else None,
         "bad_top1_similarity": float(bad_top1) if isinstance(bad_top1, (int, float)) else None,
         "good_top1_similarity": float(good_top1) if isinstance(good_top1, (int, float)) else None,
+        "blast_top1_similarity": float(blast_top1) if isinstance(blast_top1, (int, float)) else None,
+        "blast_similarity_score": float(blast_similarity_score) if isinstance(blast_similarity_score, (int, float)) else None,
         "nearest_bad_ref": dict(top_bad) if isinstance(top_bad, dict) else None,
         "nearest_good_ref": dict(top_good) if isinstance(top_good, dict) else None,
+        "nearest_blast_ref": dict(top_blast) if isinstance(top_blast, dict) else None,
         "retrieved_bad_refs": [dict(x) for x in bad_refs[:3] if isinstance(x, dict)],
         "retrieved_good_refs": [dict(x) for x in good_refs[:3] if isinstance(x, dict)],
+        "retrieved_blast_refs": [dict(x) for x in blast_refs[:3] if isinstance(x, dict)],
         "summary": ", ".join(parts),
     }
 
@@ -1209,8 +1450,11 @@ def wsi_mark_roi_norm(
             "candidate_bad_margin": chosen.get("bad_margin"),
             "candidate_bad_top1_similarity": chosen.get("bad_top1_similarity"),
             "candidate_good_top1_similarity": chosen.get("good_top1_similarity"),
+            "candidate_blast_similarity_score": chosen.get("blast_similarity_score"),
+            "candidate_blast_top1_similarity": chosen.get("blast_top1_similarity"),
             "candidate_retrieved_bad_refs": list(chosen.get("retrieved_bad_refs") or []),
             "candidate_retrieved_good_refs": list(chosen.get("retrieved_good_refs") or []),
+            "candidate_retrieved_blast_refs": list(chosen.get("retrieved_blast_refs") or []),
             "aml_reference_evidence": aml_reference_evidence,
             "requested_center_norm": [
                 int(round(requested_cx_999)),
@@ -1340,6 +1584,13 @@ def wsi_save_tile_norm(
         else:
             state._saved_bad_tiles.append(record)
 
+        # Invalidate HNSW cache so new tiles are included in future retrievals
+        try:
+            from wsi_core_pkg.embeddings.roi_ranker import _clear_reference_hnsw_cache
+            _clear_reference_hnsw_cache()
+        except Exception:
+            pass  # Non-critical - cache will rebuild naturally
+
         _log_step(
             "wsi_save_tile_norm",
             nav_reason,
@@ -1390,3 +1641,98 @@ def wsi_discard_last_roi(
         return {"ok": True, "discarded_roi_id": roi["roi_id"], "label": roi["label"]}
 
     return _safe(_inner, nav_reason=nav_reason)
+
+
+@function_tool
+def wsi_rebuild_reference_index(
+    include_saved_tiles: bool = True,
+    progress_message: str = "Rebuilding reference index with curated tiles",
+) -> Dict[str, Any]:
+    """Rebuild the HNSW reference index including newly saved tiles.
+
+    This function incorporates tiles saved via wsi_save_tile_norm into the
+    reference prototype bank, making them immediately available for retrieval.
+
+    Args:
+        include_saved_tiles: If True, include tiles saved in this session.
+                            If False, only clear cache (will rebuild on next use).
+        progress_message: Optional message for progress tracking.
+
+    Returns:
+        Dictionary with status and statistics about the rebuild operation.
+    """
+    from wsi_core_pkg.embeddings.roi_ranker import (
+        _clear_reference_hnsw_cache,
+        _save_reference_hnsw_cache,
+        _embed_reference_tiles,
+        _l2_normalize_rows,
+        uni2,
+    )
+    import torch
+
+    def _inner(include_saved_tiles: bool, progress_message: str) -> Dict[str, Any]:
+        # Clear existing cache
+        _clear_reference_hnsw_cache()
+
+        if not include_saved_tiles:
+            return {
+                "ok": True,
+                "action": "cache_cleared",
+                "message": "Reference cache cleared. Will rebuild on next retrieval.",
+            }
+
+        # Collect saved tiles from current session
+        saved_records = []
+        for record in state._saved_good_tiles:
+            saved_records.append((Path(record["path"]), "good"))
+        for record in state._saved_bad_tiles:
+            saved_records.append((Path(record["path"]), "bad"))
+
+        if not saved_records:
+            return {
+                "ok": True,
+                "action": "no_saved_tiles",
+                "message": "No saved tiles in current session. Cache cleared, will use EXAMPLE_TILES_ROOT on next retrieval.",
+                "saved_good_count": len(state._saved_good_tiles),
+                "saved_bad_count": len(state._saved_bad_tiles),
+            }
+
+        # Embed saved tiles
+        try:
+            extractor = uni2()
+            run_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+            extractor.model = extractor.model.to(run_device)
+            extractor.model.eval()
+
+            ref_feat_l2, ref_labels, ref_paths = _embed_reference_tiles(
+                records=saved_records,
+                extractor=extractor,
+                device=run_device,
+                batch_size=32,
+            )
+
+            # Save to cache
+            cache_dir = _save_reference_hnsw_cache(
+                ref_feat_l2, ref_labels, ref_paths, extractor.identifier
+            )
+
+            return {
+                "ok": True,
+                "action": "rebuilt_with_saved_tiles",
+                "message": f"Reference index rebuilt with {len(saved_records)} saved tiles.",
+                "saved_good_count": len(state._saved_good_tiles),
+                "saved_bad_count": len(state._saved_bad_tiles),
+                "cache_dir": str(cache_dir) if cache_dir else None,
+            }
+
+        except Exception as e:
+            return {
+                "ok": False,
+                "action": "rebuild_failed",
+                "error": str(e),
+                "message": "Failed to rebuild index. Will use fallback exact search.",
+                "saved_good_count": len(state._saved_good_tiles),
+                "saved_bad_count": len(state._saved_bad_tiles),
+            }
+
+    return _safe(_inner, include_saved_tiles=include_saved_tiles, progress_message=progress_message)

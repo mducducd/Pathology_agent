@@ -20,7 +20,14 @@ import torch
 from PIL import Image
 
 from . import Extractor
-from .tile_prefilter import select_informative_tile_indices
+from .openslide_prefilter import (
+    choose_screening_level,
+    get_slide_nonempty_bounds_level0,
+    same_region_proxy_size_level0,
+    screening_roi_score,
+    screening_tile_metrics,
+)
+from .tile_prefilter import score_dark_informative_roi, select_informative_tile_indices
 
 ImageExtension: TypeAlias = Literal["png", "jpg"]
 EXTENSION_TO_FORMAT: Final[dict[ImageExtension, str]] = {"png": "PNG", "jpg": "JPEG"}
@@ -82,6 +89,7 @@ class MPPExtractionError(Exception):
 class TileFeatureMatrix:
     features: torch.Tensor
     coordinates_um: npt.NDArray[np.float32]
+    dark_roi_scores: npt.NDArray[np.float32]
     tile_size_um: float
     tile_size_px: int
     slide_path: str
@@ -109,9 +117,16 @@ def tiles_with_cache(
     quality_min_keep_tile_count: int,
     quality_trigger_tile_count: int | None,
     quality_random_reserve_ratio: float | None,
+    dark_region_boxes_level0: list[dict[str, int]] | None = None,
     progress_cb: Callable[[dict[str, Any]], None] | None,
 ) -> Iterator[_Tile[Microns]]:
-    """Iterate over tiles in a WSI, using cache if configured."""
+    """Iterate over tiles in a WSI, using cache if configured.
+
+    Args:
+        dark_region_boxes_level0: If provided, only yield tiles whose centers fall
+            within these bounding boxes (level-0 coordinates). Enables strict dark-region
+            gating for AML mode.
+    """
     slide_path = Path(slide_path)
 
     if cache_dir is None:
@@ -135,6 +150,7 @@ def tiles_with_cache(
                 quality_min_keep_tile_count=quality_min_keep_tile_count,
                 quality_trigger_tile_count=quality_trigger_tile_count,
                 quality_random_reserve_ratio=quality_random_reserve_ratio,
+                dark_region_boxes_level0=dark_region_boxes_level0,
                 progress_cb=progress_cb,
             )
         finally:
@@ -195,6 +211,7 @@ def tiles_with_cache(
                     quality_min_keep_tile_count=quality_min_keep_tile_count,
                     quality_trigger_tile_count=quality_trigger_tile_count,
                     quality_random_reserve_ratio=quality_random_reserve_ratio,
+                    dark_region_boxes_level0=dark_region_boxes_level0,
                     progress_cb=progress_cb,
                 ):
                     with zip_fp.open(
@@ -235,17 +252,31 @@ def _tiles_with_tissue(
     quality_min_keep_tile_count: int,
     quality_trigger_tile_count: int | None,
     quality_random_reserve_ratio: float | None,
+    dark_region_boxes_level0: list[dict[str, int]] | None = None,
     progress_cb: Callable[[dict[str, Any]], None] | None,
 ) -> Iterator[_Tile[Microns]]:
+    """Iterate over tiles in tissue regions, optionally restricted to dark regions.
+
+    Args:
+        dark_region_boxes_level0: If provided, only yield tiles whose centers fall
+            within these bounding boxes (level-0 coordinates).
+    """
     use_quality_prefilter = (
         quality_keep_ratio is not None
         and quality_keep_ratio > 0.0
         and tile_prefilter_method in {"quality", "hybrid"}
     )
+    use_dark_region_gating = dark_region_boxes_level0 is not None and len(dark_region_boxes_level0) > 0
+    if use_dark_region_gating:
+        # In AML mode we want all tiles from the detected dark regions to be embedded.
+        # The dark-region boxes already define the candidate area, so do not prune again
+        # with the per-tile quality prefilter here.
+        use_quality_prefilter = False
     quality_total_tiles = 0
     quality_kept_tiles = 0
     quality_pool_tiles = 0
     quality_hard_rejected_tiles = 0
+    dark_region_filtered_tiles = 0
 
     if use_quality_prefilter and progress_cb is not None:
         progress_cb(
@@ -279,6 +310,34 @@ def _tiles_with_tissue(
             tile_size_um=tile_size_um,
             tile_size_px=tile_size_px,
         )
+
+        # STRICT DARK REGION GATING: Filter tiles whose centers fall outside dark regions
+        if use_dark_region_gating:
+            slide_mpp = cast(SlideMPP, get_slide_mpp_(slide, default_mpp=default_slide_mpp))
+            filtered_tiles: list[_Tile[Microns]] = []
+            for tile in tiles:
+                # tile.coordinates.x/y are absolute level-0 micron coordinates (top-left corner)
+                # Tile center in microns
+                tile_center_x_um = float(tile.coordinates.x) + (float(tile_size_um) / 2.0)
+                tile_center_y_um = float(tile.coordinates.y) + (float(tile_size_um) / 2.0)
+                # Convert to level-0 pixels
+                if slide_mpp is not None:
+                    tile_center_x_px = int(tile_center_x_um / float(slide_mpp))
+                    tile_center_y_px = int(tile_center_y_um / float(slide_mpp))
+                    # Check if tile center falls within any dark region box
+                    for box in dark_region_boxes_level0:
+                        bx0, by0 = int(box["x0"]), int(box["y0"])
+                        bw, bh = int(box["w"]), int(box["h"])
+                        bx1, by1 = bx0 + bw, by0 + bh
+                        if bx0 <= tile_center_x_px < bx1 and by0 <= tile_center_y_px < by1:
+                            filtered_tiles.append(tile)
+                            break
+            dark_region_filtered_tiles += len(tiles) - len(filtered_tiles)
+            tiles = filtered_tiles
+
+        if not tiles:
+            continue
+
         if canny_cutoff is not None:
             tiles = [tile for tile in tiles if _has_enough_texture(tile.image, cutoff=canny_cutoff)]
 
@@ -414,6 +473,25 @@ def _foreground_grid(
         else cast(npt.NDArray[np.bool_], np.full_like(thumb_grayscale, True, dtype=bool))
     )
 
+    bounds = get_slide_nonempty_bounds_level0(cast(openslide.OpenSlide, slide))
+    if bounds is not None:
+        x0, y0, w, h = bounds
+        x_start = max(0, int(x0 // int(tile_size_slide_px)))
+        y_start = max(0, int(y0 // int(tile_size_slide_px)))
+        x_end = min(
+            is_foreground.shape[1],
+            int(np.ceil((x0 + w) / max(int(tile_size_slide_px), 1))),
+        )
+        y_end = min(
+            is_foreground.shape[0],
+            int(np.ceil((y0 + h) / max(int(tile_size_slide_px), 1))),
+        )
+        bounded_mask = np.zeros_like(is_foreground, dtype=bool)
+        if x_end > x_start and y_end > y_start:
+            bounded_mask[y_start:y_end, x_start:x_end] = True
+        is_foreground = is_foreground & bounded_mask
+        thumb_grayscale = np.where(bounded_mask, thumb_grayscale, 255).astype(np.int32, copy=False)
+
     return is_foreground, thumb_grayscale
 
 
@@ -487,30 +565,65 @@ def _select_supertile_coords(
         if max_keep is not None:
             keep_count = min(keep_count, max_keep)
         keep_count = max(1, min(total, keep_count))
+        screen_slide = cast(openslide.OpenSlide, slide)
+        screening_level = choose_screening_level(
+            screen_slide,
+            region_size_level0=int(supertile_size_slide_px),
+            desired_proxy_size=64,
+        )
+        screening_proxy_size = same_region_proxy_size_level0(
+            screen_slide,
+            region_size_level0=int(supertile_size_slide_px),
+            screening_level=screening_level,
+        )
 
-        gray = thumb_grayscale.astype(np.float32, copy=False)
-        fg_float = is_foreground.astype(np.float32, copy=False)
-        darkness = np.clip((255.0 - gray) / 255.0, 0.0, 1.0)
-        dark_core = np.clip((200.0 - gray) / 200.0, 0.0, 1.0)
-        density = _mean_filter3(fg_float)
-        local_contrast = np.abs(gray - _mean_filter3(gray)) / 255.0
-        # Hybrid coarse pass should deliberately pull search toward darker
-        # marrow territories first; the later tile-quality pass will remove
-        # blur, clot, crushed cells, and other artifact-driven dark fields.
-        score_map = (
-            0.56 * darkness
-            + 0.20 * dark_core
-            + 0.18 * density
-            + 0.06 * local_contrast
-        ).astype(np.float32, copy=False)
-        candidate_scores = score_map[ys, xs]
-        order = np.argsort(candidate_scores)[::-1]
+        screen_scores = np.full((total,), -np.inf, dtype=np.float32)
+        valid_mask = np.zeros((total,), dtype=bool)
+        for idx, (yy, xx) in enumerate(zip(ys, xs, strict=False)):
+            x0 = int(xx * int(supertile_size_slide_px))
+            y0 = int(yy * int(supertile_size_slide_px))
+            rgb = np.asarray(
+                slide.read_region(
+                    (x0, y0),
+                    screening_level,
+                    (screening_proxy_size, screening_proxy_size),
+                ).convert("RGB"),
+                dtype=np.uint8,
+            )
+            metrics = screening_tile_metrics(rgb)
+            if metrics.tissue_fraction < 0.03:
+                continue
+            screen_scores[idx] = screening_roi_score(metrics)
+            valid_mask[idx] = True
+
+        if np.any(valid_mask):
+            candidate_ys = ys[valid_mask]
+            candidate_xs = xs[valid_mask]
+            candidate_scores = screen_scores[valid_mask]
+            order = np.argsort(candidate_scores)[::-1]
+        else:
+            gray = thumb_grayscale.astype(np.float32, copy=False)
+            fg_float = is_foreground.astype(np.float32, copy=False)
+            darkness = np.clip((255.0 - gray) / 255.0, 0.0, 1.0)
+            dark_core = np.clip((200.0 - gray) / 200.0, 0.0, 1.0)
+            density = _mean_filter3(fg_float)
+            local_contrast = np.abs(gray - _mean_filter3(gray)) / 255.0
+            score_map = (
+                0.56 * darkness
+                + 0.20 * dark_core
+                + 0.18 * density
+                + 0.06 * local_contrast
+            ).astype(np.float32, copy=False)
+            candidate_ys = ys
+            candidate_xs = xs
+            candidate_scores = score_map[ys, xs]
+            order = np.argsort(candidate_scores)[::-1]
 
         min_sep = 2 if total > keep_count * 2 else 1
         selected: list[tuple[int, int]] = []
         for idx in order:
-            yy = int(ys[idx])
-            xx = int(xs[idx])
+            yy = int(candidate_ys[idx])
+            xx = int(candidate_xs[idx])
             if all(max(abs(yy - sy), abs(xx - sx)) >= min_sep for sy, sx in selected):
                 selected.append((yy, xx))
                 if len(selected) >= keep_count:
@@ -518,8 +631,8 @@ def _select_supertile_coords(
         if len(selected) < keep_count:
             seen = set(selected)
             for idx in order:
-                yy = int(ys[idx])
-                xx = int(xs[idx])
+                yy = int(candidate_ys[idx])
+                xx = int(candidate_xs[idx])
                 point = (yy, xx)
                 if point in seen:
                     continue
@@ -788,6 +901,7 @@ def extract_wsi_features_by_tiles(
     quality_min_keep_tile_count: int = 0,
     quality_trigger_tile_count: int | None = None,
     quality_random_reserve_ratio: float | None = None,
+    dark_region_boxes_level0: list[dict[str, int]] | None = None,
     progress_cb: Callable[[dict[str, Any]], None] | None = None,
     use_amp: bool = True,
 ) -> TileFeatureMatrix:
@@ -826,6 +940,7 @@ def extract_wsi_features_by_tiles(
         quality_min_keep_tile_count=quality_min_keep_tile_count,
         quality_trigger_tile_count=quality_trigger_tile_count,
         quality_random_reserve_ratio=quality_random_reserve_ratio,
+        dark_region_boxes_level0=dark_region_boxes_level0,
         progress_cb=progress_cb,
     )
 
@@ -844,6 +959,8 @@ def extract_wsi_features_by_tiles(
     batch_coords: list[tuple[float, float]] = []
     feature_chunks: list[torch.Tensor] = []
     all_coords: list[tuple[float, float]] = []
+    batch_dark_scores: list[float] = []
+    all_dark_scores: list[float] = []
     processed_tiles = 0
     processed_batches = 0
 
@@ -867,6 +984,7 @@ def extract_wsi_features_by_tiles(
         features = _normalize_feature_output(output).detach().cpu()
         feature_chunks.append(features)
         all_coords.extend(batch_coords)
+        all_dark_scores.extend(batch_dark_scores)
         processed_tiles += int(features.shape[0])
         processed_batches += 1
         if progress_cb is not None:
@@ -880,10 +998,12 @@ def extract_wsi_features_by_tiles(
             )
         batch_tensors.clear()
         batch_coords.clear()
+        batch_dark_scores.clear()
 
     for tile in tile_iter:
         batch_tensors.append(_transform_tile_to_tensor(tile.image, extractor.transform))
         batch_coords.append((float(tile.coordinates.x), float(tile.coordinates.y)))
+        batch_dark_scores.append(score_dark_informative_roi(tile.image))
         if len(batch_tensors) >= batch_size:
             _flush_batch()
     _flush_batch()
@@ -894,6 +1014,7 @@ def extract_wsi_features_by_tiles(
         feature_matrix = torch.empty((0, 0), dtype=torch.float32)
 
     coordinates_um = np.asarray(all_coords, dtype=np.float32).reshape(-1, 2)
+    dark_roi_scores = np.asarray(all_dark_scores, dtype=np.float32).reshape(-1)
     if progress_cb is not None:
         progress_cb(
             {
@@ -907,6 +1028,7 @@ def extract_wsi_features_by_tiles(
     return TileFeatureMatrix(
         features=feature_matrix,
         coordinates_um=coordinates_um,
+        dark_roi_scores=dark_roi_scores,
         tile_size_um=float(tile_size_um),
         tile_size_px=int(tile_size_px),
         slide_path=str(slide_path),
@@ -921,6 +1043,7 @@ def save_tile_features_npz(result: TileFeatureMatrix, output_path: Path | str) -
         output_path,
         features=result.features.numpy(),
         coordinates_um=result.coordinates_um,
+        dark_roi_scores=result.dark_roi_scores,
         tile_size_um=np.float32(result.tile_size_um),
         tile_size_px=np.int32(result.tile_size_px),
         slide_path=np.array(result.slide_path),

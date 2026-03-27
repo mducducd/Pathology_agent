@@ -100,7 +100,14 @@ def _inject_example_tiles(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]
     insert_pos = 0
 
     if good_paths:
-        content = [{"type": "text", "text": "Example GOOD tiles (use as guidance for selection)."}]
+        content = [{
+            "type": "text",
+            "text": (
+                "Example GOOD tiles (high-quality diagnostic ROI examples, not AML-vs-normal labels). "
+                "Use them as ROI-quality references for tissue vs background, nucleated-cell richness, focus, and artifact rejection. "
+                "Good AML/marrow tiles are hypercellular, deep blue-purple/basophilic, nucleated, in focus, low artifact, and morphologically informative."
+            ),
+        }]
         for p in good_paths:
             url = _encode_image_as_data_url(p)
             if url:
@@ -109,7 +116,13 @@ def _inject_example_tiles(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]
         insert_pos += 1
 
     if bad_paths:
-        content = [{"type": "text", "text": "Example BAD tiles (avoid these)."}]
+        content = [{
+            "type": "text",
+            "text": (
+                "Example BAD tiles (low-quality/non-diagnostic ROI examples, not AML-vs-normal labels). "
+                "Use them to recognize empty/background-heavy, RBC/clot-dominant, gray-black low-chroma junk, artifact-dark, blurred, crushed, or non-representative edge/debris regions."
+            ),
+        }]
         for p in bad_paths:
             url = _encode_image_as_data_url(p)
             if url:
@@ -133,7 +146,14 @@ def _inject_example_rois(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]
     insert_pos = 0
 
     if roi_paths:
-        content = [{"type": "text", "text": "Example ROI images (diagnostic regions to keep)."}]
+        content = [{
+            "type": "text",
+            "text": (
+                "Example ROI images (diagnostic regions to keep). "
+                "Good AML ROIs are hypercellular, deep blue-purple/basophilic, blast-suspected, in focus, low artifact, and representative. "
+                "These examples help you find visually informative ROIs, not prove AML by themselves."
+            ),
+        }]
         for p in roi_paths:
             url = _encode_image_as_data_url(p)
             if url:
@@ -142,7 +162,13 @@ def _inject_example_rois(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]
         insert_pos += 1
 
     if non_roi_paths:
-        content = [{"type": "text", "text": "Example NON-ROI images (background/non-diagnostic regions to avoid)."}]
+        content = [{
+            "type": "text",
+            "text": (
+                "Example NON-ROI images (background/non-diagnostic regions to avoid). "
+                "Avoid empty, RBC-heavy, gray-black low-chroma junk, artifact-dark, blurred, crushed, or edge/debris dominated regions."
+            ),
+        }]
         for p in non_roi_paths:
             url = _encode_image_as_data_url(p)
             if url:
@@ -251,25 +277,31 @@ def _inject_wsi_images(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             center = c.get("center_norm", [0, 0])
             score = c.get("score")
             score_txt = f"{float(score):.3f}" if isinstance(score, (int, float)) else "n/a"
+            reference_mode = str(c.get("reference_mode") or "")
+            bad_refs_active = ("good_bad" in reference_mode) or ("bad_only" in reference_mode)
             quality_hint = c.get("quality_hint")
             bad_like = c.get("bad_likelihood")
             retrieval_score = c.get("retrieval_score")
             bad_top1 = c.get("bad_top1_similarity")
             good_top1 = c.get("good_top1_similarity")
+            blast_top1 = c.get("blast_top1_similarity")
             bad_refs = c.get("retrieved_bad_refs")
             good_refs = c.get("retrieved_good_refs")
+            blast_refs = c.get("retrieved_blast_refs")
             extras = []
             if isinstance(quality_hint, str) and quality_hint:
                 extras.append(f"hint={quality_hint}")
             if isinstance(retrieval_score, (int, float)):
                 extras.append(f"retrieval={float(retrieval_score):.2f}")
-            if isinstance(bad_like, (int, float)):
+            if bad_refs_active and isinstance(bad_like, (int, float)):
                 extras.append(f"bad_like={float(bad_like):.2f}")
-            if isinstance(bad_top1, (int, float)):
+            if bad_refs_active and isinstance(bad_top1, (int, float)):
                 extras.append(f"bad_top1={float(bad_top1):.2f}")
             if isinstance(good_top1, (int, float)):
                 extras.append(f"good_top1={float(good_top1):.2f}")
-            if isinstance(bad_refs, list) and bad_refs:
+            if isinstance(blast_top1, (int, float)):
+                extras.append(f"blast_top1={float(blast_top1):.2f}")
+            if bad_refs_active and isinstance(bad_refs, list) and bad_refs:
                 top_bad = bad_refs[0]
                 sim = top_bad.get("similarity")
                 name = top_bad.get("name") or os.path.basename(str(top_bad.get("path") or ""))
@@ -281,6 +313,12 @@ def _inject_wsi_images(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 name = top_good.get("name") or os.path.basename(str(top_good.get("path") or ""))
                 if name and isinstance(sim, (int, float)):
                     extras.append(f"good_nn={name}@{float(sim):.2f}")
+            if isinstance(blast_refs, list) and blast_refs:
+                top_blast = blast_refs[0]
+                sim = top_blast.get("similarity")
+                name = top_blast.get("name") or os.path.basename(str(top_blast.get("path") or ""))
+                if name and isinstance(sim, (int, float)):
+                    extras.append(f"blast_nn={name}@{float(sim):.2f}")
             suffix = f", {', '.join(extras)}" if extras else ""
             cand_lines.append(f"#{rank}: center=({int(center[0])},{int(center[1])}), score={score_txt}{suffix}")
         aml_meta_line = ""
@@ -288,6 +326,7 @@ def _inject_wsi_images(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         ref_stats = meta.get("reference_stats") if isinstance(meta.get("reference_stats"), dict) else None
         if ref_stats and _agent_type() == "aml":
             mode = ref_stats.get("reference_mode")
+            bad_refs_enabled = bool(ref_stats.get("bad_references_enabled", True))
             bad_frac = ref_stats.get("wsi_bad_like_fraction")
             strong_bad_frac = ref_stats.get("wsi_bad_like_strong_fraction")
             ref_k = ref_stats.get("reference_neighbor_k")
@@ -299,16 +338,16 @@ def _inject_wsi_images(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                 parts.append(f"similarity={similarity}")
             if isinstance(ref_k, int):
                 parts.append(f"ref_k={ref_k}")
-            if isinstance(bad_frac, (int, float)):
+            if bad_refs_enabled and isinstance(bad_frac, (int, float)):
                 parts.append(f"bad_like_fraction={float(bad_frac):.2f}")
-            if isinstance(strong_bad_frac, (int, float)):
+            if bad_refs_enabled and isinstance(strong_bad_frac, (int, float)):
                 parts.append(f"strong_bad_like_fraction={float(strong_bad_frac):.2f}")
             if parts:
                 aml_meta_line = "\nAML quality summary: " + ", ".join(parts)
         extractor_name = _selected_extractor_name()
         extractor_label = extractor_name.replace("_onnx", " (ONNX)").title()
         expected_source = (
-            f"{extractor_label} tile embeddings + exact good/bad exemplar retrieval ranked by raw nearest bad similarity."
+            f"{extractor_label} tile embeddings + exact curated good-reference retrieval with morphology-aware ranking."
             if _agent_type() == "aml"
             else f"{extractor_label} tile embeddings + kNN ranking."
         )
@@ -319,6 +358,9 @@ def _inject_wsi_images(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             "Top ROI candidates for CURRENT VIEW (normalized 0-999 coordinates). "
             f"Candidate source: {source}. "
             f"Expected source is '{expected_source_name}' from {expected_source} "
+            "Interpret quality_hint as support from good-quality ROI references only, not as a diagnosis and not as a guarantee of cellularity by itself. "
+            "Prefer good_like candidates, use uncertain only if still clearly cellular, and rely on morphology to reject trash. "
+            "Use blast_top1/blast_nn as separate blast-reference evidence, prioritize deep blue-purple cellular candidates first, treat dark red-pink as a rare fallback only when clearly cellular, prefer fields with many separate crisp round purple cells, and discard stringy, gray-black, acellular, or broad gray-clump ROIs even if they look dark or have a favorable quality_hint. "
             "For wsi_mark_roi_norm, choose one of these candidate centers/bboxes; arbitrary ROI coords are rejected:\n"
             + "\n".join(cand_lines)
             + aml_meta_line

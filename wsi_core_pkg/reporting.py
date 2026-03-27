@@ -98,8 +98,8 @@ def write_markdown_report(
             )
             uncertain = len(sorted_rois) - closer_to_bad - closer_to_good
             lines.append("### AML Retrieval Summary\n")
-            lines.append(f"- **ROIs closer to bad exemplars**: {closer_to_bad}")
-            lines.append(f"- **ROIs closer to good exemplars**: {closer_to_good}")
+            lines.append(f"- **ROIs closer to bad-quality ROI examples**: {closer_to_bad}")
+            lines.append(f"- **ROIs closer to good-quality ROI examples**: {closer_to_good}")
             lines.append(f"- **Uncertain ROIs**: {uncertain}")
             lines.append("")
         for roi in sorted_rois:

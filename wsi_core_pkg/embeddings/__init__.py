@@ -22,6 +22,7 @@ class Extractor(Generic[ExtractorModel]):
 
 from .extractors.dinobloom import dinobloom
 from .extractors.reddino import red_dino, reddino
+from .extractors.ssim_extractor import ssim_extractor
 from .extractors.uni2 import uni2
 from .index_tiles_hnsw import embed_tiles_to_hnsw
 from .tiling import TileFeatureMatrix, extract_wsi_features_by_tiles, save_tile_features_npz
@@ -31,14 +32,17 @@ _EMBEDDING_EXTRACTOR_BUILDERS = {
     "uni2": uni2,
     "dinobloom": dinobloom,
     "reddino": reddino,
+    "ssim": ssim_extractor,
 }
 _EMBEDDING_EXTRACTOR_DISPLAY_NAMES = {
     "uni2": "UNI2-h",
     "dinobloom": "DinoBloom-S",
     "reddino": "RedDino-Small",
+    "ssim": "SSIM (fast, no foundation model)",
     "uni2_onnx": "UNI2-h (ONNX)",
     "dinobloom_onnx": "DinoBloom-S (ONNX)",
     "reddino_onnx": "RedDino-Small (ONNX)",
+    "ssim_onnx": "SSIM (ONNX)",
 }
 
 # ONNX Runtime extractors (lazy loaded to avoid dependency if not used)
@@ -121,6 +125,7 @@ __all__ = [
     "reddino",
     "red_dino",
     "uni2",
+    "ssim_extractor",
     # Core functions
     "embed_tiles_to_hnsw",
     "TileFeatureMatrix",
