@@ -22,6 +22,7 @@ from .config import (
     TILE_SIZE_UM,
 )
 from .dark_regions import detect_dark_regions
+from .embeddings import embedding_extractor_display_name, get_embedding_extractor
 from .embeddings.roi_ranker import (
     build_unsupervised_roi_index,
     select_topk_candidates_for_view,
@@ -69,7 +70,7 @@ def _selected_batch_size() -> int:
 
 
 def _selected_extractor_label() -> str:
-    return getattr(state, "EXTRACTOR_NAME", "uni2").replace("_onnx", " (ONNX)").title()
+    return embedding_extractor_display_name(getattr(state, "EXTRACTOR_NAME", "uni2"))
 
 
 def _selected_tile_prefilter_method() -> str:
@@ -113,6 +114,29 @@ def _quality_hint_bonus(candidate: Dict[str, Any]) -> float:
     return 0.5
 
 
+def _aml_candidate_rank_key(candidate: Dict[str, Any]) -> tuple[float, ...]:
+    def _as_float(value: Any, default: float = 0.0) -> float:
+        try:
+            if value is None:
+                return default
+            return float(value)
+        except Exception:
+            return default
+
+    base_score = candidate.get("combined_rank_score", candidate.get("score"))
+    retrieval_score = candidate.get("retrieval_score", candidate.get("score"))
+    return (
+        _quality_hint_bonus(candidate),
+        _as_float(candidate.get("good_top1_similarity"), 0.0),
+        _as_float(base_score, float("-inf")),
+        _as_float(candidate.get("dark_roi_score"), 0.0),
+        _as_float(candidate.get("inside_dark_region"), 0.0),
+        _as_float(candidate.get("bad_margin"), 0.0),
+        -_as_float(candidate.get("bad_top1_similarity"), 0.0),
+        _as_float(retrieval_score, 0.0),
+    )
+
+
 def _postprocess_roi_candidates_for_view(
     candidates: List[Dict[str, Any]],
     *,
@@ -124,6 +148,7 @@ def _postprocess_roi_candidates_for_view(
     meta: Dict[str, Any] = {
         "bad_like_only_view": False,
         "bad_like_hidden_count": 0,
+        "forced_min_candidate": False,
     }
 
     if processed and state._roi_marks:
@@ -182,6 +207,7 @@ def _postprocess_roi_candidates_for_view(
                 rescue_candidates.append(c)
 
         meta["bad_like_hidden_count"] = max(0, len(processed) - len(non_bad_candidates))
+        meta["bad_like_only_view"] = bool(processed) and not non_bad_candidates
         if len(cellular_candidates) < min(max(3, top_k // 4), max(3, len(non_bad_candidates))):
             seen_tile_indices = {int(c.get("tile_index", -1)) for c in cellular_candidates}
             for c in rescue_candidates:
@@ -190,20 +216,16 @@ def _postprocess_roi_candidates_for_view(
                     cellular_candidates.append(c)
                     seen_tile_indices.add(tile_idx)
         if not cellular_candidates:
+            rescue_pool = non_bad_candidates if non_bad_candidates else processed
+            if rescue_pool:
+                meta["forced_min_candidate"] = True
+                processed = sorted(rescue_pool, key=_aml_candidate_rank_key, reverse=True)[:1]
+                return processed, source, meta
             return [], source, meta
 
         candidates_ranked = sorted(
             cellular_candidates,
-            key=lambda candidate: (
-                _quality_hint_bonus(candidate),
-                float(candidate.get("good_top1_similarity", float("-inf"))),
-                float(candidate.get("combined_rank_score", candidate.get("score", float("-inf")))),
-                float(candidate.get("dark_roi_score", float("-inf"))),
-                float(candidate.get("inside_dark_region", False)),
-                float(candidate.get("bad_margin", float("-inf"))),
-                -float(candidate.get("bad_top1_similarity", 0.0)),
-                float(candidate.get("retrieval_score", candidate.get("score", float("-inf")))),
-            ),
+            key=_aml_candidate_rank_key,
             reverse=True,
         )
 
@@ -727,6 +749,27 @@ def _refresh_roi_candidates_for_current_view(top_k: int = ROI_CANDIDATE_TOP_K) -
     return candidates
 
 
+_CANDIDATE_REFERENCE_FIELDS = {
+    "quality_hint",
+    "bad_likelihood",
+    "bad_margin",
+    "bad_top1_similarity",
+    "good_top1_similarity",
+    "blast_top1_similarity",
+    "blast_similarity_score",
+    "retrieved_bad_refs",
+    "retrieved_good_refs",
+    "retrieved_blast_refs",
+    "reference_mode",
+    "aml_reference_evidence",
+}
+
+
+def _candidate_for_vlm(candidate: Dict[str, Any]) -> Dict[str, Any]:
+    """Return a copy of candidate with internal reference/ranking fields removed."""
+    return {k: v for k, v in candidate.items() if k not in _CANDIDATE_REFERENCE_FIELDS}
+
+
 def _attach_roi_candidates(info: Dict[str, Any], top_k: int = ROI_CANDIDATE_TOP_K) -> Dict[str, Any]:
     candidates = _refresh_roi_candidates_for_current_view(top_k=top_k)
     aml_mode = str(getattr(state, "AGENT_TYPE", "") or "").lower() == "aml"
@@ -735,7 +778,8 @@ def _attach_roi_candidates(info: Dict[str, Any], top_k: int = ROI_CANDIDATE_TOP_
         candidate_meta = {}
     bad_like_only_view = bool(candidate_meta.get("bad_like_only_view"))
     bad_like_hidden_count = int(candidate_meta.get("bad_like_hidden_count") or 0)
-    info["roi_candidates"] = candidates
+    forced_min_candidate = bool(candidate_meta.get("forced_min_candidate"))
+    info["roi_candidates"] = [_candidate_for_vlm(c) for c in candidates]
     info["roi_candidate_count"] = len(candidates)
     info["marked_roi_count"] = len(state._roi_marks)
     info["marked_roi_labels"] = [r.get("label", "") for r in state._roi_marks]
@@ -868,11 +912,26 @@ def _attach_roi_candidates(info: Dict[str, Any], top_k: int = ROI_CANDIDATE_TOP_
             info["roi_candidate_warning"] = f"{info['roi_candidate_warning']} {msg}"
         else:
             info["roi_candidate_warning"] = msg
-    if aml_mode and bad_like_only_view:
+    if aml_mode and forced_min_candidate:
         msg = (
-            "Current view only produced bad_like ROI candidates. "
-            "Do NOT mark them. Navigate to a different region or zoom level and look for good_like/uncertain candidates."
+            "Only weak ROI support was available in this view, so one best-effort fallback candidate was kept "
+            "to avoid an empty candidate list. Treat it as low-confidence and navigate to a better cellular region if feasible."
         )
+        if info.get("roi_candidate_warning"):
+            info["roi_candidate_warning"] = f"{info['roi_candidate_warning']} {msg}"
+        else:
+            info["roi_candidate_warning"] = msg
+    if aml_mode and bad_like_only_view:
+        if forced_min_candidate:
+            msg = (
+                "Current view only produced bad_like ROI candidates. One best-effort fallback candidate is shown, "
+                "but prefer moving to a different region or zoom level for better candidates if feasible."
+            )
+        else:
+            msg = (
+                "Current view only produced bad_like ROI candidates. "
+                "Do NOT mark them. Navigate to a different region or zoom level and look for good_like/uncertain candidates."
+            )
         if info.get("roi_candidate_warning"):
             info["roi_candidate_warning"] = f"{info['roi_candidate_warning']} {msg}"
         else:
@@ -888,10 +947,6 @@ def _attach_roi_candidates(info: Dict[str, Any], top_k: int = ROI_CANDIDATE_TOP_
             )
             info["roi_candidate_guidance"] = (
                 guidance_intro +
-                "Use good_like candidates first. Use uncertain candidates only if they are still cellular, in focus, and morphologically informative. "
-                "Treat quality_hint as good-reference support for ROI quality, not AML-vs-normal diagnosis labels and not proof of AML. "
-                "Use blast_top1_similarity and retrieved_blast_refs as separate blast-morphology evidence from curated blast cells in blast_cells/. "
-                "Higher blast similarity means the tile embedding is closer to curated blast examples; use this to help distinguish blasts from normal hematopoietic precursors, but still confirm with field-level morphology. "
                 "Follow the practical hierarchy: tissue first, then deep blue-purple nucleated-cell-rich vs RBC-rich/empty, then blast-suspected morphology. Prefer fields with many separate crisp round purple cells; reject broad gray/brown clumps or smears even if a few purple cells are present. "
                 "A single ROI is screening evidence only; 2-5 ROIs are supportive; multiple representative ROIs across distinct slide regions are better for AML assessment. "
                 "Use one of the top-K candidate centers/bboxes for wsi_mark_roi_norm; "
@@ -924,73 +979,6 @@ def _closest_candidate(
     return best, best_dist
 
 
-def _aml_candidate_reference_evidence(candidate: Dict[str, Any]) -> Dict[str, Any]:
-    reference_mode = str(candidate.get("reference_mode") or "")
-    bad_refs_active = ("good_bad" in reference_mode) or ("bad_only" in reference_mode)
-    bad_top1 = candidate.get("bad_top1_similarity")
-    good_top1 = candidate.get("good_top1_similarity")
-    blast_top1 = candidate.get("blast_top1_similarity")
-    bad_margin = candidate.get("bad_margin")
-    retrieval_score = candidate.get("retrieval_score", candidate.get("score"))
-    blast_similarity_score = candidate.get("blast_similarity_score")
-    quality_hint = str(candidate.get("quality_hint") or "uncertain")
-    bad_refs = candidate.get("retrieved_bad_refs") if isinstance(candidate.get("retrieved_bad_refs"), list) else []
-    good_refs = candidate.get("retrieved_good_refs") if isinstance(candidate.get("retrieved_good_refs"), list) else []
-    blast_refs = candidate.get("retrieved_blast_refs") if isinstance(candidate.get("retrieved_blast_refs"), list) else []
-    top_bad = bad_refs[0] if bad_refs else None
-    top_good = good_refs[0] if good_refs else None
-    top_blast = blast_refs[0] if blast_refs else None
-
-    match_label = "uncertain"
-    if bad_refs_active and quality_hint == "bad_like":
-        match_label = "closer_to_bad"
-    elif quality_hint == "good_like":
-        match_label = "closer_to_good"
-
-    summary_label = "uncertain"
-    if match_label == "closer_to_bad":
-        summary_label = "closer to bad-quality ROI examples"
-    elif match_label == "closer_to_good":
-        summary_label = "supported by good-quality ROI references"
-
-    parts: List[str] = [summary_label]
-    if bad_refs_active and isinstance(bad_top1, (int, float)):
-        parts.append(f"bad_top1={float(bad_top1):.3f}")
-    if isinstance(good_top1, (int, float)):
-        parts.append(f"good_top1={float(good_top1):.3f}")
-    if isinstance(blast_top1, (int, float)):
-        parts.append(f"blast_top1={float(blast_top1):.3f}")
-    if bad_refs_active and isinstance(bad_margin, (int, float)):
-        parts.append(f"margin={float(bad_margin):.3f}")
-    if isinstance(retrieval_score, (int, float)):
-        parts.append(f"retrieval={float(retrieval_score):.3f}")
-    if isinstance(blast_similarity_score, (int, float)):
-        parts.append(f"blast_score={float(blast_similarity_score):.3f}")
-    if bad_refs_active and isinstance(top_bad, dict) and top_bad.get("name"):
-        parts.append(f"nearest_bad={top_bad['name']}")
-    if isinstance(top_good, dict) and top_good.get("name"):
-        parts.append(f"nearest_good={top_good['name']}")
-    if isinstance(top_blast, dict) and top_blast.get("name"):
-        parts.append(f"nearest_blast={top_blast['name']}")
-
-    return {
-        "match_label": match_label,
-        "quality_hint": quality_hint,
-        "retrieval_score": float(retrieval_score) if isinstance(retrieval_score, (int, float)) else None,
-        "bad_likelihood": float(candidate["bad_likelihood"]) if isinstance(candidate.get("bad_likelihood"), (int, float)) else None,
-        "bad_margin": float(bad_margin) if isinstance(bad_margin, (int, float)) else None,
-        "bad_top1_similarity": float(bad_top1) if isinstance(bad_top1, (int, float)) else None,
-        "good_top1_similarity": float(good_top1) if isinstance(good_top1, (int, float)) else None,
-        "blast_top1_similarity": float(blast_top1) if isinstance(blast_top1, (int, float)) else None,
-        "blast_similarity_score": float(blast_similarity_score) if isinstance(blast_similarity_score, (int, float)) else None,
-        "nearest_bad_ref": dict(top_bad) if isinstance(top_bad, dict) else None,
-        "nearest_good_ref": dict(top_good) if isinstance(top_good, dict) else None,
-        "nearest_blast_ref": dict(top_blast) if isinstance(top_blast, dict) else None,
-        "retrieved_bad_refs": [dict(x) for x in bad_refs[:3] if isinstance(x, dict)],
-        "retrieved_good_refs": [dict(x) for x in good_refs[:3] if isinstance(x, dict)],
-        "retrieved_blast_refs": [dict(x) for x in blast_refs[:3] if isinstance(x, dict)],
-        "summary": ", ".join(parts),
-    }
 
 
 @function_tool
@@ -1424,11 +1412,6 @@ def wsi_mark_roi_norm(
         eff_mag = objective / ds if ds > 0 else None
 
         roi_id = len(state._roi_marks) + 1
-        aml_reference_evidence = (
-            _aml_candidate_reference_evidence(chosen)
-            if str(getattr(state, "AGENT_TYPE", "") or "").lower() == "aml"
-            else {}
-        )
         roi = {
             "roi_id": roi_id,
             "label": label,
@@ -1446,18 +1429,6 @@ def wsi_mark_roi_norm(
             "candidate_rank": chosen.get("rank"),
             "candidate_score": chosen.get("score"),
             "candidate_center_norm": chosen.get("center_norm"),
-            "candidate_quality_hint": chosen.get("quality_hint"),
-            "candidate_retrieval_score": chosen.get("retrieval_score", chosen.get("score")),
-            "candidate_bad_likelihood": chosen.get("bad_likelihood"),
-            "candidate_bad_margin": chosen.get("bad_margin"),
-            "candidate_bad_top1_similarity": chosen.get("bad_top1_similarity"),
-            "candidate_good_top1_similarity": chosen.get("good_top1_similarity"),
-            "candidate_blast_similarity_score": chosen.get("blast_similarity_score"),
-            "candidate_blast_top1_similarity": chosen.get("blast_top1_similarity"),
-            "candidate_retrieved_bad_refs": list(chosen.get("retrieved_bad_refs") or []),
-            "candidate_retrieved_good_refs": list(chosen.get("retrieved_good_refs") or []),
-            "candidate_retrieved_blast_refs": list(chosen.get("retrieved_blast_refs") or []),
-            "aml_reference_evidence": aml_reference_evidence,
             "requested_center_norm": [
                 int(round(requested_cx_999)),
                 int(round(requested_cy_999)),
@@ -1667,8 +1638,6 @@ def wsi_rebuild_reference_index(
         _clear_reference_hnsw_cache,
         _save_reference_hnsw_cache,
         _embed_reference_tiles,
-        _l2_normalize_rows,
-        uni2,
     )
     import torch
 
@@ -1701,7 +1670,7 @@ def wsi_rebuild_reference_index(
 
         # Embed saved tiles
         try:
-            extractor = uni2()
+            extractor = get_embedding_extractor(getattr(state, "EXTRACTOR_NAME", "uni2"))
             run_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
             extractor.model = extractor.model.to(run_device)
             extractor.model.eval()

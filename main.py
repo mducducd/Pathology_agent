@@ -43,7 +43,7 @@ ALLOWED_MODEL_NAMES = {
     "Qwen3.5-397B-A17B-FP8",
     "gpt-oss-20b",
 }
-ALLOWED_EMBEDDING_EXTRACTORS = {"uni2", "dinobloom", "reddino"}
+ALLOWED_EMBEDDING_EXTRACTORS = {"uni2", "dinobloom", "reddino", "reddino_base", "reddino_large"}
 ALLOWED_TILE_PREFILTER_METHODS = {"none", "coarse", "quality", "hybrid"}
 DEFAULT_SERVER_SLIDE_ROOTS = [
     Path("/mnt/copernicus3/PATHOLOGY/others/private/haemadata/ALL_WSIs/"),
@@ -240,17 +240,9 @@ def _get_embedding_extractor(extractor_name: str):
             return cached
 
         try:
-            if key == "uni2":
-                from wsi_core_pkg.embeddings.extractors.uni2 import uni2 as uni2_fn
-                extractor = uni2_fn()
-            elif key == "dinobloom":
-                from wsi_core_pkg.embeddings.extractors.dinobloom import dinobloom
-                extractor = dinobloom()
-            elif key == "reddino":
-                from wsi_core_pkg.embeddings.extractors.reddino import reddino
-                extractor = reddino()
-            else:
-                raise HTTPException(status_code=400, detail=f"Unsupported extractor: {extractor_name}")
+            from wsi_core_pkg.embeddings import get_embedding_extractor
+
+            extractor = get_embedding_extractor(key)
         except HTTPException:
             raise
         except Exception as exc:

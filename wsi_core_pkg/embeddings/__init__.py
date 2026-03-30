@@ -21,7 +21,7 @@ class Extractor(Generic[ExtractorModel]):
 
 
 from .extractors.dinobloom import dinobloom
-from .extractors.reddino import red_dino, reddino
+from .extractors.reddino import red_dino, reddino, reddino_base, reddino_large
 from .extractors.uni2 import uni2
 from .index_tiles_hnsw import embed_tiles_to_hnsw
 from .tiling import TileFeatureMatrix, extract_wsi_features_by_tiles, save_tile_features_npz
@@ -31,11 +31,15 @@ _EMBEDDING_EXTRACTOR_BUILDERS = {
     "uni2": uni2,
     "dinobloom": dinobloom,
     "reddino": reddino,
+    "reddino_base": reddino_base,
+    "reddino_large": reddino_large,
 }
 _EMBEDDING_EXTRACTOR_DISPLAY_NAMES = {
     "uni2": "UNI2-h",
     "dinobloom": "DinoBloom-S",
     "reddino": "RedDino-Small",
+    "reddino_base": "RedDino-base",
+    "reddino_large": "RedDino-large",
     "uni2_onnx": "UNI2-h (ONNX)",
     "dinobloom_onnx": "DinoBloom-S (ONNX)",
     "reddino_onnx": "RedDino-Small (ONNX)",
@@ -64,10 +68,8 @@ def available_embedding_extractors() -> tuple[str, ...]:
 
 def normalize_embedding_extractor_name(name: str | None) -> str:
     key = (name or DEFAULT_EMBEDDING_EXTRACTOR).strip().lower()
-    # Allow ONNX variants
     if key.endswith("_onnx"):
-        base_key = key[:-5]  # Remove "_onnx" suffix
-        if base_key in _EMBEDDING_EXTRACTOR_BUILDERS:
+        if key in _get_onnx_extractors():
             return key
     if key not in _EMBEDDING_EXTRACTOR_BUILDERS:
         raise ValueError(
@@ -81,24 +83,13 @@ def get_embedding_extractor(name: str | None) -> Any:
 
     # Handle ONNX variants
     if key.endswith("_onnx"):
-        base_key = key[:-5]  # Remove "_onnx" suffix
-        try:
-            from .extractors.onnx_runtime import (
-                dinobloom_onnx,
-                reddino_onnx,
-                uni2_onnx,
-            )
-            onnx_extractors = {
-                "uni2_onnx": uni2_onnx,
-                "dinobloom_onnx": dinobloom_onnx,
-                "reddino_onnx": reddino_onnx,
-            }
-            return onnx_extractors[key]()
-        except ImportError:
+        onnx_extractors = _get_onnx_extractors()
+        if key not in onnx_extractors:
             raise RuntimeError(
                 f"ONNX extractor '{key}' requested but onnxruntime not available. "
                 "Install with: pip install onnxruntime-gpu"
             )
+        return onnx_extractors[key]()
 
     return _EMBEDDING_EXTRACTOR_BUILDERS[key]()
 
@@ -119,6 +110,8 @@ __all__ = [
     # PyTorch extractors
     "dinobloom",
     "reddino",
+    "reddino_base",
+    "reddino_large",
     "red_dino",
     "uni2",
     # Core functions

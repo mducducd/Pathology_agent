@@ -27,14 +27,6 @@ import numpy as np
 import torch
 from PIL import Image
 
-try:
-    from .extractors.reddino import reddino as get_extractor
-except ImportError:
-    try:
-        from wsi_core_pkg.embeddings.extractors.reddino import reddino as get_extractor
-    except ImportError:
-        from .extractors.uni2 import uni2 as get_extractor
-
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".tif", ".tiff"}
 
 
@@ -124,7 +116,7 @@ def prebuild_embeddings(
     output_dir: str | Path,
     batch_size: int = 32,
     device: str | None = None,
-    extractor_name: str = "uni2",
+    extractor_name: str = "reddino_base",
 ) -> dict[str, Any]:
     """Extract and save embeddings from curated tile images.
 
@@ -156,17 +148,9 @@ def prebuild_embeddings(
 
     # Load extractor
     print(f"Loading {extractor_name} extractor...")
-    if extractor_name == "reddino":
-        from .extractors.reddino import reddino as get_extractor
-    elif extractor_name == "dinobloom":
-        from .extractors.dinobloom import dinobloom as get_extractor
-    elif extractor_name == "uni2":
-        from .extractors.uni2 import uni2 as get_extractor
-    else:
-        # Try to get from embeddings module
-        from wsi_core_pkg.embeddings import get_embedding_extractor as get_extractor
+    from . import get_embedding_extractor
 
-    extractor = get_extractor()
+    extractor = get_embedding_extractor(extractor_name)
     model = extractor.model
 
     run_device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
@@ -282,8 +266,8 @@ def main() -> None:
     parser.add_argument(
         "--extractor",
         type=str,
-        default="reddino",
-        help="Name of the extractor to use (default: reddino, options: reddino, dinobloom, uni2)",
+        default="reddino_base",
+        help="Name of the extractor to use (default: reddino_base, options: reddino_base, reddino_large, reddino, dinobloom, uni2)",
     )
 
     args = parser.parse_args()

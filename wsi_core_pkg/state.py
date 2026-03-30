@@ -12,7 +12,7 @@ from .config import DEBUG_ROOT_DIR, DEFAULT_SLIDE_PATH, OUTPUTS_ROOT_DIR
 SLIDE_PATH = DEFAULT_SLIDE_PATH
 RUN_ID: Optional[str] = None
 AGENT_TYPE: str = "aml"
-EXTRACTOR_NAME: str = "reddino"
+EXTRACTOR_NAME: str = "reddino_base"
 TILE_SIZE_UM: float = 256.0
 TILE_SIZE_PX: int = 224
 BATCH_SIZE: int = 128
@@ -61,7 +61,7 @@ LAST_FATAL_ERROR: Optional[str] = None
 
 def reset_wsi_state(
     run_id: str,
-    extractor_name: str = "reddino",
+    extractor_name: str = "reddino_base",
     tile_size_um: float = 256.0,
     tile_size_px: int = 224,
     batch_size: int = 128,

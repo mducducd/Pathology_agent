@@ -15,6 +15,10 @@ __license__ = "MIT"
 
 _DEFAULT_IDENTIFIER = "RedDino-Small"
 _DEFAULT_HF_MODEL = "hf-hub:Snarcy/RedDino-small"
+_BASE_IDENTIFIER = "RedDino-base"
+_BASE_HF_MODEL = "hf-hub:Snarcy/RedDino-base"
+_LARGE_IDENTIFIER = "RedDino-large"
+_LARGE_HF_MODEL = "hf-hub:Snarcy/RedDino-large"
 
 
 class RedDinoClsOnly:
@@ -42,8 +46,8 @@ class RedDinoClsOnly:
         return out
 
 
-@lru_cache(maxsize=1)
-def _load_reddino_assets() -> tuple[Any, Any]:
+@lru_cache(maxsize=3)
+def _load_reddino_assets(hf_model: str) -> tuple[Any, Any]:
     try:
         import timm
         import torch
@@ -55,7 +59,7 @@ def _load_reddino_assets() -> tuple[Any, Any]:
         ) from exc
 
     model = timm.create_model(
-        _DEFAULT_HF_MODEL,
+        hf_model,
         pretrained=True,
         num_classes=0,
         pretrained_strict=False,
@@ -78,13 +82,25 @@ def _load_reddino_assets() -> tuple[Any, Any]:
     return RedDinoClsOnly(model), transform
 
 
-def reddino(identifier: str = _DEFAULT_IDENTIFIER) -> Extractor[Any]:
-    model, transform = _load_reddino_assets()
+def _build_reddino_extractor(identifier: str, hf_model: str) -> Extractor[Any]:
+    model, transform = _load_reddino_assets(hf_model)
     return Extractor(
         model=model,
         transform=transform,
         identifier=identifier,
     )
+
+
+def reddino(identifier: str = _DEFAULT_IDENTIFIER) -> Extractor[Any]:
+    return _build_reddino_extractor(identifier=identifier, hf_model=_DEFAULT_HF_MODEL)
+
+
+def reddino_base(identifier: str = _BASE_IDENTIFIER) -> Extractor[Any]:
+    return _build_reddino_extractor(identifier=identifier, hf_model=_BASE_HF_MODEL)
+
+
+def reddino_large(identifier: str = _LARGE_IDENTIFIER) -> Extractor[Any]:
+    return _build_reddino_extractor(identifier=identifier, hf_model=_LARGE_HF_MODEL)
 
 
 def red_dino(identifier: str = _DEFAULT_IDENTIFIER) -> Extractor[Any]:

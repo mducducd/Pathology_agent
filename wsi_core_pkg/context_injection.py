@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional
 from PIL import Image
 
 from . import state
+from .embeddings import embedding_extractor_display_name
 
 _logger = logging.getLogger(__name__)
 from .config import (
@@ -523,7 +524,7 @@ def _inject_wsi_images(
             if parts:
                 aml_meta_line = "\nAML quality summary: " + ", ".join(parts)
         extractor_name = _selected_extractor_name()
-        extractor_label = extractor_name.replace("_onnx", " (ONNX)").title()
+        extractor_label = embedding_extractor_display_name(extractor_name)
         expected_source = (
             f"{extractor_label} tile embeddings + exact curated good-reference retrieval with morphology-aware ranking."
             if _agent_type() == "aml"
