@@ -84,6 +84,9 @@ Tile filter options:
 - **Hybrid**: combines coarse region filtering with the raw-tile quality prefilter.
 - **None**: disables the extra tile prefilter stage and keeps the baseline foreground/texture gating only.
 
+## Illustration
+
+An illustrative ROI image is included as `static/illustration.png`. This image shows a representative high-power marrow field used for demonstration only (not patient data). The field contains numerous large basophilic cells with open chromatin and visible nucleoli; such fields should be treated as morphologically blast-rich and used as a visual example when assessing blast percentage.
 ### Typical Workbench Flow
 
 1. Choose a slide source or browse the server Explorer.
