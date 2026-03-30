@@ -545,6 +545,7 @@ def score_dark_informative_roi(image: Image.Image) -> float:
     packed_nuclear_score = _unit(metrics["packed_nuclear_fraction"], 0.28)
 
     # Dark region features - key for AML
+    purple_cellular_score = _unit(metrics["purple_cellular_fraction"], 0.28)
     dark_cellular_score = _unit(metrics["dark_cellular_fraction"], 0.30)
     very_dark_score = _unit(metrics["very_dark_fraction"], 0.20)
     dark_in_focus_score = _unit(metrics["dark_in_focus_fraction"], 0.15)
@@ -563,10 +564,10 @@ def score_dark_informative_roi(image: Image.Image) -> float:
     stringy_penalty = _unit(metrics["stringy_artifact_score"], 1.0)
     gray_black_penalty = _unit(metrics["gray_black_fraction"], 0.20)
 
-    # BRIGHTNESS PENALTY: Light tiles cannot be dense cellular AML regions.
-    # brightness > 0.65 → increasingly penalized; brightness > 0.78 → max penalty
+    # BRIGHTNESS PENALTY: still discourage pale fields, but allow lighter
+    # basophilic blue-purple marrow to survive when it has real cellular detail.
     brightness_val = metrics["brightness"]
-    brightness_penalty = float(np.clip((brightness_val - 0.55) / 0.20, 0.0, 1.0))
+    brightness_penalty = float(np.clip((brightness_val - 0.64) / 0.22, 0.0, 1.0))
 
     # === COMBINED SCORE ===
     # Heavily weight the coarse score (cascade stage 1)
@@ -575,8 +576,10 @@ def score_dark_informative_roi(image: Image.Image) -> float:
         # Coarse screening (35% - the foundation)
         0.34 * coarse_score +
 
-        # Dark region features (15% - AML key signal, but not blind darkness)
-        0.08 * dark_cellular_score +
+        # Purple-blue cellular signal (24% total): keep true basophilic regions
+        # even when they are not the darkest fields on the slide.
+        0.09 * purple_cellular_score +
+        0.07 * dark_cellular_score +
         0.03 * very_dark_score +
         0.04 * dark_in_focus_score +
 
@@ -600,13 +603,13 @@ def score_dark_informative_roi(image: Image.Image) -> float:
         # Nucleated vs RBC ratio
         0.06 * nucleated_to_red_score +
 
-        # Penalties (brightness is the BIGGEST penalty)
+        # Penalties
         - 0.08 * empty_penalty -
         0.05 * red_penalty -
         0.12 * artifact_penalty -
         0.14 * stringy_penalty -
         0.18 * gray_black_penalty -
-        0.35 * brightness_penalty
+        0.18 * brightness_penalty
     )
 
     return float(np.clip(score, 0.0, 1.0))
@@ -648,6 +651,7 @@ def select_informative_tile_indices(
     hematoxylin = np.asarray([m["hematoxylin"] for m in metrics], dtype=np.float32)
     nuclear_fraction = np.asarray([m["nuclear_fraction"] for m in metrics], dtype=np.float32)
     packed_nuclear_fraction = np.asarray([m["packed_nuclear_fraction"] for m in metrics], dtype=np.float32)
+    purple_cellular_fraction = np.asarray([m["purple_cellular_fraction"] for m in metrics], dtype=np.float32)
     dark_cellular_fraction = np.asarray([m["dark_cellular_fraction"] for m in metrics], dtype=np.float32)
     very_dark_fraction = np.asarray([m["very_dark_fraction"] for m in metrics], dtype=np.float32)
     dark_in_focus_fraction = np.asarray([m["dark_in_focus_fraction"] for m in metrics], dtype=np.float32)
@@ -674,8 +678,8 @@ def select_informative_tile_indices(
     # Keep dense chromatic cellular tiles, but deep blue-purple remains the primary
     # target. Dark red-pink is only a rare fallback when it is clearly cellular.
     chromatic_cellular_indicator = (
-        (brightness < 0.62) &
-        (hematoxylin > 0.08) &
+        (brightness < 0.72) &
+        (hematoxylin > 0.06) &
         ((purple_fraction > 0.01) | (eosinophilic_cellular_fraction > 0.04)) &
         (stringy_artifact_score < 0.55) &
         (gray_black_fraction < 0.28) &
@@ -683,6 +687,14 @@ def select_informative_tile_indices(
             (packed_nuclear_fraction > 0.02) |
             (nuclei_component_mean_circularity > 0.18)
         )
+    )
+    purple_rescue_indicator = (
+        (purple_fraction >= max(0.012, purple_floor * 0.75)) &
+        (purple_cellular_fraction >= 0.018) &
+        (hematoxylin > 0.055) &
+        (artifact_coarse <= 0.42) &
+        (gray_black_fraction <= 0.34) &
+        (rbc_fraction <= 0.64)
     )
 
     # Hard reject: background (no tissue), no purple signal, too much RBC, severe artifacts
@@ -695,7 +707,7 @@ def select_informative_tile_indices(
         (artifact_coarse <= 0.33) &
         (gray_black_fraction <= 0.30) &
         (coarse_scores >= coarse_score_floor) &
-        (brightness <= 0.78)
+        (brightness <= 0.86)
     )
 
     stringy_reject = (
@@ -710,7 +722,7 @@ def select_informative_tile_indices(
             (nuclei_component_mean_circularity <= 0.20)
         )
     )
-    hard_keep = (standard_keep | chromatic_cellular_indicator) & ~stringy_reject
+    hard_keep = (standard_keep | chromatic_cellular_indicator | purple_rescue_indicator) & ~stringy_reject
 
     pool = np.nonzero(hard_keep)[0]
     hard_rejected_tiles = int(total_tiles - int(pool.size))
@@ -737,6 +749,7 @@ def select_informative_tile_indices(
     focus_energy_score = _robust_unit_scale(np.log1p(focus_energy[pool] * 32.0))
     nuclear_fraction_score = _robust_unit_scale(nuclear_fraction[pool])
     packed_nuclear_score = _robust_unit_scale(packed_nuclear_fraction[pool])
+    purple_cellular_score = _robust_unit_scale(purple_cellular_fraction[pool])
     dark_cellular_score = _robust_unit_scale(dark_cellular_fraction[pool])
     very_dark_score = _robust_unit_scale(very_dark_fraction[pool])
     dark_in_focus_score = _robust_unit_scale(dark_in_focus_fraction[pool])
@@ -754,7 +767,7 @@ def select_informative_tile_indices(
     artifact_penalty = _robust_unit_scale(artifact_fraction[pool])
     stringy_penalty = _robust_unit_scale(stringy_artifact_score[pool])
     gray_black_penalty = _robust_unit_scale(gray_black_fraction[pool])
-    brightness_penalty = _robust_unit_scale(np.clip((brightness[pool] - 0.55) / 0.20, 0.0, 1.0))
+    brightness_penalty = _robust_unit_scale(np.clip((brightness[pool] - 0.64) / 0.22, 0.0, 1.0))
 
     # AML ROI ranking: cascade approach
     # Brightness penalty is critical — light tiles with stain are NOT cellular
@@ -762,8 +775,10 @@ def select_informative_tile_indices(
         # Coarse screening foundation (40%)
         0.38 * coarse_score_pool +
 
-        # Dark region refinement (12%) - keep color-rich dark tissue, not bland blackness
-        0.05 * dark_cellular_score +
+        # Purple-blue cellular refinement (20%) - keep true basophilic marrow
+        # even when it is not the darkest field.
+        0.08 * purple_cellular_score +
+        0.04 * dark_cellular_score +
         0.03 * very_dark_score +
         0.04 * dark_in_focus_score +
 
@@ -786,13 +801,13 @@ def select_informative_tile_indices(
         # Nucleated vs RBC (6%)
         0.06 * nucleated_to_red_score +
 
-        # Penalties (brightness heavily penalized)
+        # Penalties
         - 0.12 * artifact_penalty -
         0.12 * stringy_penalty -
         0.16 * gray_black_penalty -
         0.06 * red_penalty -
         0.07 * empty_penalty -
-        0.30 * brightness_penalty
+        0.16 * brightness_penalty
     )
 
     keep_top = max(int(min_keep_tiles), int(np.ceil(float(pool.size) * max(0.0, min(1.0, keep_ratio)))))

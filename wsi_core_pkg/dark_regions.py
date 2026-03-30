@@ -132,9 +132,9 @@ def _select_dark_core_boxes(
     min_area: int,
     max_regions: int,
 ) -> List[Dict[str, int]]:
-    # Target only the DENSEST cell clusters - these are most likely blast-rich regions
-    # Use top 5% darkest pixels as seeds (not top 7%)
-    core_threshold_pct = min(99.5, max(float(threshold_pct) + 12.0, 95.0))
+    # Seed from dense purple cores, but keep the seed threshold broad enough that
+    # lighter blue-purple basophilic regions are not missed entirely.
+    core_threshold_pct = min(99.0, max(float(threshold_pct) + 8.0, 92.0))
     core_threshold = float(np.percentile(score[tissue_mask], core_threshold_pct))
     core_mask = tissue_mask & (score >= core_threshold)
     core_min_area = max(24, int(min_area // 6))  # Smaller minimum to catch small dense clusters
@@ -154,14 +154,14 @@ def _select_dark_core_boxes(
             return []
         return base_boxes[:max_regions]
 
-    # Expand cores slightly to include immediate neighborhood (high-density zone)
-    # But DON'T grow into pale areas - keep focused on dense clusters
-    base_threshold = float(np.percentile(score[tissue_mask], float(max(threshold_pct, 75))))
+    # Expand cores into the surrounding basophilic region, not just the densest
+    # nucleus core, while still avoiding pale background.
+    base_threshold = float(np.percentile(score[tissue_mask], float(max(threshold_pct - 4, 72))))
     base_mask = tissue_mask & (score >= base_threshold)
 
     region_mask = core_mask
     if core_boxes:
-        growth_steps = max(4, int(round(min(out_w, out_h) * 0.008)))  # Less growth = stay dense
+        growth_steps = max(6, int(round(min(out_w, out_h) * 0.012)))
         grown_mask = _grow_mask_within(base_mask, core_mask, steps=growth_steps)
         if np.any(grown_mask):
             region_mask = grown_mask
@@ -175,7 +175,7 @@ def _select_dark_core_boxes(
         min_area=region_min_area,
     )
     boxes = region_boxes if region_boxes else core_boxes
-    pad = max(2, int(round(min(out_w, out_h) * 0.005)))  # Minimal padding - stay focused on dense core
+    pad = max(3, int(round(min(out_w, out_h) * 0.010)))
     expanded = [_expand_box(box, out_w, out_h, pad) for box in boxes]
     expanded.sort(key=lambda b: b["area"], reverse=True)
     return expanded[:max_regions]
@@ -215,7 +215,7 @@ def detect_dark_regions(
             chroma_gate = np.clip(chroma / 32.0, 0.0, 1.0)
             texture_gate = np.clip(edge_mag / 12.0, 0.0, 1.0)
             mid_darkness = (
-                np.clip((185.0 - gray) / 70.0, 0.0, 1.0) *
+                np.clip((205.0 - gray) / 90.0, 0.0, 1.0) *
                 np.clip((gray - 55.0) / 45.0, 0.0, 1.0)
             )
 
@@ -249,8 +249,9 @@ def detect_dark_regions(
             artifact_dark = np.clip((60.0 - gray) / 60.0, 0.0, 1.0) * np.clip(1.0 - chroma / 22.0, 0.0, 1.0)
             gray_black_penalty = np.clip((95.0 - gray) / 55.0, 0.0, 1.0) * np.clip((18.0 - chroma) / 18.0, 0.0, 1.0)
 
-            # Light area penalty: areas with gray > 160 are too light for dense cells
-            light_penalty = np.clip((gray - 160.0) / 40.0, 0.0, 1.0)  # 0 at gray<=160, 1 at gray>=200
+            # Light area penalty: keep some penalty, but allow lighter blue-purple
+            # cellular tissue to remain eligible.
+            light_penalty = np.clip((gray - 178.0) / 42.0, 0.0, 1.0)
 
             # Score: favor textured chromatic cellular stain, not just darkness.
             score = (
@@ -261,7 +262,7 @@ def detect_dark_regions(
                 - 0.18 * red_smooth_norm
                 - 0.14 * artifact_dark
                 - 0.18 * gray_black_penalty
-                - 0.22 * light_penalty
+                - 0.12 * light_penalty
             ).astype(np.float32, copy=False)
             threshold = float(np.percentile(score[tissue_mask], float(threshold_pct)))
             boxes = _select_dark_core_boxes(

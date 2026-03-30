@@ -50,6 +50,9 @@ AML_REFERENCE_QUERY_BLOCK_ROWS = int(os.getenv("AML_REFERENCE_QUERY_BLOCK_ROWS",
 AML_REFERENCE_LOGIT_SCALE = float(os.getenv("AML_REFERENCE_LOGIT_SCALE", "4.0"))
 AML_REFERENCE_EVIDENCE_PER_CLASS = int(os.getenv("AML_REFERENCE_EVIDENCE_PER_CLASS", "3"))
 AML_DISABLE_BAD_REFERENCES = os.getenv("AML_DISABLE_BAD_REFERENCES", "false").lower() in ("true", "1", "yes")
+AML_BAD_TOP1_REJECT_THRESHOLD = float(os.getenv("AML_BAD_TOP1_REJECT_THRESHOLD", "0.60"))
+AML_BAD_TOP1_AMBIGUOUS_THRESHOLD = float(os.getenv("AML_BAD_TOP1_AMBIGUOUS_THRESHOLD", "0.52"))
+AML_GOOD_BAD_TOP1_MIN_GAP = float(os.getenv("AML_GOOD_BAD_TOP1_MIN_GAP", "0.05"))
 AML_DARK_PRIOR_WEIGHT = float(os.getenv("AML_DARK_PRIOR_WEIGHT", "0.45"))
 AML_DARK_VIEW_PERCENTILE = float(os.getenv("AML_DARK_VIEW_PERCENTILE", "50.0"))
 AML_DARK_VIEW_MIN_TILES = int(os.getenv("AML_DARK_VIEW_MIN_TILES", "8"))
@@ -65,6 +68,7 @@ AML_MIN_DARK_SCORE_PERCENTILE = float(os.getenv("AML_MIN_DARK_SCORE_PERCENTILE",
 AML_BLAST_CELLS_ROOT = os.getenv("AML_BLAST_CELLS_ROOT", "./Selected_Tiles/blast_cells")
 AML_BLAST_SIMILARITY_WEIGHT = float(os.getenv("AML_BLAST_SIMILARITY_WEIGHT", "0.25"))  # Weight for blast similarity in ranking
 AML_BLAST_TOP_K = int(os.getenv("AML_BLAST_TOP_K", "3"))  # Top-K blast neighbors for similarity
+AML_ENABLE_BLAST_REFERENCES = os.getenv("AML_ENABLE_BLAST_REFERENCES", "false").lower() in ("true", "1", "yes")
 
 # Cache for blast cell embeddings
 _blast_features: npt.NDArray[np.float32] | None = None
@@ -230,6 +234,51 @@ def _zscore(x: npt.NDArray[np.float32]) -> npt.NDArray[np.float32]:
     if sigma < 1e-12:
         return np.zeros_like(x, dtype=np.float32)
     return ((x - mu) / sigma).astype(np.float32, copy=False)
+
+
+def _bad_reference_reject_mask(
+    *,
+    bad_top1: npt.NDArray[np.float32],
+    good_top1: npt.NDArray[np.float32] | None = None,
+    bad_like: npt.NDArray[np.float32] | None = None,
+    bad_margin: npt.NDArray[np.float32] | None = None,
+) -> npt.NDArray[np.bool_]:
+    rows = int(bad_top1.shape[0]) if bad_top1.ndim == 1 else 0
+    reject = np.zeros((rows,), dtype=np.bool_)
+    if rows == 0:
+        return reject
+
+    reject |= bad_top1 >= AML_BAD_TOP1_REJECT_THRESHOLD
+    if good_top1 is not None and good_top1.ndim == 1 and good_top1.shape == bad_top1.shape:
+        reject |= (
+            (bad_top1 >= AML_BAD_TOP1_AMBIGUOUS_THRESHOLD)
+            & ((good_top1 - bad_top1) <= AML_GOOD_BAD_TOP1_MIN_GAP)
+        )
+    if bad_like is not None and bad_like.ndim == 1 and bad_like.shape == bad_top1.shape:
+        reject |= bad_like >= 0.62
+    if bad_margin is not None and bad_margin.ndim == 1 and bad_margin.shape == bad_top1.shape:
+        reject |= bad_margin <= -0.08
+    return reject
+
+
+def _bad_reference_is_rejected(
+    *,
+    bad_top1: float | None,
+    good_top1: float | None,
+    bad_like: float | None,
+    bad_margin: float | None,
+) -> bool:
+    bad_top1_val = float(bad_top1) if isinstance(bad_top1, (int, float)) else 0.0
+    strong_bad = bad_top1_val >= AML_BAD_TOP1_REJECT_THRESHOLD
+    ambiguous_bad = False
+    if isinstance(good_top1, (int, float)):
+        ambiguous_bad = (
+            bad_top1_val >= AML_BAD_TOP1_AMBIGUOUS_THRESHOLD
+            and (float(good_top1) - bad_top1_val) <= AML_GOOD_BAD_TOP1_MIN_GAP
+        )
+    bad_like_reject = isinstance(bad_like, (int, float)) and float(bad_like) >= 0.62
+    bad_margin_reject = isinstance(bad_margin, (int, float)) and float(bad_margin) <= -0.08
+    return bool(strong_bad or ambiguous_bad or bad_like_reject or bad_margin_reject)
 
 
 def _compute_ssim_quality_score(
@@ -1786,8 +1835,6 @@ def build_unsupervised_roi_index(
             reference_stats.update(
                 {
                     "reference_mode": reference_mode,
-                    "wsi_bad_like_fraction": float(np.mean(bad_likelihood >= 0.5)),
-                    "wsi_bad_like_strong_fraction": float(np.mean(bad_likelihood >= 0.65)),
                     "reference_query_block_rows": int(AML_REFERENCE_QUERY_BLOCK_ROWS),
                 }
             )
@@ -1797,7 +1844,6 @@ def build_unsupervised_roi_index(
                         "phase": "embed_reference_tiles",
                         "status": "done",
                         "reference_mode": reference_mode,
-                        "wsi_bad_like_fraction": reference_stats["wsi_bad_like_fraction"],
                     }
                 )
 
@@ -1857,12 +1903,14 @@ def build_unsupervised_roi_index(
             reference_mode = "no_reference_tiles"
             reference_stats["reference_mode"] = reference_mode
 
-        blast_loaded = _load_blast_cell_embeddings(
-            AML_BLAST_CELLS_ROOT,
-            extractor=extractor,
-            device=run_device,
-            batch_size=max(1, min(64, int(batch_size))),
-        )
+        blast_loaded = None
+        if AML_ENABLE_BLAST_REFERENCES:
+            blast_loaded = _load_blast_cell_embeddings(
+                AML_BLAST_CELLS_ROOT,
+                extractor=extractor,
+                device=run_device,
+                batch_size=max(1, min(64, int(batch_size))),
+            )
         if blast_loaded is not None:
             blast_feat_l2, blast_paths = blast_loaded
             blast_scores, blast_neighbor_indices, blast_neighbor_sims, blast_top1 = _compute_blast_reference_scores(
@@ -1878,7 +1926,6 @@ def build_unsupervised_roi_index(
                     "blast_reference_tiles_root": str(Path(AML_BLAST_CELLS_ROOT).resolve()),
                     "blast_reference_tiles_total": len(blast_paths),
                     "blast_reference_neighbor_k": int(blast_neighbor_k),
-                    "wsi_blast_like_fraction": float(np.mean(blast_top1 >= 0.60)) if blast_top1.size else 0.0,
                 }
             )
             blast_rank_signal = _zscore(blast_scores)
@@ -2103,6 +2150,7 @@ def select_topk_candidates_for_view(
         # else: no tiles inside dark regions - return empty candidates (force navigation)
 
     quality_prior_view: npt.NDArray[np.float32] | None = None
+    good_support_view: npt.NDArray[np.bool_] | None = None
     if index.bad_likelihood.size == index.num_tiles:
         bad_like_view = index.bad_likelihood[idxs].astype(np.float32, copy=False)
         bad_margin_view = (
@@ -2110,15 +2158,37 @@ def select_topk_candidates_for_view(
             if index.bad_margin.size == index.num_tiles
             else np.zeros_like(bad_like_view)
         )
-        low_quality_mask = (bad_like_view >= 0.62) | (bad_margin_view <= -0.08)
+        bad_top1_view = (
+            _top1_sims(index.bad_neighbor_sims[idxs], rows=int(idxs.shape[0]))
+            if index.bad_neighbor_sims.ndim == 2 and index.bad_neighbor_sims.shape[0] == index.num_tiles
+            else np.zeros_like(bad_like_view)
+        )
+        good_top1_view = (
+            _top1_sims(index.good_neighbor_sims[idxs], rows=int(idxs.shape[0]))
+            if index.good_neighbor_sims.ndim == 2 and index.good_neighbor_sims.shape[0] == index.num_tiles
+            else np.zeros_like(bad_like_view)
+        )
+        low_quality_mask = _bad_reference_reject_mask(
+            bad_top1=bad_top1_view,
+            good_top1=good_top1_view,
+            bad_like=bad_like_view,
+            bad_margin=bad_margin_view,
+        )
+        good_support_view = (
+            (good_top1_view >= 0.38)
+            & (bad_top1_view <= 0.46)
+            & (bad_like_view <= 0.48)
+        )
         if index.ssim_quality_hint.size == index.num_tiles:
             ssim_bad_view = index.ssim_quality_hint[idxs] == "bad_like"
             low_quality_mask = low_quality_mask | ssim_bad_view
         quality_keep = ~low_quality_mask
-        if int(np.count_nonzero(quality_keep)) >= max(2, int(top_k)):
+        if int(np.count_nonzero(quality_keep)) >= 2:
             idxs = idxs[quality_keep]
             ranking_scores = ranking_scores[quality_keep]
             bad_margin_view = bad_margin_view[quality_keep]
+            if good_support_view is not None and good_support_view.size == quality_keep.size:
+                good_support_view = good_support_view[quality_keep]
         quality_prior_view = bad_margin_view
 
     dark_view_scores: npt.NDArray[np.float32] | None = None
@@ -2132,38 +2202,50 @@ def select_topk_candidates_for_view(
         # Score < 0.25 typically indicates acellular/light-stain material
         # This is a HARD FILTER — light stain-only tiles must not be candidates
         if dark_view_scores.size > 0:
-            absolute_min_score = 0.25
+            absolute_min_score = 0.18
             cellular_mask = dark_view_scores >= absolute_min_score
-            if int(np.count_nonzero(cellular_mask)) >= max(2, int(top_k // 2)):
+            if good_support_view is not None and good_support_view.size == dark_view_scores.size:
+                cellular_mask = cellular_mask | good_support_view
+            if int(np.count_nonzero(cellular_mask)) >= 2:
                 idxs = idxs[cellular_mask]
                 ranking_scores = ranking_scores[cellular_mask]
                 dark_view_scores = dark_view_scores[cellular_mask]
                 if quality_prior_view is not None and quality_prior_view.size == cellular_mask.size:
                     quality_prior_view = quality_prior_view[cellular_mask]
+                if good_support_view is not None and good_support_view.size == cellular_mask.size:
+                    good_support_view = good_support_view[cellular_mask]
 
         # HARD MINIMUM THRESHOLD: Filter out tiles below minimum dark score percentile
         # This prevents empty/background tiles from being returned as candidates
         if dark_view_scores.size > 0:
             dark_min_floor = float(np.percentile(dark_view_scores, AML_MIN_DARK_SCORE_PERCENTILE))
             dark_min_keep = dark_view_scores >= dark_min_floor
+            if good_support_view is not None and good_support_view.size == dark_view_scores.size:
+                dark_min_keep = dark_min_keep | good_support_view
             # Only apply if we still have enough candidates after filtering
-            if int(np.count_nonzero(dark_min_keep)) >= max(2, int(top_k // 2)):
+            if int(np.count_nonzero(dark_min_keep)) >= 2:
                 idxs = idxs[dark_min_keep]
                 ranking_scores = ranking_scores[dark_min_keep]
                 dark_view_scores = dark_view_scores[dark_min_keep]
                 if quality_prior_view is not None and quality_prior_view.size == dark_min_keep.size:
                     quality_prior_view = quality_prior_view[dark_min_keep]
+                if good_support_view is not None and good_support_view.size == dark_min_keep.size:
+                    good_support_view = good_support_view[dark_min_keep]
 
         # Percentile-based filtering for top candidates
-        if dark_view_scores.size >= max(int(AML_DARK_VIEW_MIN_TILES), int(top_k)):
+        if dark_view_scores.size >= max(int(AML_DARK_VIEW_MIN_TILES), int(top_k) * 2):
             dark_floor = float(np.percentile(dark_view_scores, AML_DARK_VIEW_PERCENTILE))
             dark_keep = dark_view_scores >= dark_floor
+            if good_support_view is not None and good_support_view.size == dark_view_scores.size:
+                dark_keep = dark_keep | good_support_view
             if int(np.count_nonzero(dark_keep)) >= int(top_k):
                 idxs = idxs[dark_keep]
                 ranking_scores = ranking_scores[dark_keep]
                 dark_view_scores = dark_view_scores[dark_keep]
                 if quality_prior_view is not None and quality_prior_view.size == dark_keep.size:
                     quality_prior_view = quality_prior_view[dark_keep]
+                if good_support_view is not None and good_support_view.size == dark_keep.size:
+                    good_support_view = good_support_view[dark_keep]
 
         if dark_view_scores.size:
             # Cellularity remains primary, but allow quality evidence to keep gray-black
@@ -2187,7 +2269,7 @@ def select_topk_candidates_for_view(
     # Keep candidates spatially distinct: require near-tile-sized center spacing.
     # This reduces heavy overlap even when tile_size_level0_px is larger than the
     # external min_center_separation_px setting.
-    adaptive_min_sep_px = max(int(max(1, min_center_separation_px)), int(round(index.tile_size_level0_px * 0.55)))
+    adaptive_min_sep_px = max(int(max(1, min_center_separation_px)), int(round(index.tile_size_level0_px * 0.38)))
     min_sep_sq = float(adaptive_min_sep_px ** 2)
 
     def _bbox_iou(
@@ -2322,11 +2404,19 @@ def select_topk_candidates_for_view(
             if good_only_reference_mode
             else (ssim_hint == "bad_like" or (ssim_margin < -0.05 and ssim_good_score < AML_SSIM_MIN_THRESHOLD))
         )
+        bad_reference_reject = False if good_only_reference_mode else _bad_reference_is_rejected(
+            bad_top1=bad_top1,
+            good_top1=good_top1,
+            bad_like=bad_like,
+            bad_margin=quality_margin,
+        )
 
         # Combined decision:
         # - with good-only references: good_like means supported by good refs; otherwise uncertain
         # - with good/bad references: preserve the conservative bad_like path
-        if retrieval_good and ssim_good:
+        if bad_reference_reject:
+            quality_hint = "bad_like"
+        elif retrieval_good and ssim_good:
             quality_hint = "good_like"
         elif not good_only_reference_mode and (retrieval_bad or ssim_bad):
             quality_hint = "bad_like"
@@ -2336,45 +2426,48 @@ def select_topk_candidates_for_view(
             quality_hint = "good_like"
         else:
             quality_hint = "uncertain"
-        blast_similarity_score = (
-            float(index.blast_scores[tile_idx])
-            if index.blast_scores.size > tile_idx
-            else 0.0
-        )
+        candidate = {
+            "rank": rank,
+            "tile_index": int(tile_idx),
+            "score": float(combined_rank_score),
+            "combined_rank_score": float(combined_rank_score),
+            "retrieval_score": retrieval_score,
+            "dark_roi_score": float(dark_roi_score) if dark_roi_score is not None else None,
+            "ssim_good_score": ssim_good_score,
+            "ssim_bad_score": ssim_bad_score,
+            "ssim_margin": ssim_margin,
+            "ssim_quality_hint": ssim_hint,
+            "inside_dark_region": bool(inside_dark_region_all[tile_idx]) if inside_dark_region_all is not None else None,
+            "dark_region_mode": dark_region_mode,
+            "bad_likelihood": bad_like,
+            "bad_margin": quality_margin,
+            "bad_top1_similarity": bad_top1,
+            "good_top1_similarity": good_top1,
+            "quality_hint": quality_hint,
+            "reference_mode": index.reference_mode,
+            "reference_neighbor_k": index.reference_neighbor_k,
+            "retrieved_bad_refs": bad_refs[:3] if bad_refs else [],
+            "retrieved_good_refs": good_refs[:3] if good_refs else [],
+            "center_norm": [cx_norm, cy_norm],
+            "bbox_norm": [bx0n, by0n, bx1n, by1n],
+            "center_level0": [cxi, cyi],
+            "tile_bbox_level0": [tile_x0, tile_y0, tile_x1, tile_y1],
+        }
+        if AML_ENABLE_BLAST_REFERENCES:
+            candidate.update(
+                {
+                    "blast_similarity_score": (
+                        float(index.blast_scores[tile_idx])
+                        if index.blast_scores.size > tile_idx
+                        else 0.0
+                    ),
+                    "blast_top1_similarity": blast_top1,
+                    "blast_neighbor_k": index.blast_neighbor_k,
+                    "retrieved_blast_refs": blast_refs[:3] if blast_refs else [],
+                }
+            )
 
-        out.append(
-            {
-                "rank": rank,
-                "tile_index": int(tile_idx),
-                "score": float(combined_rank_score),
-                "combined_rank_score": float(combined_rank_score),
-                "retrieval_score": retrieval_score,
-                "dark_roi_score": float(dark_roi_score) if dark_roi_score is not None else None,
-                "ssim_good_score": ssim_good_score,
-                "ssim_bad_score": ssim_bad_score,
-                "ssim_margin": ssim_margin,
-                "ssim_quality_hint": ssim_hint,
-                "inside_dark_region": bool(inside_dark_region_all[tile_idx]) if inside_dark_region_all is not None else None,
-                "dark_region_mode": dark_region_mode,
-                "bad_likelihood": bad_like,
-                "bad_margin": quality_margin,
-                "bad_top1_similarity": bad_top1,
-                "good_top1_similarity": good_top1,
-                "quality_hint": quality_hint,
-                "reference_mode": index.reference_mode,
-                "reference_neighbor_k": index.reference_neighbor_k,
-                "retrieved_bad_refs": bad_refs[:3] if bad_refs else [],
-                "retrieved_good_refs": good_refs[:3] if good_refs else [],
-                "blast_similarity_score": blast_similarity_score,
-                "blast_top1_similarity": blast_top1,
-                "blast_neighbor_k": index.blast_neighbor_k,
-                "retrieved_blast_refs": blast_refs[:3] if blast_refs else [],
-                "center_norm": [cx_norm, cy_norm],
-                "bbox_norm": [bx0n, by0n, bx1n, by1n],
-                "center_level0": [cxi, cyi],
-                "tile_bbox_level0": [tile_x0, tile_y0, tile_x1, tile_y1],
-            }
-        )
+        out.append(candidate)
 
     return out
 

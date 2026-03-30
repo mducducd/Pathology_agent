@@ -159,31 +159,52 @@ def _postprocess_roi_candidates_for_view(
             if str(candidate.get("quality_hint") or "uncertain") != "bad_like"
         ]
 
-        # Additional hard reject: tiles with very low dark_roi_score (acellular / light stain)
-        # Even if marked good_like by kNN, a tile with very low cellularity is NOT useful for AML
-        acellular_threshold = 0.22
+        # Additional hard reject: prefer cellular tiles, but allow a rescue path for
+        # moderately lighter blue-purple fields when they have decent good-reference
+        # support and remain clearly not bad-like.
+        acellular_threshold = 0.16
+        rescue_dark_floor = 0.10
+        rescue_good_top1_floor = 0.38
+        rescue_bad_top1_ceiling = 0.46
+        rescue_bad_like_ceiling = 0.48
         cellular_candidates = []
+        rescue_candidates = []
         for c in non_bad_candidates:
             dark_score = float(c.get("dark_roi_score") or 0.0)
+            good_top1 = float(c.get("good_top1_similarity") or 0.0)
+            bad_top1 = float(c.get("bad_top1_similarity") or 0.0)
+            bad_like = float(c.get("bad_likelihood") or 0.5)
             if dark_score >= acellular_threshold:
                 cellular_candidates.append(c)
-            # NO bypass for good_like — kNN can be fooled by stain artifacts
+            elif (
+                dark_score >= rescue_dark_floor and
+                good_top1 >= rescue_good_top1_floor and
+                bad_top1 <= rescue_bad_top1_ceiling and
+                bad_like <= rescue_bad_like_ceiling
+            ):
+                rescue_candidates.append(c)
 
-        if not cellular_candidates and ROI_CANDIDATE_ALLOW_FALLBACK:
-            # If all candidates are rejected, fall back to original list but warn
-            cellular_candidates = non_bad_candidates if non_bad_candidates else processed
+        meta["bad_like_hidden_count"] = max(0, len(processed) - len(non_bad_candidates))
+        if len(cellular_candidates) < min(max(3, top_k // 4), max(3, len(non_bad_candidates))):
+            seen_tile_indices = {int(c.get("tile_index", -1)) for c in cellular_candidates}
+            for c in rescue_candidates:
+                tile_idx = int(c.get("tile_index", -1))
+                if tile_idx not in seen_tile_indices:
+                    cellular_candidates.append(c)
+                    seen_tile_indices.add(tile_idx)
+        if not cellular_candidates:
+            return [], source, meta
 
         candidates_ranked = sorted(
             cellular_candidates,
             key=lambda candidate: (
+                _quality_hint_bonus(candidate),
+                float(candidate.get("good_top1_similarity", float("-inf"))),
                 float(candidate.get("combined_rank_score", candidate.get("score", float("-inf")))),
                 float(candidate.get("dark_roi_score", float("-inf"))),
-                float(candidate.get("blast_top1_similarity", float("-inf"))),
-                float(candidate.get("blast_similarity_score", float("-inf"))),
-                _quality_hint_bonus(candidate),
                 float(candidate.get("inside_dark_region", False)),
-                float(candidate.get("good_top1_similarity", float("-inf"))),
                 float(candidate.get("bad_margin", float("-inf"))),
+                -float(candidate.get("bad_top1_similarity", 0.0)),
                 float(candidate.get("retrieval_score", candidate.get("score", float("-inf")))),
             ),
             reverse=True,
@@ -197,7 +218,6 @@ def _postprocess_roi_candidates_for_view(
             candidate for candidate in candidates_ranked
             if str(candidate.get("quality_hint") or "uncertain") == "uncertain"
         ]
-        meta["bad_like_hidden_count"] = max(0, len(processed) - len(non_bad_candidates))
 
         if good_like_candidates:
             processed = (good_like_candidates + uncertain_candidates)[:ROI_CANDIDATE_TOP_K_AML]
