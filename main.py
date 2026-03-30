@@ -43,7 +43,7 @@ ALLOWED_MODEL_NAMES = {
     "Qwen3.5-397B-A17B-FP8",
     "gpt-oss-20b",
 }
-ALLOWED_EMBEDDING_EXTRACTORS = {"uni2", "dinobloom", "reddino", "ssim"}
+ALLOWED_EMBEDDING_EXTRACTORS = {"uni2", "dinobloom", "reddino"}
 ALLOWED_TILE_PREFILTER_METHODS = {"none", "coarse", "quality", "hybrid"}
 DEFAULT_SERVER_SLIDE_ROOTS = [
     Path("/mnt/copernicus3/PATHOLOGY/others/private/haemadata/ALL_WSIs/"),
@@ -233,10 +233,6 @@ def _get_embedding_extractor(extractor_name: str):
             status_code=400,
             detail=f"extractor_name must be one of: {', '.join(sorted(ALLOWED_EMBEDDING_EXTRACTORS))}",
         )
-
-    # SSIM doesn't use a foundation model - returns None to signal SSIM-only mode
-    if key == "ssim":
-        return None
 
     with _EMBEDDING_EXTRACTOR_LOCK:
         cached = _EMBEDDING_EXTRACTOR_CACHE.get(key)

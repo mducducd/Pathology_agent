@@ -15,12 +15,6 @@ from .extractors.uni2 import uni2
 from .tiling import SlideMPP, extract_wsi_features_by_tiles, get_slide_mpp_
 
 try:
-    from skimage.metrics import structural_similarity as ssim
-    SSIM_AVAILABLE = True
-except ImportError:
-    SSIM_AVAILABLE = False
-
-try:
     import hnswlib
 except Exception:  # pragma: no cover - optional runtime acceleration
     hnswlib = None
@@ -75,11 +69,6 @@ _blast_features: npt.NDArray[np.float32] | None = None
 _blast_paths: tuple[str, ...] | None = None
 _blast_extractor_id: str | None = None
 
-# SSIM-based quality scoring configuration
-AML_SSIM_USE_SSIM = os.getenv("AML_SSIM_USE_SSIM", "true").lower() in ("true", "1", "yes")
-AML_SSIM_MIN_THRESHOLD = float(os.getenv("AML_SSIM_MIN_THRESHOLD", "0.35"))  # Minimum SSIM to be "good_like"
-AML_SSIM_STRICT_THRESHOLD = float(os.getenv("AML_SSIM_STRICT_THRESHOLD", "0.50"))  # High SSIM = definitely good
-AML_SSIM_DOWNSAMPLE_SIZE = int(os.getenv("AML_SSIM_DOWNSAMPLE_SIZE", "64"))  # Resize for fast SSIM computation
 AML_QUALITY_REJECT_MARGIN = float(os.getenv("AML_QUALITY_REJECT_MARGIN", "0.15"))  # Margin below which tiles are hard-rejected
 
 
@@ -189,9 +178,6 @@ class UnsupervisedROIIndex:
     blast_scores: npt.NDArray[np.float32] = field(default_factory=lambda: np.empty((0,), dtype=np.float32))
     bad_margin: npt.NDArray[np.float32] = field(default_factory=lambda: np.empty((0,), dtype=np.float32))
     bad_likelihood: npt.NDArray[np.float32] = field(default_factory=lambda: np.empty((0,), dtype=np.float32))
-    ssim_good_scores: npt.NDArray[np.float32] = field(default_factory=lambda: np.empty((0,), dtype=np.float32))
-    ssim_bad_scores: npt.NDArray[np.float32] = field(default_factory=lambda: np.empty((0,), dtype=np.float32))
-    ssim_quality_hint: npt.NDArray[np.str_] = field(default_factory=lambda: np.empty((0,), dtype=np.str_))
     reference_mode: str = "none"
     reference_stats: dict[str, Any] = field(default_factory=dict)
     bad_neighbor_indices: npt.NDArray[np.int32] = field(default_factory=lambda: np.empty((0, 0), dtype=np.int32))
@@ -205,7 +191,7 @@ class UnsupervisedROIIndex:
     blast_neighbor_sims: npt.NDArray[np.float32] = field(default_factory=lambda: np.empty((0, 0), dtype=np.float32))
     blast_reference_paths: tuple[str, ...] = field(default_factory=tuple)
     blast_neighbor_k: int = 0
-    quality_method: str = "embedding"  # "embedding", "ssim", or "hybrid"
+    quality_method: str = "embedding"  # "embedding" or "hybrid"
 
 
 @dataclass(frozen=True)
@@ -279,279 +265,6 @@ def _bad_reference_is_rejected(
     bad_like_reject = isinstance(bad_like, (int, float)) and float(bad_like) >= 0.62
     bad_margin_reject = isinstance(bad_margin, (int, float)) and float(bad_margin) <= -0.08
     return bool(strong_bad or ambiguous_bad or bad_like_reject or bad_margin_reject)
-
-
-def _compute_ssim_quality_score(
-    tile_rgb: np.ndarray,
-    reference_good_tiles: list[np.ndarray],
-    reference_bad_tiles: list[np.ndarray] | None = None,
-    downsample_size: int = AML_SSIM_DOWNSAMPLE_SIZE,
-) -> tuple[float, float, str]:
-    """
-    Compute SSIM-based quality score for a tile.
-
-    SSIM (Structural Similarity Index) measures structural similarity between images,
-    which is ideal for assessing image quality (focus, blur, artifacts) without
-    relying on expensive deep learning embeddings.
-
-    Args:
-        tile_rgb: The query tile as RGB numpy array (H, W, 3)
-        reference_good_tiles: List of reference "good" tile images
-        reference_bad_tiles: Optional list of reference "bad" tile images
-        downsample_size: Size to downsample for fast SSIM computation
-
-    Returns:
-        Tuple of (good_ssim_score, bad_ssim_score, quality_hint)
-        - good_ssim_score: Max SSIM to any good reference (higher = better quality)
-        - bad_ssim_score: Max SSIM to any bad reference
-        - quality_hint: "good_like", "bad_like", or "uncertain"
-    """
-    if not SSIM_AVAILABLE:
-        # Fallback to embedding-based scoring if skimage unavailable
-        return 0.5, 0.5, "uncertain"
-
-    # Downsample tile for fast SSIM computation
-    from skimage.transform import resize
-
-    tile_small = resize(
-        tile_rgb,
-        (downsample_size, downsample_size),
-        mode="reflect",
-        anti_aliasing=True,
-        preserve_range=True,
-    ).astype(np.float32)
-
-    # Compute max SSIM to good references
-    good_ssim_scores = []
-    for good_ref in reference_good_tiles:
-        try:
-            good_ref_small = resize(
-                good_ref,
-                (downsample_size, downsample_size),
-                mode="reflect",
-                anti_aliasing=True,
-                preserve_range=True,
-            ).astype(np.float32)
-
-            # Use multichannel SSIM with Gaussian weights
-            ssim_score = ssim(
-                tile_small,
-                good_ref_small,
-                channel_axis=-1,
-                gaussian_weights=True,
-                use_sampled_gaussian=False,
-            )
-            good_ssim_scores.append(ssim_score)
-        except Exception:
-            continue
-
-    max_good_ssim = float(np.max(good_ssim_scores)) if good_ssim_scores else 0.0
-
-    # Compute max SSIM to bad references only when that channel is enabled.
-    max_bad_ssim = 0.0
-    use_bad_refs = bool(reference_bad_tiles) and not AML_DISABLE_BAD_REFERENCES
-    if use_bad_refs:
-        bad_ssim_scores = []
-        for bad_ref in reference_bad_tiles:
-            try:
-                bad_ref_small = resize(
-                    bad_ref,
-                    (downsample_size, downsample_size),
-                    mode="reflect",
-                    anti_aliasing=True,
-                    preserve_range=True,
-                ).astype(np.float32)
-
-                ssim_score = ssim(
-                    tile_small,
-                    bad_ref_small,
-                    channel_axis=-1,
-                    gaussian_weights=True,
-                    use_sampled_gaussian=False,
-                )
-                bad_ssim_scores.append(ssim_score)
-            except Exception:
-                continue
-        max_bad_ssim = float(np.max(bad_ssim_scores)) if bad_ssim_scores else 0.0
-
-    # Determine quality hint.
-    if use_bad_refs:
-        quality_margin = max_good_ssim - max_bad_ssim
-        if quality_margin > AML_QUALITY_REJECT_MARGIN and max_good_ssim >= AML_SSIM_MIN_THRESHOLD:
-            quality_hint = "good_like"
-        elif max_good_ssim < AML_SSIM_MIN_THRESHOLD or quality_margin < -AML_QUALITY_REJECT_MARGIN:
-            quality_hint = "bad_like"
-        elif max_bad_ssim > max_good_ssim:
-            quality_hint = "bad_like"
-        else:
-            quality_hint = "uncertain"
-    else:
-        quality_hint = "good_like" if max_good_ssim >= AML_SSIM_MIN_THRESHOLD else "uncertain"
-
-    return max_good_ssim, max_bad_ssim, quality_hint
-
-
-def _compute_ssim_scores_for_slide(
-    slide_path: Path,
-    coordinates_level0_xy: npt.NDArray[np.float32],
-    tile_size_level0_px: int,
-    reference_good_paths: list[str],
-    reference_bad_paths: list[str] | None = None,
-    downsample_size: int = AML_SSIM_DOWNSAMPLE_SIZE,
-    batch_size: int = 32,
-    max_workers: int = 4,
-) -> tuple[npt.NDArray[np.float32], npt.NDArray[np.float32], npt.NDArray[np.str_]]:
-    """
-    Compute SSIM-based quality scores for all tiles on a slide.
-
-    This is a fast, CPU-based quality assessment that measures structural
-    similarity to reference good/bad tiles, avoiding expensive GPU embeddings.
-
-    Args:
-        slide_path: Path to the WSI slide
-        coordinates_level0_xy: Tile center coordinates in level-0 pixels
-        tile_size_level0_px: Tile size in level-0 pixels
-        reference_good_paths: Paths to reference "good" tile images
-        reference_bad_paths: Paths to reference "bad" tile images
-        downsample_size: Size to downsample for SSIM computation
-        batch_size: Number of tiles to process in each batch
-
-    Returns:
-        Tuple of (ssim_good_scores, ssim_bad_scores, ssim_quality_hint) arrays
-    """
-    if not SSIM_AVAILABLE:
-        # Return default values if skimage unavailable
-        n_tiles = len(coordinates_level0_xy)
-        return (
-            np.full(n_tiles, 0.5, dtype=np.float32),
-            np.full(n_tiles, 0.5, dtype=np.float32),
-            np.full(n_tiles, "uncertain", dtype=np.str_),
-        )
-
-    from skimage.transform import resize
-    import openslide
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-
-    # Load reference images
-    good_refs: list[np.ndarray] = []
-    bad_refs: list[np.ndarray] = []
-
-    for path in reference_good_paths[:5]:  # Limit to 5 references for speed
-        try:
-            with Image.open(path) as im:
-                ref = np.asarray(im.convert("RGB"), dtype=np.float32) / 255.0
-                ref_resized = resize(
-                    ref,
-                    (downsample_size, downsample_size),
-                    mode="reflect",
-                    anti_aliasing=True,
-                    preserve_range=True,
-                ).astype(np.float32)
-                good_refs.append(ref_resized)
-        except Exception:
-            continue
-
-    use_bad_refs = bool(reference_bad_paths) and not AML_DISABLE_BAD_REFERENCES
-    if use_bad_refs:
-        for path in reference_bad_paths[:5]:
-            try:
-                with Image.open(path) as im:
-                    ref = np.asarray(im.convert("RGB"), dtype=np.float32) / 255.0
-                    ref_resized = resize(
-                        ref,
-                        (downsample_size, downsample_size),
-                        mode="reflect",
-                        anti_aliasing=True,
-                        preserve_range=True,
-                    ).astype(np.float32)
-                    bad_refs.append(ref_resized)
-            except Exception:
-                continue
-
-    if not good_refs:
-        # No good references - can't compute SSIM
-        n_tiles = len(coordinates_level0_xy)
-        return (
-            np.zeros(n_tiles, dtype=np.float32),
-            np.zeros(n_tiles, dtype=np.float32),
-            np.full(n_tiles, "uncertain", dtype=np.str_),
-        )
-
-    n_tiles = len(coordinates_level0_xy)
-    ssim_good_scores = np.zeros(n_tiles, dtype=np.float32)
-    ssim_bad_scores = np.zeros(n_tiles, dtype=np.float32)
-    ssim_quality_hint = np.full(n_tiles, "uncertain", dtype=np.str_)
-
-    def _process_tile(idx: int) -> tuple[int, float, float, str]:
-        """Process a single tile and return its SSIM scores."""
-        try:
-            x0 = int(coordinates_level0_xy[idx, 0] - tile_size_level0_px / 2)
-            y0 = int(coordinates_level0_xy[idx, 1] - tile_size_level0_px / 2)
-
-            with openslide.OpenSlide(str(slide_path)) as slide:
-                tile_rgb = np.asarray(
-                    slide.read_region((x0, y0), 0, (tile_size_level0_px, tile_size_level0_px)).convert("RGB"),
-                    dtype=np.float32,
-                ) / 255.0
-
-            tile_small = resize(
-                tile_rgb,
-                (downsample_size, downsample_size),
-                mode="reflect",
-                anti_aliasing=True,
-                preserve_range=True,
-            ).astype(np.float32)
-
-            # Compute max SSIM to good references
-            max_good = 0.0
-            for good_ref in good_refs:
-                try:
-                    s = ssim(tile_small, good_ref, channel_axis=-1, gaussian_weights=True, use_sampled_gaussian=False)
-                    max_good = max(max_good, float(s))
-                except Exception:
-                    continue
-
-            # Compute max SSIM to bad references only when enabled.
-            max_bad = 0.0
-            if use_bad_refs:
-                for bad_ref in bad_refs:
-                    try:
-                        s = ssim(tile_small, bad_ref, channel_axis=-1, gaussian_weights=True, use_sampled_gaussian=False)
-                        max_bad = max(max_bad, float(s))
-                    except Exception:
-                        continue
-
-            # Determine quality hint.
-            if use_bad_refs:
-                margin = max_good - max_bad
-                if margin > AML_QUALITY_REJECT_MARGIN and max_good >= AML_SSIM_MIN_THRESHOLD:
-                    hint = "good_like"
-                elif max_good < AML_SSIM_MIN_THRESHOLD or margin < -AML_QUALITY_REJECT_MARGIN:
-                    hint = "bad_like"
-                elif max_bad > max_good:
-                    hint = "bad_like"
-                else:
-                    hint = "uncertain"
-            else:
-                hint = "good_like" if max_good >= AML_SSIM_MIN_THRESHOLD else "uncertain"
-
-            return idx, max_good, max_bad, hint
-        except Exception:
-            return idx, 0.0, 0.0, "uncertain"
-
-    # Process tiles in parallel
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = {executor.submit(_process_tile, i): i for i in range(n_tiles)}
-        for future in as_completed(futures):
-            try:
-                idx, good_s, bad_s, hint = future.result()
-                ssim_good_scores[idx] = good_s
-                ssim_bad_scores[idx] = bad_s
-                ssim_quality_hint[idx] = hint
-            except Exception:
-                pass
-
-    return ssim_good_scores, ssim_bad_scores, ssim_quality_hint
 
 
 def _sigmoid(x: npt.NDArray[np.float32]) -> npt.NDArray[np.float32]:
@@ -745,118 +458,6 @@ def _hnsw_knn_query(
     return labels.astype(np.int32, copy=False), similarities
 
 
-def _exact_or_hnsw_topk_reference_matches(
-    *,
-    features_l2: npt.NDArray[np.float32],
-    ref_features_l2: npt.NDArray[np.float32],
-    ref_labels: npt.NDArray[np.str_],
-    k: int,
-    row_block_size: int,
-    use_hnsw: bool = False,
-    hnsw_index: hnswlib.Index | None = None,
-) -> tuple[
-    npt.NDArray[np.int32],
-    npt.NDArray[np.float32],
-    npt.NDArray[np.int32],
-    npt.NDArray[np.float32],
-]:
-    """Find top-K reference matches for each query tile.
-
-    Uses exact cosine similarity search by default, or HNSW approximate search if enabled.
-
-    Args:
-        features_l2: Query features (WSI tiles), shape (n_tiles, dim)
-        ref_features_l2: Reference features, shape (n_ref, dim)
-        ref_labels: Reference labels ("good" or "bad")
-        k: Number of neighbors to return
-        row_block_size: Block size for memory-efficient exact search
-        use_hnsw: Whether to use HNSW index
-        hnsw_index: Pre-built HNSW index (required if use_hnsw=True)
-
-    Returns:
-        Tuple of (good_indices, good_sims, bad_indices, bad_sims)
-    """
-    rows = int(features_l2.shape[0])
-    empty_idx = np.empty((rows, 0), dtype=np.int32)
-    empty_sims = np.empty((rows, 0), dtype=np.float32)
-
-    bad_ref_ids = np.flatnonzero(ref_labels == "bad").astype(np.int32)
-    good_ref_ids = np.flatnonzero(ref_labels == "good").astype(np.int32)
-
-    bad_neighbor_indices = empty_idx
-    bad_neighbor_sims = empty_sims
-    good_neighbor_indices = empty_idx
-    good_neighbor_sims = empty_sims
-
-    if use_hnsw and hnswlib is not None and hnsw_index is not None:
-        # HNSW mode: query the index
-        # Note: This assumes the HNSW index contains ALL reference tiles
-        # and we filter by label afterwards
-        all_indices, all_sims = _hnsw_knn_query(hnsw_index, features_l2, k=k * max(2, len(ref_labels) // min(np.sum(bad_ref_ids > 0), np.sum(good_ref_ids > 0), 1) + 1))
-
-        # Separate by label
-        bad_results_idx = []
-        bad_results_sims = []
-        good_results_idx = []
-        good_results_sims = []
-
-        for i in range(rows):
-            bad_idx_list = []
-            bad_sim_list = []
-            good_idx_list = []
-            good_sim_list = []
-
-            for j in range(all_indices.shape[1]):
-                ref_idx = all_indices[i, j]
-                sim = all_sims[i, j]
-                if ref_labels[ref_idx] == "bad":
-                    bad_idx_list.append(ref_idx)
-                    bad_sim_list.append(sim)
-                else:
-                    good_idx_list.append(ref_idx)
-                    good_sim_list.append(sim)
-
-            # Pad or truncate to k
-            while len(bad_idx_list) < k:
-                bad_idx_list.append(-1)
-                bad_sim_list.append(0.0)
-            while len(good_idx_list) < k:
-                good_idx_list.append(-1)
-                good_sim_list.append(0.0)
-
-            bad_results_idx.append(bad_idx_list[:k])
-            bad_results_sims.append(bad_sim_list[:k])
-            good_results_idx.append(good_idx_list[:k])
-            good_results_sims.append(good_sim_list[:k])
-
-        bad_neighbor_indices = np.array(bad_results_idx, dtype=np.int32)
-        bad_neighbor_sims = np.array(bad_results_sims, dtype=np.float32)
-        good_neighbor_indices = np.array(good_results_idx, dtype=np.int32)
-        good_neighbor_sims = np.array(good_results_sims, dtype=np.float32)
-
-    else:
-        # Exact search mode
-        if bad_ref_ids.size:
-            bad_local_idx, bad_neighbor_sims = _exact_topk_reference_matches(
-                features_l2=features_l2,
-                ref_features_l2=ref_features_l2[bad_ref_ids],
-                k=k,
-                row_block_size=row_block_size,
-            )
-            bad_neighbor_indices = bad_ref_ids[bad_local_idx]
-
-        if good_ref_ids.size:
-            good_local_idx, good_neighbor_sims = _exact_topk_reference_matches(
-                features_l2=features_l2,
-                ref_features_l2=ref_features_l2[good_ref_ids],
-                k=k,
-                row_block_size=row_block_size,
-            )
-            good_neighbor_indices = good_ref_ids[good_local_idx]
-
-    return bad_neighbor_indices, bad_neighbor_sims, good_neighbor_indices, good_neighbor_sims
-
-
 def _topk_from_similarity_matrix(
     *,
     similarities: npt.NDArray[np.float32],
@@ -948,76 +549,6 @@ def _aggregate_knn_similarities(
     return np.mean(sims, axis=1).astype(np.float32, copy=False)
 
 
-def _load_or_build_reference_index(
-    reference_tiles_root: str | Path | None = None,
-    extractor_id: str = "uni2",
-    prebuilt_embeddings_file: str | Path | None = None,
-) -> tuple[npt.NDArray[np.float32] | None, npt.NDArray[np.str_] | None, tuple[str, ...] | None, hnswlib.Index | None]:
-    """Load or build reference index from pre-built embeddings or image tiles.
-
-    This function implements a multi-level caching strategy:
-    1. Try to load pre-built embeddings from .npy/.h5 file (fastest)
-    2. Try to load from persistent HNSW cache
-    3. Extract embeddings from images and build index
-
-    Args:
-        reference_tiles_root: Root directory containing Good_Tiles and Bad_Tiles folders
-        extractor_id: Extractor identifier for cache key
-        prebuilt_embeddings_file: Optional path to pre-built embeddings file
-
-    Returns:
-        Tuple of (features_l2, labels, paths, hnsw_index) or (None, None, None, None) if all fails
-    """
-    global _reference_hnsw_index, _reference_features, _reference_labels, _reference_paths
-
-    # Check in-memory cache first
-    if _reference_hnsw_index is not None and _reference_features is not None:
-        return _reference_features, _reference_labels, _reference_paths, _reference_hnsw_index
-
-    # Try pre-built embeddings file
-    if prebuilt_embeddings_file:
-        result = _load_prebuilt_embeddings(prebuilt_embeddings_file)
-        if result is not None:
-            features_l2, labels, paths = result
-            # Build HNSW index from loaded embeddings
-            if hnswlib is not None:
-                index = _build_hnsw_index(features_l2)
-                _reference_hnsw_index = index
-                _reference_features = features_l2
-                _reference_labels = labels
-                _reference_paths = paths
-                return features_l2, labels, paths, index
-            return features_l2, labels, paths, None
-
-    # Try persistent HNSW cache with reference tiles root
-    if reference_tiles_root:
-        ref_root = Path(reference_tiles_root)
-        ref_records = _discover_reference_tiles(ref_root)
-        if ref_records:
-            # Compute a fingerprint for this tile set
-            paths = tuple(str(r.path) for r in ref_records)
-            labels = np.array([r.label for r in ref_records], dtype=np.str_)
-
-            # Try to load pre-built embeddings from cache
-            cache_dir = _get_persistent_cache_dir()
-            prebuilt_path = cache_dir / f"{extractor_id}_prebuilt_embeddings.npy"
-            meta_path = cache_dir / f"{extractor_id}_prebuilt_meta.json"
-
-            if prebuilt_path.exists() and meta_path.exists():
-                result = _load_prebuilt_embeddings(prebuilt_path, meta_path=meta_path)
-                if result is not None:
-                    features_l2, labels, paths = result
-                    if hnswlib is not None:
-                        index = _build_hnsw_index(features_l2)
-                        _reference_hnsw_index = index
-                        _reference_features = features_l2
-                        _reference_labels = labels
-                        _reference_paths = paths
-                        return features_l2, labels, paths, index
-
-    return None, None, None, None
-
-
 def _ensure_reference_hnsw_index(
     ref_features_l2: npt.NDArray[np.float32],
     ref_labels: npt.NDArray[np.str_],
@@ -1107,149 +638,6 @@ def _get_persistent_cache_dir() -> Path:
         cache_dir.mkdir(parents=True, exist_ok=True)
         _persistent_cache_dir = cache_dir
     return _persistent_cache_dir
-
-
-def _load_prebuilt_embeddings(
-    embeddings_path: str | Path,
-    labels_path: str | Path | None = None,
-    meta_path: str | Path | None = None,
-) -> tuple[npt.NDArray[np.float32], npt.NDArray[np.str_], tuple[str, ...]] | None:
-    """Load pre-built reference embeddings from disk.
-
-    This is much faster than re-extracting embeddings from images.
-    Supports:
-    - .npy/.npz files for embeddings
-    - .json for metadata (paths, labels)
-    - .h5 files (optional, if h5py is available)
-
-    Args:
-        embeddings_path: Path to embeddings file (.npy, .npz, or .h5)
-        labels_path: Optional path to labels file (.npy or .json)
-        meta_path: Optional path to metadata file (.json)
-
-    Returns:
-        Tuple of (features_l2, labels, paths) or None if loading fails
-    """
-    embeddings_path = Path(embeddings_path)
-    if not embeddings_path.exists():
-        return None
-
-    try:
-        import numpy as np
-
-        # Load embeddings
-        if embeddings_path.suffix in (".npy", ".npz"):
-            data = np.load(str(embeddings_path), allow_pickle=True).astype(np.float32, copy=False)
-            if isinstance(data, np.ndarray) and data.ndim == 2:
-                features = data
-            elif isinstance(data, dict) and "embeddings" in data:
-                features = data["embeddings"].astype(np.float32, copy=False)
-            else:
-                return None
-        elif embeddings_path.suffix == ".h5":
-            try:
-                import h5py
-                with h5py.File(str(embeddings_path), "r") as f:
-                    features = f["embeddings"][:].astype(np.float32, copy=False)
-            except Exception:
-                return None
-        else:
-            return None
-
-        # L2 normalize
-        features = _l2_normalize_rows(features)
-
-        # Load labels
-        labels = np.empty((len(features),), dtype=np.str_)
-        if labels_path and Path(labels_path).exists():
-            labels_path = Path(labels_path)
-            if labels_path.suffix == ".npy":
-                labels = np.load(str(labels_path), allow_pickle=True).astype(np.str_, copy=False)
-            elif labels_path.suffix == ".json":
-                import json
-                labels_list = json.loads(Path(labels_path).read_text())
-                labels = np.array(labels_list, dtype=np.str_)
-        else:
-            # Try to load from meta file
-            if meta_path and Path(meta_path).exists():
-                import json
-                meta = json.loads(Path(meta_path).read_text())
-                if "labels" in meta:
-                    labels = np.array(meta["labels"], dtype=np.str_)
-                elif "items" in meta:
-                    labels = np.array([item.get("label", "") for item in meta["items"]], dtype=np.str_)
-
-        # Load paths
-        paths: tuple[str, ...] = ()
-        if meta_path and Path(meta_path).exists():
-            import json
-            meta = json.loads(Path(meta_path).read_text())
-            if "paths" in meta:
-                paths = tuple(meta["paths"])
-            elif "items" in meta:
-                paths = tuple(item.get("path", "") for item in meta["items"])
-
-        return features, labels, paths
-
-    except Exception:
-        return None
-
-
-def _save_prebuilt_embeddings(
-    features_l2: npt.NDArray[np.float32],
-    labels: npt.NDArray[np.str_],
-    paths: tuple[str, ...],
-    output_dir: str | Path,
-    extractor_id: str,
-) -> dict[str, Path]:
-    """Save reference embeddings to disk for fast future loading.
-
-    Args:
-        features_l2: L2-normalized embeddings
-        labels: Reference labels
-        paths: Reference tile paths
-        output_dir: Output directory
-        extractor_id: Extractor identifier
-
-    Returns:
-        Dictionary with paths to saved files
-    """
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    import json
-    import hashlib
-
-    # Compute fingerprint
-    fingerprint = hashlib.sha256(str(paths).encode()).hexdigest()[:16]
-    base_name = f"{extractor_id}_{fingerprint}"
-
-    embeddings_path = output_dir / f"{base_name}_embeddings.npy"
-    labels_path = output_dir / f"{base_name}_labels.npy"
-    meta_path = output_dir / f"{base_name}_meta.json"
-
-    # Save embeddings
-    np.save(str(embeddings_path), features_l2, allow_pickle=True)
-
-    # Save labels
-    np.save(str(labels_path), labels, allow_pickle=True)
-
-    # Save metadata
-    meta = {
-        "extractor_id": extractor_id,
-        "count": len(paths),
-        "dim": int(features_l2.shape[1]),
-        "fingerprint": fingerprint,
-        "paths": paths,
-        "labels": labels.tolist() if hasattr(labels, "tolist") else list(labels),
-    }
-    meta_path.write_text(json.dumps(meta, indent=2))
-
-    return {
-        "embeddings": embeddings_path,
-        "labels": labels_path,
-        "meta": meta_path,
-    }
 
 
 def _compute_reference_fingerprint(
@@ -1656,7 +1044,7 @@ def build_unsupervised_roi_index(
     k_neighbors: int = 20,
     use_reference_labels: bool = False,
     reference_tiles_root: str | Path | None = None,
-    quality_method: str = "ssim",  # "embedding", "ssim", or "hybrid"
+    quality_method: str = "embedding",  # "embedding" or "hybrid"
     progress_cb: Callable[[dict[str, Any]], None] | None = None,
 ) -> UnsupervisedROIIndex:
     slide_path = Path(slide_path).resolve()
@@ -1723,9 +1111,6 @@ def build_unsupervised_roi_index(
             feature_dim=feature_dim,
             bad_margin=np.empty((0,), dtype=np.float32),
             bad_likelihood=np.empty((0,), dtype=np.float32),
-            ssim_good_scores=np.empty((0,), dtype=np.float32),
-            ssim_bad_scores=np.empty((0,), dtype=np.float32),
-            ssim_quality_hint=np.empty((0,), dtype=np.str_),
             reference_mode="none",
             reference_stats={},
             bad_neighbor_indices=np.empty((0, 0), dtype=np.int32),
@@ -1847,58 +1232,6 @@ def build_unsupervised_roi_index(
                     }
                 )
 
-        # Compute SSIM-based quality scores as ADDITIONAL signal to embedding retrieval
-        ssim_good_scores_arr: npt.NDArray[np.float32] = np.empty((0,), dtype=np.float32)
-        ssim_bad_scores_arr: npt.NDArray[np.float32] = np.empty((0,), dtype=np.float32)
-        ssim_quality_hint_arr: npt.NDArray[np.str_] = np.empty((0,), dtype=np.str_)
-
-        if ref_records and SSIM_AVAILABLE:
-            if progress_cb is not None:
-                progress_cb(
-                    {
-                        "phase": "compute_ssim_quality",
-                        "status": "running",
-                        "message": "Computing SSIM-based quality scores for all tiles...",
-                    }
-                )
-
-            good_ref_paths = [str(p) for p, l in ref_records if l == "good"]
-            bad_ref_paths = [str(p) for p, l in ref_records if l == "bad"]
-
-            ssim_good_scores_arr, ssim_bad_scores_arr, ssim_quality_hint_arr = _compute_ssim_scores_for_slide(
-                slide_path=slide_path,
-                coordinates_level0_xy=result.coordinates_um.astype(np.float32, copy=False) / float(slide_mpp_f),
-                tile_size_level0_px=tile_size_level0_px,
-                reference_good_paths=good_ref_paths[:5],
-                reference_bad_paths=bad_ref_paths[:5] if bad_ref_paths else None,
-                downsample_size=AML_SSIM_DOWNSAMPLE_SIZE,
-                batch_size=batch_size,
-                max_workers=max_workers,
-            )
-
-            if progress_cb is not None:
-                good_frac = float(np.mean(ssim_quality_hint_arr == "good_like"))
-                bad_frac = float(np.mean(ssim_quality_hint_arr == "bad_like"))
-                progress_cb(
-                    {
-                        "phase": "compute_ssim_quality",
-                        "status": "done",
-                        "ssim_good_fraction": good_frac,
-                        "ssim_bad_fraction": bad_frac,
-                    }
-                )
-
-        # Keep embedding retrieval scores (bad_margin, bad_likelihood from HNSW/exact retrieval)
-        # SSIM will be used as an additional filter, not replacement
-
-        # Initialize SSIM arrays with defaults if not computed (no references or skimage unavailable)
-        if ssim_good_scores_arr.size == 0:
-            ssim_good_scores_arr = np.full(num_tiles, 0.0, dtype=np.float32)
-        if ssim_bad_scores_arr.size == 0:
-            ssim_bad_scores_arr = np.full(num_tiles, 0.0, dtype=np.float32)
-        if ssim_quality_hint_arr.size == 0:
-            ssim_quality_hint_arr = np.full(num_tiles, "uncertain", dtype=np.str_)
-
         if not ref_records:
             reference_mode = "no_reference_tiles"
             reference_stats["reference_mode"] = reference_mode
@@ -2001,9 +1334,6 @@ def build_unsupervised_roi_index(
         feature_dim=feature_dim,
         bad_margin=bad_margin,
         bad_likelihood=bad_likelihood,
-        ssim_good_scores=ssim_good_scores_arr,
-        ssim_bad_scores=ssim_bad_scores_arr,
-        ssim_quality_hint=ssim_quality_hint_arr,
         reference_mode=reference_mode,
         reference_stats=reference_stats,
         bad_neighbor_indices=bad_neighbor_indices,
@@ -2179,9 +1509,6 @@ def select_topk_candidates_for_view(
             & (bad_top1_view <= 0.46)
             & (bad_like_view <= 0.48)
         )
-        if index.ssim_quality_hint.size == index.num_tiles:
-            ssim_bad_view = index.ssim_quality_hint[idxs] == "bad_like"
-            low_quality_mask = low_quality_mask | ssim_bad_view
         quality_keep = ~low_quality_mask
         if int(np.count_nonzero(quality_keep)) >= 2:
             idxs = idxs[quality_keep]
@@ -2371,39 +1698,14 @@ def select_topk_candidates_for_view(
             else 0.0
         )
 
-        # Get SSIM scores (additional quality signal)
-        ssim_good_score = (
-            float(index.ssim_good_scores[tile_idx])
-            if index.ssim_good_scores.size > tile_idx
-            else 0.0
-        )
-        ssim_bad_score = (
-            float(index.ssim_bad_scores[tile_idx])
-            if index.ssim_bad_scores.size > tile_idx
-            else 0.0
-        )
-        ssim_margin = ssim_good_score - ssim_bad_score
-        ssim_hint = (
-            str(index.ssim_quality_hint[tile_idx])
-            if index.ssim_quality_hint.size > tile_idx
-            else "uncertain"
-        )
         good_only_reference_mode = str(index.reference_mode or "").startswith("good_only")
 
-        # Combined quality hint: require agreement between embedding retrieval AND SSIM
-        # This prevents tiles that look "good" by embedding but bad visually from being selected
         if good_only_reference_mode:
             retrieval_good = quality_margin > AML_QUALITY_REJECT_MARGIN
             retrieval_bad = False
         else:
             retrieval_good = quality_margin > 0.0 and bad_like < 0.5
             retrieval_bad = quality_margin < 0.0 and bad_like >= 0.5
-        ssim_good = ssim_hint == "good_like" or (ssim_margin > 0.05 and ssim_good_score >= AML_SSIM_MIN_THRESHOLD)
-        ssim_bad = (
-            False
-            if good_only_reference_mode
-            else (ssim_hint == "bad_like" or (ssim_margin < -0.05 and ssim_good_score < AML_SSIM_MIN_THRESHOLD))
-        )
         bad_reference_reject = False if good_only_reference_mode else _bad_reference_is_rejected(
             bad_top1=bad_top1,
             good_top1=good_top1,
@@ -2411,21 +1713,14 @@ def select_topk_candidates_for_view(
             bad_margin=quality_margin,
         )
 
-        # Combined decision:
-        # - with good-only references: good_like means supported by good refs; otherwise uncertain
-        # - with good/bad references: preserve the conservative bad_like path
         if bad_reference_reject:
             quality_hint = "bad_like"
-        elif retrieval_good and ssim_good:
+        elif retrieval_good:
             quality_hint = "good_like"
-        elif not good_only_reference_mode and (retrieval_bad or ssim_bad):
+        elif not good_only_reference_mode and retrieval_bad:
             quality_hint = "bad_like"
-        elif retrieval_good and ssim_hint == "uncertain":
-            quality_hint = "good_like"
-        elif ssim_good and quality_margin > (AML_QUALITY_REJECT_MARGIN if good_only_reference_mode else 0.0):
-            quality_hint = "good_like"
         else:
-            quality_hint = "uncertain"
+            quality_hint = "good_like"
         candidate = {
             "rank": rank,
             "tile_index": int(tile_idx),
@@ -2433,10 +1728,6 @@ def select_topk_candidates_for_view(
             "combined_rank_score": float(combined_rank_score),
             "retrieval_score": retrieval_score,
             "dark_roi_score": float(dark_roi_score) if dark_roi_score is not None else None,
-            "ssim_good_score": ssim_good_score,
-            "ssim_bad_score": ssim_bad_score,
-            "ssim_margin": ssim_margin,
-            "ssim_quality_hint": ssim_hint,
             "inside_dark_region": bool(inside_dark_region_all[tile_idx]) if inside_dark_region_all is not None else None,
             "dark_region_mode": dark_region_mode,
             "bad_likelihood": bad_like,

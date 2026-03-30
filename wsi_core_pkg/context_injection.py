@@ -1,12 +1,20 @@
 import base64
+import io
 import json
+import logging
 import mimetypes
 import os
+from collections import OrderedDict
 from copy import deepcopy
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+from PIL import Image
+
 from . import state
+
+_logger = logging.getLogger(__name__)
 from .config import (
     CONTEXT_PREVIOUS_VIEWS_MAX,
     CONTEXT_ROI_CANDIDATE_LINES_MAX,
@@ -24,7 +32,46 @@ from .config import (
 _real_async_chat_create = client_async.chat.completions.create
 _real_sync_chat_create = client_sync.chat.completions.create
 _patch_installed = False
-_data_url_cache: Dict[str, Optional[str]] = {}
+_data_url_cache: OrderedDict[tuple[str, int, int], Optional[str]] = OrderedDict()
+
+CONTEXT_IMAGE_MAX_DIM = int(os.getenv("CONTEXT_IMAGE_MAX_DIM", "512"))
+CONTEXT_IMAGE_JPEG_QUALITY = int(os.getenv("CONTEXT_IMAGE_JPEG_QUALITY", "55"))
+CONTEXT_MAX_INLINE_IMAGES = int(os.getenv("CONTEXT_MAX_INLINE_IMAGES", "6"))
+CONTEXT_MAX_INLINE_IMAGE_URL_CHARS = int(os.getenv("CONTEXT_MAX_INLINE_IMAGE_URL_CHARS", "90000"))
+_INJECTED_CONTEXT_TAG = "_wsi_context_tag"
+_LEGACY_INJECTED_TEXT_PREFIXES = (
+    "Example GOOD tiles",
+    "Example BAD tiles",
+    "Example ROI images",
+    "Example NON-ROI images",
+    "CURRENT VIEW = NEWLY MARKED ROI",
+    "CURRENT VIEW for navigation",
+    "AML coverage reminder:",
+    "AML efficiency reminder:",
+    "Top ROI candidates for CURRENT VIEW",
+    "Whole-slide overview",
+    "Previous view (",
+)
+
+
+@dataclass
+class _InlineImageBudget:
+    max_images: int
+    max_url_chars: int
+    used_images: int = 0
+    used_url_chars: int = 0
+
+    def try_take(self, url: Optional[str]) -> Optional[str]:
+        if not url:
+            return None
+        size = len(url)
+        if self.used_images >= self.max_images:
+            return None
+        if self.used_url_chars + size > self.max_url_chars:
+            return None
+        self.used_images += 1
+        self.used_url_chars += size
+        return url
 
 
 def _agent_type() -> str:
@@ -35,23 +82,139 @@ def _selected_extractor_name() -> str:
     return str(getattr(state, "EXTRACTOR_NAME", "uni2") or "uni2").strip().lower()
 
 
-def _encode_image_as_data_url(path: str) -> Optional[str]:
-    if not path or not os.path.exists(path):
+def _encode_image_as_data_url(
+    path: str,
+    *,
+    max_dim: int = CONTEXT_IMAGE_MAX_DIM,
+    jpeg_quality: int = CONTEXT_IMAGE_JPEG_QUALITY,
+) -> Optional[str]:
+    if not path:
         return None
-    cached = _data_url_cache.get(path)
+    key = (path, int(max_dim), int(jpeg_quality))
+    cached = _data_url_cache.get(key)
     if cached is not None:
         return cached
-    with open(path, "rb") as f:
-        img_bytes = f.read()
+    try:
+        with Image.open(path) as img:
+            img = img.convert("RGB")
+            if max_dim > 0:
+                resampling = getattr(getattr(Image, "Resampling", Image), "LANCZOS", Image.LANCZOS)
+                img.thumbnail((max_dim, max_dim), resampling)
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG", quality=max(20, min(95, int(jpeg_quality))), optimize=True)
+            img_bytes = buf.getvalue()
+            mime = "image/jpeg"
+    except Exception:
+        try:
+            with open(path, "rb") as f:
+                img_bytes = f.read()
+            mime, _ = mimetypes.guess_type(path)
+            if not mime:
+                mime = "image/jpeg"
+        except Exception:
+            return None
     image_b64 = base64.b64encode(img_bytes).decode("ascii")
-    mime, _ = mimetypes.guess_type(path)
-    if not mime:
-        mime = "image/jpeg"
     url = f"data:{mime};base64,{image_b64}"
-    if len(_data_url_cache) >= 512:
-        _data_url_cache.clear()
-    _data_url_cache[path] = url
+    if key in _data_url_cache:
+        _data_url_cache.move_to_end(key)
+    else:
+        if len(_data_url_cache) >= 512:
+            _data_url_cache.popitem(last=False)
+        _data_url_cache[key] = url
     return url
+
+
+def _first_text_part(message: Dict[str, Any]) -> str:
+    content = message.get("content")
+    if not isinstance(content, list):
+        return ""
+    for part in content:
+        if isinstance(part, dict) and part.get("type") == "text":
+            text = part.get("text")
+            if isinstance(text, str):
+                return text
+    return ""
+
+
+def _is_legacy_injected_context_message(message: Dict[str, Any]) -> bool:
+    if message.get("role") != "user":
+        return False
+    first_text = _first_text_part(message)
+    return any(first_text.startswith(prefix) for prefix in _LEGACY_INJECTED_TEXT_PREFIXES)
+
+
+def _strip_injected_messages(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    cleaned: List[Dict[str, Any]] = []
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        if message.get(_INJECTED_CONTEXT_TAG):
+            continue
+        if _is_legacy_injected_context_message(message):
+            continue
+        cleaned.append(message)
+    return cleaned
+
+
+def _sanitize_messages_for_api(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    clean_messages: List[Dict[str, Any]] = []
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        msg = {k: v for k, v in message.items() if k != _INJECTED_CONTEXT_TAG}
+        content = msg.get("content")
+        if isinstance(content, list):
+            clean_parts = []
+            for part in content:
+                if isinstance(part, dict):
+                    clean_parts.append({k: v for k, v in part.items() if not str(k).startswith("_")})
+                else:
+                    clean_parts.append(part)
+            msg["content"] = clean_parts
+        clean_messages.append(msg)
+    return clean_messages
+
+
+def _tag_context_message(message: Dict[str, Any], tag: str) -> Dict[str, Any]:
+    tagged = dict(message)
+    tagged[_INJECTED_CONTEXT_TAG] = tag
+    return tagged
+
+
+def _make_image_part(path: str, budget: Optional[_InlineImageBudget]) -> Optional[Dict[str, Any]]:
+    url = _encode_image_as_data_url(path)
+    if budget is not None:
+        url = budget.try_take(url)
+    if not url:
+        return None
+    return {"type": "image_url", "image_url": {"url": url}}
+
+
+def _prepare_messages_for_request(messages: List[Dict[str, Any]], *, minimal: bool = False) -> List[Dict[str, Any]]:
+    msgs = _strip_injected_messages(messages)
+    max_images = 1 if minimal else CONTEXT_MAX_INLINE_IMAGES
+    max_url_chars = max(18000, CONTEXT_MAX_INLINE_IMAGE_URL_CHARS // 3) if minimal else CONTEXT_MAX_INLINE_IMAGE_URL_CHARS
+    budget = _InlineImageBudget(max_images=max_images, max_url_chars=max_url_chars)
+    msgs = _inject_wsi_images(
+        msgs,
+        budget=budget,
+        include_candidate_overlay=not minimal,
+        include_overview=not minimal,
+        include_previous_views=not minimal,
+    )
+    if not minimal:
+        msgs = _inject_example_rois(msgs, budget=budget)
+        msgs = _inject_example_tiles(msgs, budget=budget)
+    return _sanitize_messages_for_api(msgs)
+
+
+def _is_context_length_error(exc: Exception) -> bool:
+    text = str(exc)
+    return (
+        "maximum context length" in text
+        or "exceeds model's maximum context length" in text
+        or ("Input length" in text and "context length" in text)
+    )
 
 
 def _redact_messages_for_trace(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -89,7 +252,11 @@ def _collect_example_tiles(dir_path: str, max_count: int) -> List[str]:
     return paths[:max_count]
 
 
-def _inject_example_tiles(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def _inject_example_tiles(
+    messages: List[Dict[str, Any]],
+    *,
+    budget: Optional[_InlineImageBudget] = None,
+) -> List[Dict[str, Any]]:
     if state._example_tiles_injected:
         return messages
 
@@ -109,10 +276,10 @@ def _inject_example_tiles(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]
             ),
         }]
         for p in good_paths:
-            url = _encode_image_as_data_url(p)
-            if url:
-                content.append({"type": "image_url", "image_url": {"url": url}})
-        new_messages.insert(insert_pos, {"role": "user", "content": content})
+            image_part = _make_image_part(p, budget)
+            if image_part:
+                content.append(image_part)
+        new_messages.insert(insert_pos, _tag_context_message({"role": "user", "content": content}, "example_good_tiles"))
         insert_pos += 1
 
     if bad_paths:
@@ -124,18 +291,22 @@ def _inject_example_tiles(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]
             ),
         }]
         for p in bad_paths:
-            url = _encode_image_as_data_url(p)
-            if url:
-                content.append({"type": "image_url", "image_url": {"url": url}})
-        new_messages.insert(insert_pos, {"role": "user", "content": content})
+            image_part = _make_image_part(p, budget)
+            if image_part:
+                content.append(image_part)
+        new_messages.insert(insert_pos, _tag_context_message({"role": "user", "content": content}, "example_bad_tiles"))
 
-    print(f"[EXAMPLES] Injected {len(good_paths)} good and {len(bad_paths)} bad tiles.")
+    _logger.info("[EXAMPLES] Injected %d good and %d bad tiles.", len(good_paths), len(bad_paths))
 
     state._example_tiles_injected = True
     return new_messages
 
 
-def _inject_example_rois(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def _inject_example_rois(
+    messages: List[Dict[str, Any]],
+    *,
+    budget: Optional[_InlineImageBudget] = None,
+) -> List[Dict[str, Any]]:
     if state._example_rois_injected:
         return messages
 
@@ -155,10 +326,10 @@ def _inject_example_rois(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]
             ),
         }]
         for p in roi_paths:
-            url = _encode_image_as_data_url(p)
-            if url:
-                content.append({"type": "image_url", "image_url": {"url": url}})
-        new_messages.insert(insert_pos, {"role": "user", "content": content})
+            image_part = _make_image_part(p, budget)
+            if image_part:
+                content.append(image_part)
+        new_messages.insert(insert_pos, _tag_context_message({"role": "user", "content": content}, "example_roi_tiles"))
         insert_pos += 1
 
     if non_roi_paths:
@@ -170,12 +341,12 @@ def _inject_example_rois(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]
             ),
         }]
         for p in non_roi_paths:
-            url = _encode_image_as_data_url(p)
-            if url:
-                content.append({"type": "image_url", "image_url": {"url": url}})
-        new_messages.insert(insert_pos, {"role": "user", "content": content})
+            image_part = _make_image_part(p, budget)
+            if image_part:
+                content.append(image_part)
+        new_messages.insert(insert_pos, _tag_context_message({"role": "user", "content": content}, "example_non_roi_tiles"))
 
-    print(f"[EXAMPLES] Injected {len(roi_paths)} ROI and {len(non_roi_paths)} non-ROI examples.")
+    _logger.info("[EXAMPLES] Injected %d ROI and %d non-ROI examples.", len(roi_paths), len(non_roi_paths))
 
     state._example_rois_injected = True
     return new_messages
@@ -188,7 +359,14 @@ def _format_field_width_caption(field_width_um: Optional[float]) -> str:
     return f", field ~{approx} µm wide"
 
 
-def _inject_wsi_images(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def _inject_wsi_images(
+    messages: List[Dict[str, Any]],
+    *,
+    budget: Optional[_InlineImageBudget] = None,
+    include_candidate_overlay: bool = True,
+    include_overview: bool = True,
+    include_previous_views: bool = True,
+) -> List[Dict[str, Any]]:
     last_tool_idx = None
     tool_name = None
     for i in range(len(messages) - 1, -1, -1):
@@ -203,8 +381,8 @@ def _inject_wsi_images(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     insert_pos = last_tool_idx + 1
 
     curr_path = state._current_view.get("debug_path") if state._current_view else None
-    curr_url = _encode_image_as_data_url(curr_path) if curr_path else None
-    if curr_url:
+    current_view_part = _make_image_part(curr_path or "", budget) if curr_path else None
+    if current_view_part:
         fw = state._current_view.get("field_width_um")
         extra = _format_field_width_caption(fw)
 
@@ -238,10 +416,10 @@ def _inject_wsi_images(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             "role": "user",
             "content": [
                 {"type": "text", "text": text},
-                {"type": "image_url", "image_url": {"url": curr_url}},
+                current_view_part,
             ],
         }
-        new_messages.insert(insert_pos, current_view_msg)
+        new_messages.insert(insert_pos, _tag_context_message(current_view_msg, "current_view"))
         insert_pos += 1
 
     if _agent_type() == "aml":
@@ -265,7 +443,7 @@ def _inject_wsi_images(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                     aml_stop_lines.append(f"- ROI #{roi.get('roi_id')}: {summary}")
         new_messages.insert(
             insert_pos,
-            {"role": "user", "content": [{"type": "text", "text": "\n".join(aml_stop_lines)}]},
+            _tag_context_message({"role": "user", "content": [{"type": "text", "text": "\n".join(aml_stop_lines)}]}, "aml_guidance"),
         )
         insert_pos += 1
 
@@ -366,15 +544,16 @@ def _inject_wsi_images(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             + aml_meta_line
         )
         candidate_content = [{"type": "text", "text": cand_text}]
-        cand_overlay_url = _encode_image_as_data_url(state._last_roi_candidate_overlay_path or "")
-        if cand_overlay_url:
-            candidate_content.append({"type": "image_url", "image_url": {"url": cand_overlay_url}})
-        new_messages.insert(insert_pos, {"role": "user", "content": candidate_content})
+        if include_candidate_overlay:
+            overlay_part = _make_image_part(state._last_roi_candidate_overlay_path or "", budget)
+            if overlay_part:
+                candidate_content.append(overlay_part)
+        new_messages.insert(insert_pos, _tag_context_message({"role": "user", "content": candidate_content}, "roi_candidates"))
         insert_pos += 1
 
-    if state._last_overview_with_box_path:
-        url = _encode_image_as_data_url(state._last_overview_with_box_path)
-        if url:
+    if include_overview and state._last_overview_with_box_path:
+        overview_part = _make_image_part(state._last_overview_with_box_path, budget)
+        if overview_part:
             fw = state._current_view.get("field_width_um") if state._current_view else None
             extra = _format_field_width_caption(fw)
             overview_msg = {
@@ -384,17 +563,17 @@ def _inject_wsi_images(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                         "type": "text",
                         "text": f"Whole-slide overview (red box = current view{extra}).",
                     },
-                    {"type": "image_url", "image_url": {"url": url}},
+                    overview_part,
                 ],
             }
-            new_messages.insert(insert_pos, overview_msg)
+            new_messages.insert(insert_pos, _tag_context_message(overview_msg, "overview"))
             insert_pos += 1
 
-    prev_view_limit = max(0, CONTEXT_PREVIOUS_VIEWS_MAX)
+    prev_view_limit = max(0, CONTEXT_PREVIOUS_VIEWS_MAX if include_previous_views else 0)
     if prev_view_limit:
         for view in state._view_history[-prev_view_limit:]:
-            url = _encode_image_as_data_url(view["debug_path"])
-            if not url:
+            image_part = _make_image_part(view["debug_path"], budget)
+            if not image_part:
                 continue
             fw = view.get("field_width_um")
             extra = _format_field_width_caption(fw)
@@ -406,75 +585,109 @@ def _inject_wsi_images(messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
                         "type": "text",
                         "text": f"Previous view ({tag}{extra}).",
                     },
-                    {"type": "image_url", "image_url": {"url": url}},
+                    image_part,
                 ],
             }
-            new_messages.append(view_msg)
+            new_messages.append(_tag_context_message(view_msg, "previous_view"))
 
     return new_messages
 
 
-async def _patched_async_chat_create(*args, **kwargs):
-    msgs = kwargs.get("messages")
-    if isinstance(msgs, list):
-        msgs = _inject_example_rois(msgs)
-        msgs = _inject_example_tiles(msgs)
-        kwargs["messages"] = _inject_wsi_images(msgs)
-    if isinstance(msgs, list):
+def _make_chat_request(create_fn, messages, model_name, exc_context):
+    """Prepare messages, handle context length errors, and trace requests."""
+    original_msgs = messages
+    prepared_msgs = None
+    if isinstance(original_msgs, list):
+        prepared_msgs = _prepare_messages_for_request(original_msgs, minimal=False)
+        exc_context["messages"] = prepared_msgs
         _append_trace(
             {
                 "type": "request",
                 "timestamp": datetime.utcnow().isoformat(),
-                "model": kwargs.get("model", MODEL_NAME),
-                "messages": _redact_messages_for_trace(msgs),
+                "model": model_name,
+                "messages": _redact_messages_for_trace(prepared_msgs),
             }
         )
-    resp = await _real_async_chat_create(*args, **kwargs)
+    return prepared_msgs, original_msgs
+
+
+def _handle_context_length_error(
+    exc: Exception,
+    original_msgs: Optional[List[Dict[str, Any]]],
+    model_name: str,
+) -> bool:
+    """Check if exception is a context length error and prepare fallback messages."""
+    if not (isinstance(original_msgs, list) and _is_context_length_error(exc)):
+        return False
+    return True
+
+
+def _trace_response(resp: Any, model_name: str) -> None:
+    """Trace the response content and reasoning."""
     try:
         choice = resp.choices[0] if resp and resp.choices else None
         _append_trace(
             {
                 "type": "response",
                 "timestamp": datetime.utcnow().isoformat(),
-                "model": kwargs.get("model", MODEL_NAME),
+                "model": model_name,
                 "content": getattr(choice.message, "content", None) if choice else None,
                 "reasoning": getattr(choice.message, "reasoning", None) if choice else None,
             }
         )
     except Exception:
         pass
+
+
+async def _patched_async_chat_create(*args, **kwargs):
+    model_name = kwargs.get("model", MODEL_NAME)
+    prepared_msgs, original_msgs = _make_chat_request(_real_async_chat_create, kwargs.get("messages"), model_name, {})
+
+    try:
+        resp = await _real_async_chat_create(*args, **kwargs)
+    except Exception as exc:
+        if not _handle_context_length_error(exc, original_msgs, model_name):
+            raise
+        fallback_msgs = _prepare_messages_for_request(original_msgs, minimal=True)
+        kwargs["messages"] = fallback_msgs
+        _append_trace(
+            {
+                "type": "context_retry",
+                "timestamp": datetime.utcnow().isoformat(),
+                "model": model_name,
+                "reason": str(exc),
+                "messages": _redact_messages_for_trace(fallback_msgs),
+            }
+        )
+        resp = await _real_async_chat_create(*args, **kwargs)
+
+    _trace_response(resp, model_name)
     return resp
 
 
 def _patched_sync_chat_create(*args, **kwargs):
-    msgs = kwargs.get("messages")
-    if isinstance(msgs, list):
-        msgs = _inject_example_rois(msgs)
-        msgs = _inject_example_tiles(msgs)
-        kwargs["messages"] = _inject_wsi_images(msgs)
-    if isinstance(msgs, list):
-        _append_trace(
-            {
-                "type": "request",
-                "timestamp": datetime.utcnow().isoformat(),
-                "model": kwargs.get("model", MODEL_NAME),
-                "messages": _redact_messages_for_trace(msgs),
-            }
-        )
-    resp = _real_sync_chat_create(*args, **kwargs)
+    model_name = kwargs.get("model", MODEL_NAME)
+    prepared_msgs, original_msgs = _make_chat_request(_real_sync_chat_create, kwargs.get("messages"), model_name, {})
+
     try:
-        choice = resp.choices[0] if resp and resp.choices else None
+        resp = _real_sync_chat_create(*args, **kwargs)
+    except Exception as exc:
+        if not _handle_context_length_error(exc, original_msgs, model_name):
+            raise
+        fallback_msgs = _prepare_messages_for_request(original_msgs, minimal=True)
+        kwargs["messages"] = fallback_msgs
         _append_trace(
             {
-                "type": "response",
+                "type": "context_retry",
                 "timestamp": datetime.utcnow().isoformat(),
-                "model": kwargs.get("model", MODEL_NAME),
-                "content": getattr(choice.message, "content", None) if choice else None,
-                "reasoning": getattr(choice.message, "reasoning", None) if choice else None,
+                "model": model_name,
+                "reason": str(exc),
+                "messages": _redact_messages_for_trace(fallback_msgs),
             }
         )
-    except Exception:
-        pass
+        resp = _real_sync_chat_create(*args, **kwargs)
+
+    _trace_response(resp, model_name)
     return resp
 
 

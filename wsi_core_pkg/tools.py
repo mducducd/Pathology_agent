@@ -47,13 +47,13 @@ ROI_CANDIDATE_TOP_K_AML = int(os.getenv("ROI_CANDIDATE_TOP_K_AML", "30"))
 ROI_RANKER_BATCH_SIZE = int(os.getenv("ROI_RANKER_BATCH_SIZE", "32"))
 ROI_RANKER_MAX_WORKERS = int(os.getenv("ROI_RANKER_MAX_WORKERS", "4"))
 ROI_COARSE_PREFILTER_TRIGGER_SUPERTILES = int(os.getenv("ROI_COARSE_PREFILTER_TRIGGER_SUPERTILES", "128"))
-ROI_COARSE_PREFILTER_KEEP_RATIO = float(os.getenv("ROI_COARSE_PREFILTER_KEEP_RATIO", "0.30"))
-ROI_COARSE_PREFILTER_MIN_KEEP_SUPERTILES = int(os.getenv("ROI_COARSE_PREFILTER_MIN_KEEP_SUPERTILES", "48"))
-ROI_COARSE_PREFILTER_MAX_KEEP_SUPERTILES = int(os.getenv("ROI_COARSE_PREFILTER_MAX_KEEP_SUPERTILES", "72"))
-ROI_QUALITY_PREFILTER_KEEP_RATIO = float(os.getenv("ROI_QUALITY_PREFILTER_KEEP_RATIO", "0.35"))
+ROI_COARSE_PREFILTER_KEEP_RATIO = float(os.getenv("ROI_COARSE_PREFILTER_KEEP_RATIO", "0.22"))
+ROI_COARSE_PREFILTER_MIN_KEEP_SUPERTILES = int(os.getenv("ROI_COARSE_PREFILTER_MIN_KEEP_SUPERTILES", "36"))
+ROI_COARSE_PREFILTER_MAX_KEEP_SUPERTILES = int(os.getenv("ROI_COARSE_PREFILTER_MAX_KEEP_SUPERTILES", "56"))
+ROI_QUALITY_PREFILTER_KEEP_RATIO = float(os.getenv("ROI_QUALITY_PREFILTER_KEEP_RATIO", "0.25"))
 ROI_QUALITY_PREFILTER_MIN_KEEP_TILES = int(os.getenv("ROI_QUALITY_PREFILTER_MIN_KEEP_TILES", "4"))
 ROI_QUALITY_PREFILTER_TRIGGER_TILES = int(os.getenv("ROI_QUALITY_PREFILTER_TRIGGER_TILES", "12"))
-ROI_QUALITY_PREFILTER_RANDOM_RESERVE_RATIO = float(os.getenv("ROI_QUALITY_PREFILTER_RANDOM_RESERVE_RATIO", "0.08"))
+ROI_QUALITY_PREFILTER_RANDOM_RESERVE_RATIO = float(os.getenv("ROI_QUALITY_PREFILTER_RANDOM_RESERVE_RATIO", "0.05"))
 ROI_TILE_CACHE_DIR = os.getenv("ROI_TILE_CACHE_DIR", "").strip()
 DARK_REGION_THRESHOLD_PCT = int(os.getenv("DARK_REGION_THRESHOLD_PCT", "85"))
 DARK_REGION_MIN_AREA = int(os.getenv("DARK_REGION_MIN_AREA", "800"))
@@ -105,14 +105,12 @@ def _selected_candidate_source(aml_mode: bool) -> str:
 
 
 def _quality_hint_bonus(candidate: Dict[str, Any]) -> float:
-    hint = str(candidate.get("quality_hint") or "uncertain")
+    hint = str(candidate.get("quality_hint") or "good_like")
     if hint == "good_like":
         return 1.0
-    if hint == "uncertain":
-        return 0.5
     if hint == "bad_like":
         return 0.0
-    return 0.25
+    return 0.5
 
 
 def _postprocess_roi_candidates_for_view(
@@ -153,7 +151,6 @@ def _postprocess_roi_candidates_for_view(
 
     if aml_mode and processed:
         # HARD REJECT: Filter out bad_like candidates BEFORE ranking
-        # Quality hint now combines embedding retrieval + SSIM agreement
         non_bad_candidates = [
             candidate for candidate in processed
             if str(candidate.get("quality_hint") or "uncertain") != "bad_like"
@@ -210,22 +207,7 @@ def _postprocess_roi_candidates_for_view(
             reverse=True,
         )
 
-        good_like_candidates = [
-            candidate for candidate in candidates_ranked
-            if str(candidate.get("quality_hint") or "uncertain") == "good_like"
-        ]
-        uncertain_candidates = [
-            candidate for candidate in candidates_ranked
-            if str(candidate.get("quality_hint") or "uncertain") == "uncertain"
-        ]
-
-        if good_like_candidates:
-            processed = (good_like_candidates + uncertain_candidates)[:ROI_CANDIDATE_TOP_K_AML]
-        elif uncertain_candidates:
-            processed = uncertain_candidates[:ROI_CANDIDATE_TOP_K_AML]
-        else:
-            meta["bad_like_only_view"] = True
-            processed = []
+        processed = candidates_ranked[:ROI_CANDIDATE_TOP_K_AML]
 
     return processed, source, meta
 
@@ -464,7 +446,7 @@ def _ensure_unsupervised_roi_index():
             k_neighbors=20,
             use_reference_labels=aml_mode,
             reference_tiles_root=EXAMPLE_TILES_ROOT if aml_mode else None,
-            quality_method="ssim",  # SSIM only - embedding retrieval removed
+            quality_method="embedding",
             progress_cb=_on_progress,
         )
         state._roi_ranker_index = index

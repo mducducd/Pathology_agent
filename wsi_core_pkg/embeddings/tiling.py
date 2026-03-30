@@ -276,7 +276,6 @@ def _tiles_with_tissue(
     quality_kept_tiles = 0
     quality_pool_tiles = 0
     quality_hard_rejected_tiles = 0
-    dark_region_filtered_tiles = 0
 
     if use_quality_prefilter and progress_cb is not None:
         progress_cb(
@@ -332,7 +331,6 @@ def _tiles_with_tissue(
                         if bx0 <= tile_center_x_px < bx1 and by0 <= tile_center_y_px < by1:
                             filtered_tiles.append(tile)
                             break
-            dark_region_filtered_tiles += len(tiles) - len(filtered_tiles)
             tiles = filtered_tiles
 
         if not tiles:
@@ -416,43 +414,6 @@ def _split_supertile_into_tiles(
     return out
 
 
-def _tiles(
-    slide: openslide.AbstractSlide,
-    *,
-    tile_size_um: Microns,
-    tile_size_px: TilePixels,
-    max_supertile_size_slide_px: SlidePixels,
-    max_workers: int,
-    brightness_cutoff: int | None,
-    default_slide_mpp: SlideMPP | None,
-    coarse_trigger_supertile_count: int | None,
-    coarse_keep_ratio: float | None,
-    coarse_min_keep_supertile_count: int,
-    coarse_max_keep_supertile_count: int | None,
-    progress_cb: Callable[[dict[str, Any]], None] | None,
-) -> Iterator[_Tile[Microns]]:
-    for supertile, supertile_coords_um, supertile_size_um in _supertiles(
-        slide=slide,
-        tile_size_um=tile_size_um,
-        tile_size_px=tile_size_px,
-        max_supertile_size_slide_px=max_supertile_size_slide_px,
-        max_workers=max_workers,
-        brightness_cutoff=brightness_cutoff,
-        default_slide_mpp=default_slide_mpp,
-        coarse_trigger_supertile_count=coarse_trigger_supertile_count,
-        coarse_keep_ratio=coarse_keep_ratio,
-        coarse_min_keep_supertile_count=coarse_min_keep_supertile_count,
-        coarse_max_keep_supertile_count=coarse_max_keep_supertile_count,
-        progress_cb=progress_cb,
-    ):
-        yield from _split_supertile_into_tiles(
-            supertile=supertile,
-            supertile_coords_um=supertile_coords_um,
-            tile_size_um=tile_size_um,
-            tile_size_px=tile_size_px,
-        )
-
-
 def _foreground_grid(
     slide: openslide.AbstractSlide,
     tile_size_slide_px: SlidePixels,
@@ -493,23 +454,6 @@ def _foreground_grid(
         thumb_grayscale = np.where(bounded_mask, thumb_grayscale, 255).astype(np.int32, copy=False)
 
     return is_foreground, thumb_grayscale
-
-
-def _foreground_coords(
-    slide: openslide.AbstractSlide,
-    tile_size_slide_px: SlidePixels,
-    brightness_cutoff: int | None,
-) -> Iterator[_XYCoords[SlidePixels]]:
-    is_foreground, _ = _foreground_grid(
-        slide=slide,
-        tile_size_slide_px=tile_size_slide_px,
-        brightness_cutoff=brightness_cutoff,
-    )
-
-    for y_slide_px in range(0, slide.dimensions[1], int(tile_size_slide_px)):
-        for x_slide_px in range(0, slide.dimensions[0], int(tile_size_slide_px)):
-            if is_foreground[y_slide_px // int(tile_size_slide_px), x_slide_px // int(tile_size_slide_px)]:
-                yield _XYCoords(SlidePixels(x_slide_px), SlidePixels(y_slide_px))
 
 
 def _mean_filter3(x: npt.NDArray[np.float32]) -> npt.NDArray[np.float32]:

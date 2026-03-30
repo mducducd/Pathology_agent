@@ -17,7 +17,7 @@ TILE_SIZE_UM: float = 256.0
 TILE_SIZE_PX: int = 224
 BATCH_SIZE: int = 128
 TILE_PREFILTER_METHOD: str = "quality"
-QUALITY_METHOD: str = "ssim"  # "ssim" only (embedding retrieval removed)
+QUALITY_METHOD: str = "embedding"
 
 _slide: Optional[openslide.AbstractSlide] = None
 
@@ -66,7 +66,7 @@ def reset_wsi_state(
     tile_size_px: int = 224,
     batch_size: int = 128,
     tile_prefilter_method: str = "quality",
-    quality_method: str = "ssim",
+    quality_method: str = "embedding",
 ) -> None:
     global RUN_ID, AGENT_TYPE, EXTRACTOR_NAME, TILE_SIZE_UM, TILE_SIZE_PX, BATCH_SIZE, TILE_PREFILTER_METHOD, QUALITY_METHOD, _debug_img_counter, DEBUG_SAVE_DIR
     global _step_log, _roi_marks, _view_history
@@ -86,7 +86,7 @@ def reset_wsi_state(
     TILE_SIZE_PX = tile_size_px
     BATCH_SIZE = int(batch_size)
     TILE_PREFILTER_METHOD = str(tile_prefilter_method or "quality").strip().lower()
-    QUALITY_METHOD = str(quality_method or "ssim").strip().lower()
+    QUALITY_METHOD = str(quality_method or "embedding").strip().lower()
 
     _debug_img_counter = 0
     DEBUG_SAVE_DIR = os.path.join(DEBUG_ROOT_DIR, RUN_ID, "wsi_debug")
@@ -151,7 +151,7 @@ def clear_wsi_outputs_state() -> None:
     AGENT_TYPE = "wsi"
     BATCH_SIZE = 128
     TILE_PREFILTER_METHOD = "quality"
-    QUALITY_METHOD = "ssim"
+    QUALITY_METHOD = "embedding"
     _roi_marks = []
     _view_history = []
     _current_view = {}
