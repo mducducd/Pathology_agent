@@ -48,6 +48,7 @@ _last_roi_candidate_view_key: Optional[Any] = None
 _last_roi_candidate_top_k: Optional[int] = None
 _dark_region_boxes_level0: List[Dict[str, Any]] = []
 _dark_region_slide_path: Optional[str] = None
+_dark_region_cache_signature: Optional[Any] = None
 
 TRACE_DIR: Optional[str] = None
 TRACE_FILE_PATH: Optional[str] = None
@@ -75,7 +76,7 @@ def reset_wsi_state(
     global _roi_ranker_index, _roi_ranker_meta, _roi_candidate_prep
     global _last_roi_candidates, _last_roi_candidate_meta, _last_roi_candidate_source, _last_roi_candidate_overlay_path
     global _last_roi_candidate_view_key, _last_roi_candidate_top_k
-    global _dark_region_boxes_level0, _dark_region_slide_path
+    global _dark_region_boxes_level0, _dark_region_slide_path, _dark_region_cache_signature
     global TRACE_DIR, TRACE_FILE_PATH
     global HAS_FATAL_ERROR, LAST_FATAL_ERROR
 
@@ -118,6 +119,7 @@ def reset_wsi_state(
     _last_roi_candidate_top_k = None
     _dark_region_boxes_level0 = []
     _dark_region_slide_path = None
+    _dark_region_cache_signature = None
     HAS_FATAL_ERROR = False
     LAST_FATAL_ERROR = None
 
@@ -144,7 +146,7 @@ def clear_wsi_outputs_state() -> None:
     global _roi_ranker_index, _roi_ranker_meta, _roi_candidate_prep
     global _last_roi_candidates, _last_roi_candidate_meta, _last_roi_candidate_source, _last_roi_candidate_overlay_path
     global _last_roi_candidate_view_key, _last_roi_candidate_top_k
-    global _dark_region_boxes_level0, _dark_region_slide_path
+    global _dark_region_boxes_level0, _dark_region_slide_path, _dark_region_cache_signature
     global HAS_FATAL_ERROR, LAST_FATAL_ERROR
 
     _step_log = []
@@ -173,6 +175,7 @@ def clear_wsi_outputs_state() -> None:
     _last_roi_candidate_top_k = None
     _dark_region_boxes_level0 = []
     _dark_region_slide_path = None
+    _dark_region_cache_signature = None
     HAS_FATAL_ERROR = False
     LAST_FATAL_ERROR = None
 

@@ -108,6 +108,129 @@ def _expand_box(box: Dict[str, int], width: int, height: int, pad: int) -> Dict[
     }
 
 
+def _box_bounds(box: Dict[str, int]) -> tuple[int, int, int, int]:
+    x0 = int(box["x"])
+    y0 = int(box["y"])
+    x1 = x0 + int(box["w"])
+    y1 = y0 + int(box["h"])
+    return x0, y0, x1, y1
+
+
+def _box_from_bounds(
+    x0: int,
+    y0: int,
+    x1: int,
+    y1: int,
+    *,
+    area: int,
+) -> Dict[str, int]:
+    return {
+        "x": int(x0),
+        "y": int(y0),
+        "w": max(1, int(x1) - int(x0)),
+        "h": max(1, int(y1) - int(y0)),
+        "area": int(max(1, area)),
+    }
+
+
+def _trim_box_to_tissue(
+    box: Dict[str, int],
+    tissue_mask: np.ndarray,
+    *,
+    line_threshold: float = 0.72,
+    min_side: int = 6,
+) -> Dict[str, int] | None:
+    x0, y0, x1, y1 = _box_bounds(box)
+    h, w = tissue_mask.shape
+    x0 = max(0, min(x0, w - 1))
+    y0 = max(0, min(y0, h - 1))
+    x1 = max(x0 + 1, min(x1, w))
+    y1 = max(y0 + 1, min(y1, h))
+
+    changed = True
+    while changed and (x1 - x0) >= min_side and (y1 - y0) >= min_side:
+        changed = False
+        if np.mean(tissue_mask[y0, x0:x1]) < line_threshold:
+            y0 += 1
+            changed = True
+        if np.mean(tissue_mask[y1 - 1, x0:x1]) < line_threshold:
+            y1 -= 1
+            changed = True
+        if x1 - x0 < min_side or y1 - y0 < min_side:
+            break
+        if np.mean(tissue_mask[y0:y1, x0]) < line_threshold:
+            x0 += 1
+            changed = True
+        if np.mean(tissue_mask[y0:y1, x1 - 1]) < line_threshold:
+            x1 -= 1
+            changed = True
+
+    if (x1 - x0) < min_side or (y1 - y0) < min_side:
+        return None
+    return _box_from_bounds(x0, y0, x1, y1, area=min(int(box.get("area", 1)), (x1 - x0) * (y1 - y0)))
+
+
+def _box_touches_tissue_edge(box: Dict[str, int], tissue_mask: np.ndarray) -> bool:
+    x0, y0, x1, y1 = _box_bounds(box)
+    box_mask = tissue_mask[y0:y1, x0:x1]
+    if box_mask.size == 0:
+        return True
+
+    tissue_fraction = float(np.mean(box_mask))
+    if tissue_fraction < 0.94:
+        return True
+
+    h, w = box_mask.shape
+    band = max(1, int(round(min(h, w) * 0.12)))
+    band = min(band, max(1, min(h, w) // 2))
+
+    top = box_mask[:band, :]
+    bottom = box_mask[h - band :, :]
+    left = box_mask[:, :band]
+    right = box_mask[:, w - band :]
+    side_tissue_fraction = np.asarray(
+        [np.mean(top), np.mean(bottom), np.mean(left), np.mean(right)],
+        dtype=np.float32,
+    )
+    if np.any(side_tissue_fraction < 0.86):
+        return True
+
+    corners = (
+        box_mask[:band, :band],
+        box_mask[:band, w - band :],
+        box_mask[h - band :, :band],
+        box_mask[h - band :, w - band :],
+    )
+    corner_tissue_fraction = np.asarray([np.mean(corner) for corner in corners], dtype=np.float32)
+    if np.any(corner_tissue_fraction < 0.82):
+        return True
+
+    border_mask = np.zeros_like(box_mask, dtype=bool)
+    border_mask[:band, :] = True
+    border_mask[h - band :, :] = True
+    border_mask[:, :band] = True
+    border_mask[:, w - band :] = True
+    border_tissue_fraction = float(np.mean(box_mask[border_mask]))
+    return border_tissue_fraction < 0.90
+
+
+def _refine_dark_region_boxes(
+    boxes: List[Dict[str, int]],
+    tissue_mask: np.ndarray,
+) -> List[Dict[str, int]]:
+    refined: List[Dict[str, int]] = []
+    for box in boxes:
+        trimmed = _trim_box_to_tissue(box, tissue_mask)
+        if trimmed is None:
+            continue
+        if _box_touches_tissue_edge(trimmed, tissue_mask):
+            continue
+        refined.append(trimmed)
+
+    refined.sort(key=lambda b: b["area"], reverse=True)
+    return refined
+
+
 def _grow_mask_within(base_mask: np.ndarray, seed_mask: np.ndarray, steps: int) -> np.ndarray:
     grown = seed_mask.astype(bool, copy=True)
     allowed = base_mask.astype(bool, copy=False)
@@ -161,7 +284,7 @@ def _select_dark_core_boxes(
 
     region_mask = core_mask
     if core_boxes:
-        growth_steps = max(6, int(round(min(out_w, out_h) * 0.012)))
+        growth_steps = max(4, int(round(min(out_w, out_h) * 0.008)))
         grown_mask = _grow_mask_within(base_mask, core_mask, steps=growth_steps)
         if np.any(grown_mask):
             region_mask = grown_mask
@@ -175,10 +298,10 @@ def _select_dark_core_boxes(
         min_area=region_min_area,
     )
     boxes = region_boxes if region_boxes else core_boxes
-    pad = max(3, int(round(min(out_w, out_h) * 0.010)))
+    pad = max(2, int(round(min(out_w, out_h) * 0.005)))
     expanded = [_expand_box(box, out_w, out_h, pad) for box in boxes]
-    expanded.sort(key=lambda b: b["area"], reverse=True)
-    return expanded[:max_regions]
+    refined = _refine_dark_region_boxes(expanded, tissue_mask)
+    return refined[:max_regions]
 
 
 def detect_dark_regions(
@@ -282,7 +405,7 @@ def detect_dark_regions(
             mask = mask_np.reshape(-1).tolist()
             boxes = _find_connected_components(mask, out_w, out_h, min_area=min_area)
             boxes.sort(key=lambda b: b["area"], reverse=True)
-            boxes = boxes[:max_regions]
+            boxes = _refine_dark_region_boxes(boxes[:max_regions], tissue_mask)
 
         base_w0, base_h0 = slide.level_dimensions[0]
         scale_x = base_w0 / float(out_w)

@@ -1,3 +1,5 @@
+import hashlib
+import json
 import os
 from datetime import datetime
 from pathlib import Path
@@ -27,6 +29,7 @@ from .embeddings.roi_ranker import (
     build_unsupervised_roi_index,
     select_topk_candidates_for_view,
 )
+from .embeddings.tile_prefilter import tile_touches_tissue_edge
 from .slide_utils import (
     _bbox_from_norm_with_aspect_controls,
     _get_mpp_um,
@@ -60,6 +63,8 @@ DARK_REGION_THRESHOLD_PCT = int(os.getenv("DARK_REGION_THRESHOLD_PCT", "85"))
 DARK_REGION_MIN_AREA = int(os.getenv("DARK_REGION_MIN_AREA", "800"))
 DARK_REGION_MAX_REGIONS = int(os.getenv("DARK_REGION_MAX_REGIONS", "30"))
 DARK_REGION_MAX_DIM = int(os.getenv("DARK_REGION_MAX_DIM", "1024"))
+DARK_REGION_PIPELINE_VERSION = 2
+ROI_INDEX_PIPELINE_VERSION = 2
 
 
 def _selected_batch_size() -> int:
@@ -144,7 +149,7 @@ def _postprocess_roi_candidates_for_view(
     aml_mode: bool,
     source: Optional[str],
 ) -> tuple[List[Dict[str, Any]], Optional[str], Dict[str, Any]]:
-    processed = list(candidates)
+    processed = _filter_edge_touching_candidates_for_current_view(list(candidates))
     meta: Dict[str, Any] = {
         "bad_like_only_view": False,
         "bad_like_hidden_count": 0,
@@ -171,7 +176,7 @@ def _postprocess_roi_candidates_for_view(
             if not processed and ROI_CANDIDATE_ALLOW_FALLBACK:
                 fallback = _fallback_candidates_from_current_view(top_k)
                 if fallback:
-                    processed = fallback
+                    processed = _filter_edge_touching_candidates_for_current_view(fallback)
                     source = "fallback_heuristic"
 
     if aml_mode and processed:
@@ -236,12 +241,21 @@ def _postprocess_roi_candidates_for_view(
 
 def _ensure_dark_region_boxes_level0() -> List[Dict[str, Any]]:
     cached_boxes = getattr(state, "_dark_region_boxes_level0", None)
-    cached_slide = getattr(state, "_dark_region_slide_path", None)
-    if isinstance(cached_boxes, list) and cached_slide == state.SLIDE_PATH:
+    cached_signature = getattr(state, "_dark_region_cache_signature", None)
+    signature = (
+        state.SLIDE_PATH,
+        DARK_REGION_PIPELINE_VERSION,
+        DARK_REGION_MAX_DIM,
+        DARK_REGION_THRESHOLD_PCT,
+        DARK_REGION_MIN_AREA,
+        DARK_REGION_MAX_REGIONS,
+    )
+    if isinstance(cached_boxes, list) and cached_signature == signature:
         return cached_boxes
     if not state.SLIDE_PATH or not os.path.exists(state.SLIDE_PATH) or not state.RUN_ID:
         state._dark_region_boxes_level0 = []
         state._dark_region_slide_path = state.SLIDE_PATH
+        state._dark_region_cache_signature = signature
         return []
 
     try:
@@ -261,6 +275,7 @@ def _ensure_dark_region_boxes_level0() -> List[Dict[str, Any]]:
 
     state._dark_region_boxes_level0 = boxes
     state._dark_region_slide_path = state.SLIDE_PATH
+    state._dark_region_cache_signature = signature
     return boxes
 
 
@@ -292,21 +307,11 @@ def _set_roi_candidate_prep(
 def _ensure_unsupervised_roi_index():
     cached = state._roi_ranker_index
     meta = state._roi_ranker_meta or {}
-    if cached is not None and meta.get("slide_path") == state.SLIDE_PATH:
-        cached_source = _selected_candidate_source(
-            str(getattr(state, "AGENT_TYPE", "") or "").lower() == "aml"
-        )
-        _set_roi_candidate_prep(
-            phase="ready",
-            status="done",
-            message="ROI candidates already prepared for this run.",
-            extra={"source": "cache", "candidate_source": cached_source, "slide_path": state.SLIDE_PATH},
-        )
-        return cached
 
     aml_mode = str(getattr(state, "AGENT_TYPE", "") or "").lower() == "aml"
     candidate_source = _selected_candidate_source(aml_mode)
     extractor_label = _selected_extractor_label()
+    extractor_name = str(getattr(state, "EXTRACTOR_NAME", "uni2") or "uni2")
     tile_prefilter_method = _selected_tile_prefilter_method()
     use_dark_region_gating = _use_dark_region_gating(tile_prefilter_method, aml_mode=aml_mode)
     # When dark region gating is active, disable coarse/quality prefilters.
@@ -317,6 +322,28 @@ def _ensure_unsupervised_roi_index():
     # STRICT DARK REGION GATING: Detect dark regions FIRST and pass to embedding extraction
     # Only tiles within dark regions will be embedded (for AML mode)
     dark_region_boxes = _ensure_dark_region_boxes_level0() if use_dark_region_gating else []
+    dark_region_boxes_hash = (
+        hashlib.sha256(json.dumps(dark_region_boxes, sort_keys=True).encode()).hexdigest()
+        if dark_region_boxes
+        else None
+    )
+    if (
+        cached is not None
+        and meta.get("slide_path") == state.SLIDE_PATH
+        and meta.get("pipeline_version") == ROI_INDEX_PIPELINE_VERSION
+        and meta.get("extractor_name") == extractor_name
+        and meta.get("tile_prefilter_method") == tile_prefilter_method
+        and meta.get("agent_type") == getattr(state, "AGENT_TYPE", None)
+        and bool(meta.get("use_dark_region_gating")) == bool(use_dark_region_gating)
+        and meta.get("dark_region_boxes_hash") == dark_region_boxes_hash
+    ):
+        _set_roi_candidate_prep(
+            phase="ready",
+            status="done",
+            message="ROI candidates already prepared for this run.",
+            extra={"source": "cache", "candidate_source": candidate_source, "slide_path": state.SLIDE_PATH},
+        )
+        return cached
     if use_dark_region_gating and dark_region_boxes:
         _log_step(
             "wsi_dark_region_gating",
@@ -474,13 +501,17 @@ def _ensure_unsupervised_roi_index():
         state._roi_ranker_index = index
         state._roi_ranker_meta = {
             "slide_path": state.SLIDE_PATH,
+            "pipeline_version": ROI_INDEX_PIPELINE_VERSION,
             "num_tiles": index.num_tiles,
             "feature_dim": index.feature_dim,
             "extractor_id": index.extractor_id,
+            "extractor_name": extractor_name,
             "tile_size_px": index.tile_size_px,
             "tile_size_um": index.tile_size_um,
             "tile_prefilter_method": tile_prefilter_method,
             "agent_type": getattr(state, "AGENT_TYPE", None),
+            "use_dark_region_gating": bool(use_dark_region_gating),
+            "dark_region_boxes_hash": dark_region_boxes_hash,
             "reference_mode": getattr(index, "reference_mode", "none"),
             "reference_stats": dict(getattr(index, "reference_stats", {}) or {}),
         }
@@ -576,6 +607,8 @@ def _fallback_candidates_from_current_view(top_k: int) -> List[Dict[str, Any]]:
                 gray = np.asarray(patch.convert("L"), dtype=np.float32) / 255.0
                 if gray.size == 0:
                     continue
+                if tile_touches_tissue_edge(patch):
+                    continue
                 tissue = float(np.mean(gray < 0.92))
                 gx_edge = float(np.abs(np.diff(gray, axis=1)).mean()) if gray.shape[1] > 1 else 0.0
                 gy_edge = float(np.abs(np.diff(gray, axis=0)).mean()) if gray.shape[0] > 1 else 0.0
@@ -593,6 +626,10 @@ def _fallback_candidates_from_current_view(top_k: int) -> List[Dict[str, Any]]:
 
                 cx_level0 = cv_x0 + int(round((cx / 999.0) * cv_w))
                 cy_level0 = cv_y0 + int(round((cy / 999.0) * cv_h))
+                bx0_level0 = cv_x0 + int(round((x0 / max(1, w)) * cv_w))
+                by0_level0 = cv_y0 + int(round((y0 / max(1, h)) * cv_h))
+                bx1_level0 = cv_x0 + int(round((x1 / max(1, w)) * cv_w))
+                by1_level0 = cv_y0 + int(round((y1 / max(1, h)) * cv_h))
 
                 raw.append(
                     {
@@ -605,7 +642,7 @@ def _fallback_candidates_from_current_view(top_k: int) -> List[Dict[str, Any]]:
                             max(0, min(999, by1)),
                         ],
                         "center_level0": [cx_level0, cy_level0],
-                        "tile_bbox_level0": [cv_x0, cv_y0, cv_x0 + cv_w, cv_y0 + cv_h],
+                        "tile_bbox_level0": [bx0_level0, by0_level0, bx1_level0, by1_level0],
                     }
                 )
 
@@ -637,6 +674,85 @@ def _fallback_candidates_from_current_view(top_k: int) -> List[Dict[str, Any]]:
         rec["tile_index"] = -1
         out.append(rec)
     return out
+
+
+def _candidate_patch_from_current_view(
+    image: Image.Image,
+    candidate: Dict[str, Any],
+) -> Optional[Image.Image]:
+    bbox = candidate.get("bbox_norm")
+    if not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
+        return None
+
+    w, h = image.size
+    if w <= 1 or h <= 1:
+        return None
+
+    try:
+        bx0, by0, bx1, by1 = [int(v) for v in bbox]
+    except Exception:
+        return None
+
+    sx = (w - 1) / 999.0
+    sy = (h - 1) / 999.0
+    x0 = max(0, min(w - 1, int(round(bx0 * sx))))
+    y0 = max(0, min(h - 1, int(round(by0 * sy))))
+    x1 = max(x0 + 1, min(w, int(round(bx1 * sx)) + 1))
+    y1 = max(y0 + 1, min(h, int(round(by1 * sy)) + 1))
+    if x1 - x0 < 8 or y1 - y0 < 8:
+        return None
+    return image.crop((x0, y0, x1, y1))
+
+
+def _candidate_patch_from_level0(candidate: Dict[str, Any]) -> Optional[Image.Image]:
+    bbox = candidate.get("tile_bbox_level0")
+    if not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
+        return None
+
+    try:
+        x0, y0, x1, y1 = [int(v) for v in bbox]
+    except Exception:
+        return None
+
+    w = max(0, x1 - x0)
+    h = max(0, y1 - y0)
+    if w < 8 or h < 8:
+        return None
+
+    slide = _load_slide()
+    slide_w0, slide_h0 = slide.level_dimensions[0]
+    x0 = max(0, min(x0, slide_w0 - 1))
+    y0 = max(0, min(y0, slide_h0 - 1))
+    w = max(1, min(w, slide_w0 - x0))
+    h = max(1, min(h, slide_h0 - y0))
+
+    patch = slide.read_region((x0, y0), 0, (w, h)).convert("RGB")
+    if patch.size != (TILE_PX, TILE_PX):
+        patch = patch.resize((TILE_PX, TILE_PX), Image.BILINEAR)
+    return patch
+
+
+def _filter_edge_touching_candidates_for_current_view(
+    candidates: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    if not candidates or not state._current_view:
+        return candidates
+
+    debug_path = state._current_view.get("debug_path")
+    if not debug_path or not os.path.exists(debug_path):
+        return candidates
+
+    with Image.open(debug_path) as im:
+        img = im.convert("RGB")
+        filtered: List[Dict[str, Any]] = []
+        for candidate in candidates:
+            patch = _candidate_patch_from_level0(candidate)
+            if patch is None:
+                patch = _candidate_patch_from_current_view(img, candidate)
+            if patch is not None and tile_touches_tissue_edge(patch):
+                continue
+            filtered.append(candidate)
+    return filtered
 
 
 def _build_roi_candidate_overlay(candidates: List[Dict[str, Any]]) -> Optional[str]:
@@ -739,6 +855,15 @@ def _refresh_roi_candidates_for_current_view(top_k: int = ROI_CANDIDATE_TOP_K) -
         aml_mode=aml_mode,
         source=source,
     )
+    if not candidates and ROI_CANDIDATE_ALLOW_FALLBACK and source != "fallback_heuristic":
+        fallback_candidates = _fallback_candidates_from_current_view(top_k)
+        if fallback_candidates:
+            candidates, source, candidate_meta = _postprocess_roi_candidates_for_view(
+                fallback_candidates,
+                top_k=top_k,
+                aml_mode=aml_mode,
+                source="fallback_heuristic",
+            )
 
     state._last_roi_candidates = candidates
     state._last_roi_candidate_meta = candidate_meta

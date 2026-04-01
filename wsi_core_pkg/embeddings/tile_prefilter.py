@@ -106,24 +106,81 @@ def _component_shape_metrics(mask: np.ndarray) -> dict[str, float]:
     }
 
 
-def _tissue_fraction(rgb: np.ndarray, hematoxylin_map: np.ndarray, edge_mag: np.ndarray) -> float:
-    """Compute tissue fraction - non-background areas.
-
-    Background is typically very bright (>0.85 gray) with low hematoxylin and low edge content.
-    """
+def _tissue_mask(rgb: np.ndarray, hematoxylin_map: np.ndarray, edge_mag: np.ndarray) -> np.ndarray:
+    """Return a permissive tissue mask that separates stained content from glass."""
     gray = 0.299 * rgb[:, :, 0] + 0.587 * rgb[:, :, 1] + 0.114 * rgb[:, :, 2]
     channel_max = np.max(rgb, axis=2)
     channel_min = np.min(rgb, axis=2)
     chroma = channel_max - channel_min
 
-    # Tissue: not too bright, has some color variation, or has edges
-    tissue_mask = (
+    return (
         (gray < 0.85) |
         (chroma > 0.05) |
         (edge_mag > 0.02) |
         (hematoxylin_map > 0.05)
     )
+
+
+def _tissue_fraction(rgb: np.ndarray, hematoxylin_map: np.ndarray, edge_mag: np.ndarray) -> float:
+    """Compute tissue fraction - non-background areas.
+
+    Background is typically very bright (>0.85 gray) with low hematoxylin and low edge content.
+    """
+    tissue_mask = _tissue_mask(rgb, hematoxylin_map, edge_mag)
     return float(np.mean(tissue_mask))
+
+
+def _tissue_edge_contact_metrics(tissue_mask: np.ndarray) -> tuple[float, bool]:
+    """Estimate whether the tile straddles tissue and background glass."""
+    h, w = tissue_mask.shape
+    if h == 0 or w == 0:
+        return 0.0, False
+
+    tissue_fraction = float(np.mean(tissue_mask))
+    if tissue_fraction <= 0.03 or tissue_fraction >= 0.995:
+        return 0.0, False
+
+    band = max(4, int(round(min(h, w) * 0.08)))
+    band = min(band, max(1, min(h, w) // 2))
+
+    top = tissue_mask[:band, :]
+    bottom = tissue_mask[h - band :, :]
+    left = tissue_mask[:, :band]
+    right = tissue_mask[:, w - band :]
+    side_tissue_fraction = np.asarray(
+        [np.mean(top), np.mean(bottom), np.mean(left), np.mean(right)],
+        dtype=np.float32,
+    )
+    mixed_side_count = int(np.sum((side_tissue_fraction > 0.05) & (side_tissue_fraction < 0.95)))
+    background_side_count = int(np.sum(side_tissue_fraction <= 0.20))
+    tissue_side_count = int(np.sum(side_tissue_fraction >= 0.80))
+
+    border_mask = np.zeros_like(tissue_mask, dtype=bool)
+    border_mask[:band, :] = True
+    border_mask[h - band :, :] = True
+    border_mask[:, :band] = True
+    border_mask[:, w - band :] = True
+    border_tissue_fraction = float(np.mean(tissue_mask[border_mask]))
+    border_background_fraction = 1.0 - border_tissue_fraction
+
+    corners = (
+        tissue_mask[:band, :band],
+        tissue_mask[:band, w - band :],
+        tissue_mask[h - band :, :band],
+        tissue_mask[h - band :, w - band :],
+    )
+    corner_tissue_fraction = np.asarray([np.mean(corner) for corner in corners], dtype=np.float32)
+    low_tissue_corner_count = int(np.sum(corner_tissue_fraction <= 0.65))
+    very_low_tissue_corner_count = int(np.sum(corner_tissue_fraction <= 0.35))
+
+    mixed_border_score = float(np.clip(4.0 * border_tissue_fraction * (1.0 - border_tissue_fraction), 0.0, 1.0))
+    touches_tissue_edge = bool(
+        (mixed_side_count >= 1 and 0.08 <= border_tissue_fraction <= 0.92)
+        or (border_background_fraction >= 0.04 and low_tissue_corner_count >= 1)
+        or (border_background_fraction >= 0.02 and very_low_tissue_corner_count >= 1)
+        or (background_side_count >= 1 and tissue_side_count >= 1)
+    )
+    return mixed_border_score, touches_tissue_edge
 
 
 def _purple_basophilic_fraction(
@@ -343,7 +400,9 @@ def _tile_metrics(image: Image.Image) -> dict[str, float]:
     hematoxylin = float(np.mean(hematoxylin_map))
 
     # === AML CASCADE STAGE 1: Coarse screening features ===
-    tissue_frac = _tissue_fraction(rgb, hematoxylin_map, edge_mag)
+    tissue_mask = _tissue_mask(rgb, hematoxylin_map, edge_mag)
+    tissue_frac = float(np.mean(tissue_mask))
+    tissue_edge_contact, touches_tissue_edge = _tissue_edge_contact_metrics(tissue_mask)
     purple_frac = _purple_basophilic_fraction(rgb, gray, chroma, hematoxylin_map, edge_mag)
     rbc_frac = _rbc_red_fraction(rgb, gray, chroma, hematoxylin_map, edge_mag)
     eosinophilic_cellular_frac = _eosinophilic_cellular_fraction(rgb, gray, chroma, hematoxylin_map, edge_mag)
@@ -474,6 +533,8 @@ def _tile_metrics(image: Image.Image) -> dict[str, float]:
         "artifact_fraction_coarse": artifact_frac,
         "eosinophilic_cellular_fraction": eosinophilic_cellular_frac,
         "gray_black_fraction": gray_black_frac,
+        "tissue_edge_contact": tissue_edge_contact,
+        "touches_tissue_edge": float(touches_tissue_edge),
 
         # === Original metrics for compatibility and refinement stage ===
         "focus": focus,
@@ -665,6 +726,8 @@ def select_informative_tile_indices(
     red_dominant_fraction = np.asarray([m["red_dominant_fraction"] for m in metrics], dtype=np.float32)
     nucleated_to_red_ratio = np.asarray([m["nucleated_to_red_ratio"] for m in metrics], dtype=np.float32)
     artifact_fraction = np.asarray([m["artifact_fraction"] for m in metrics], dtype=np.float32)
+    tissue_edge_contact = np.asarray([m["tissue_edge_contact"] for m in metrics], dtype=np.float32)
+    touches_tissue_edge = np.asarray([m["touches_tissue_edge"] > 0.5 for m in metrics], dtype=np.bool_)
 
     # === CASCADE HARD REJECTION: Background removal + color screening ===
     # AML ROI selection: background removal -> color screening -> morphology refinement
@@ -694,7 +757,8 @@ def select_informative_tile_indices(
         (hematoxylin > 0.055) &
         (artifact_coarse <= 0.42) &
         (gray_black_fraction <= 0.34) &
-        (rbc_fraction <= 0.64)
+        (rbc_fraction <= 0.64) &
+        (~touches_tissue_edge)
     )
 
     # Hard reject: background (no tissue), no purple signal, too much RBC, severe artifacts
@@ -707,7 +771,8 @@ def select_informative_tile_indices(
         (artifact_coarse <= 0.33) &
         (gray_black_fraction <= 0.30) &
         (coarse_scores >= coarse_score_floor) &
-        (brightness <= 0.86)
+        (brightness <= 0.86) &
+        (~touches_tissue_edge)
     )
 
     stringy_reject = (
@@ -722,13 +787,26 @@ def select_informative_tile_indices(
             (nuclei_component_mean_circularity <= 0.20)
         )
     )
-    hard_keep = (standard_keep | chromatic_cellular_indicator | purple_rescue_indicator) & ~stringy_reject
+    edge_reject = touches_tissue_edge | ((tissue_edge_contact >= 0.40) & (tissue_fraction < 0.995))
+    hard_keep = (standard_keep | chromatic_cellular_indicator | purple_rescue_indicator) & ~stringy_reject & ~edge_reject
 
     pool = np.nonzero(hard_keep)[0]
     hard_rejected_tiles = int(total_tiles - int(pool.size))
     if pool.size == 0:
-        # Fallback: keep at least some tiles if all rejected
-        pool = np.argsort(coarse_scores)[::-1][: max(min_keep_tiles, int(total_tiles * 0.2))]
+        # Keep the fallback free of tissue-edge-contaminated tiles. If nothing clean
+        # remains, return an empty selection rather than reintroducing edge boxes.
+        fallback_candidates = np.nonzero(~edge_reject)[0]
+        if fallback_candidates.size == 0:
+            return TileQualitySelection(
+                selected_indices=[],
+                total_tiles=total_tiles,
+                pool_tiles=0,
+                hard_rejected_tiles=hard_rejected_tiles,
+                reserved_tiles=0,
+            )
+        order = np.argsort(coarse_scores[fallback_candidates])[::-1]
+        keep_count = max(min_keep_tiles, int(total_tiles * 0.2))
+        pool = fallback_candidates[order[:keep_count]]
         hard_rejected_tiles = total_tiles - len(pool)
 
     if pool.size <= max(1, int(trigger_tile_count)):
@@ -840,4 +918,15 @@ def select_informative_tile_indices(
     )
 
 
-__all__ = ["TileQualitySelection", "score_dark_informative_roi", "select_informative_tile_indices"]
+def tile_touches_tissue_edge(image: Image.Image) -> bool:
+    """Return True when a tile mixes tissue with background along its border."""
+    metrics = _tile_metrics(image)
+    return bool(metrics["touches_tissue_edge"] > 0.5)
+
+
+__all__ = [
+    "TileQualitySelection",
+    "score_dark_informative_roi",
+    "select_informative_tile_indices",
+    "tile_touches_tissue_edge",
+]

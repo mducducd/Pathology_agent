@@ -45,8 +45,16 @@ AML_REFERENCE_LOGIT_SCALE = float(os.getenv("AML_REFERENCE_LOGIT_SCALE", "4.0"))
 AML_REFERENCE_EVIDENCE_PER_CLASS = int(os.getenv("AML_REFERENCE_EVIDENCE_PER_CLASS", "3"))
 AML_DISABLE_BAD_REFERENCES = os.getenv("AML_DISABLE_BAD_REFERENCES", "false").lower() in ("true", "1", "yes")
 AML_BAD_TOP1_REJECT_THRESHOLD = float(os.getenv("AML_BAD_TOP1_REJECT_THRESHOLD", "0.60"))
-AML_BAD_TOP1_AMBIGUOUS_THRESHOLD = float(os.getenv("AML_BAD_TOP1_AMBIGUOUS_THRESHOLD", "0.52"))
-AML_GOOD_BAD_TOP1_MIN_GAP = float(os.getenv("AML_GOOD_BAD_TOP1_MIN_GAP", "0.05"))
+AML_BAD_TOP1_AMBIGUOUS_THRESHOLD = float(os.getenv("AML_BAD_TOP1_AMBIGUOUS_THRESHOLD", "0.48"))
+AML_GOOD_BAD_TOP1_MIN_GAP = float(os.getenv("AML_GOOD_BAD_TOP1_MIN_GAP", "0.08"))
+AML_BAD_LIKE_REJECT_THRESHOLD = float(os.getenv("AML_BAD_LIKE_REJECT_THRESHOLD", "0.60"))
+AML_BAD_MARGIN_REJECT_THRESHOLD = float(os.getenv("AML_BAD_MARGIN_REJECT_THRESHOLD", "-0.02"))
+AML_GOOD_LIKE_MARGIN_THRESHOLD = float(os.getenv("AML_GOOD_LIKE_MARGIN_THRESHOLD", "0.04"))
+AML_GOOD_LIKE_BAD_LIKELIHOOD_MAX = float(os.getenv("AML_GOOD_LIKE_BAD_LIKELIHOOD_MAX", "0.44"))
+AML_GOOD_LIKE_TOP1_GAP = float(os.getenv("AML_GOOD_LIKE_TOP1_GAP", "0.04"))
+AML_BORDERLINE_BAD_LIKELIHOOD = float(os.getenv("AML_BORDERLINE_BAD_LIKELIHOOD", "0.52"))
+AML_BORDERLINE_BAD_MARGIN_MAX = float(os.getenv("AML_BORDERLINE_BAD_MARGIN_MAX", "0.04"))
+AML_BORDERLINE_BAD_TOP1_GAP = float(os.getenv("AML_BORDERLINE_BAD_TOP1_GAP", "0.03"))
 AML_DARK_PRIOR_WEIGHT = float(os.getenv("AML_DARK_PRIOR_WEIGHT", "0.45"))
 AML_DARK_VIEW_PERCENTILE = float(os.getenv("AML_DARK_VIEW_PERCENTILE", "50.0"))
 AML_DARK_VIEW_MIN_TILES = int(os.getenv("AML_DARK_VIEW_MIN_TILES", "8"))
@@ -241,9 +249,9 @@ def _bad_reference_reject_mask(
             & ((good_top1 - bad_top1) <= AML_GOOD_BAD_TOP1_MIN_GAP)
         )
     if bad_like is not None and bad_like.ndim == 1 and bad_like.shape == bad_top1.shape:
-        reject |= bad_like >= 0.62
+        reject |= bad_like >= AML_BAD_LIKE_REJECT_THRESHOLD
     if bad_margin is not None and bad_margin.ndim == 1 and bad_margin.shape == bad_top1.shape:
-        reject |= bad_margin <= -0.08
+        reject |= bad_margin <= AML_BAD_MARGIN_REJECT_THRESHOLD
     return reject
 
 
@@ -262,8 +270,8 @@ def _bad_reference_is_rejected(
             bad_top1_val >= AML_BAD_TOP1_AMBIGUOUS_THRESHOLD
             and (float(good_top1) - bad_top1_val) <= AML_GOOD_BAD_TOP1_MIN_GAP
         )
-    bad_like_reject = isinstance(bad_like, (int, float)) and float(bad_like) >= 0.62
-    bad_margin_reject = isinstance(bad_margin, (int, float)) and float(bad_margin) <= -0.08
+    bad_like_reject = isinstance(bad_like, (int, float)) and float(bad_like) >= AML_BAD_LIKE_REJECT_THRESHOLD
+    bad_margin_reject = isinstance(bad_margin, (int, float)) and float(bad_margin) <= AML_BAD_MARGIN_REJECT_THRESHOLD
     return bool(strong_bad or ambiguous_bad or bad_like_reject or bad_margin_reject)
 
 
@@ -1480,6 +1488,7 @@ def select_topk_candidates_for_view(
         # else: no tiles inside dark regions - return empty candidates (force navigation)
 
     quality_prior_view: npt.NDArray[np.float32] | None = None
+    quality_penalty_view: npt.NDArray[np.float32] | None = None
     good_support_view: npt.NDArray[np.bool_] | None = None
     if index.bad_likelihood.size == index.num_tiles:
         bad_like_view = index.bad_likelihood[idxs].astype(np.float32, copy=False)
@@ -1513,10 +1522,47 @@ def select_topk_candidates_for_view(
         if int(np.count_nonzero(quality_keep)) >= 2:
             idxs = idxs[quality_keep]
             ranking_scores = ranking_scores[quality_keep]
+            bad_like_view = bad_like_view[quality_keep]
             bad_margin_view = bad_margin_view[quality_keep]
+            bad_top1_view = bad_top1_view[quality_keep]
+            good_top1_view = good_top1_view[quality_keep]
             if good_support_view is not None and good_support_view.size == quality_keep.size:
                 good_support_view = good_support_view[quality_keep]
-        quality_prior_view = bad_margin_view
+
+        borderline_bad_mask = (
+            (bad_like_view >= AML_BORDERLINE_BAD_LIKELIHOOD)
+            & (bad_margin_view <= AML_BORDERLINE_BAD_MARGIN_MAX)
+            & (good_top1_view <= (bad_top1_view + AML_BORDERLINE_BAD_TOP1_GAP))
+        )
+        if good_support_view is not None and good_support_view.size == borderline_bad_mask.size:
+            borderline_bad_mask = borderline_bad_mask & ~good_support_view
+        borderline_keep = ~borderline_bad_mask
+        if int(np.count_nonzero(borderline_keep)) >= 2 and int(np.count_nonzero(borderline_bad_mask)) > 0:
+            idxs = idxs[borderline_keep]
+            ranking_scores = ranking_scores[borderline_keep]
+            bad_like_view = bad_like_view[borderline_keep]
+            bad_margin_view = bad_margin_view[borderline_keep]
+            bad_top1_view = bad_top1_view[borderline_keep]
+            good_top1_view = good_top1_view[borderline_keep]
+            if good_support_view is not None and good_support_view.size == borderline_keep.size:
+                good_support_view = good_support_view[borderline_keep]
+
+        similarity_gap_view = (good_top1_view - bad_top1_view).astype(np.float32, copy=False)
+        quality_prior_view = (0.70 * bad_margin_view + 0.30 * similarity_gap_view).astype(np.float32, copy=False)
+        bad_like_soft_penalty = np.clip(
+            (bad_like_view - 0.40) / max(AML_BAD_LIKE_REJECT_THRESHOLD - 0.40, 1e-6),
+            0.0,
+            1.0,
+        )
+        bad_match_soft_penalty = np.clip(
+            (bad_top1_view - good_top1_view + 0.02) / 0.16,
+            0.0,
+            1.0,
+        )
+        quality_penalty_view = (
+            0.72 * bad_like_soft_penalty
+            + 0.28 * bad_match_soft_penalty
+        ).astype(np.float32, copy=False)
 
     dark_view_scores: npt.NDArray[np.float32] | None = None
     # dark_roi_scores is the PRIMARY signal for AML tile selection.
@@ -1539,6 +1585,8 @@ def select_topk_candidates_for_view(
                 dark_view_scores = dark_view_scores[cellular_mask]
                 if quality_prior_view is not None and quality_prior_view.size == cellular_mask.size:
                     quality_prior_view = quality_prior_view[cellular_mask]
+                if quality_penalty_view is not None and quality_penalty_view.size == cellular_mask.size:
+                    quality_penalty_view = quality_penalty_view[cellular_mask]
                 if good_support_view is not None and good_support_view.size == cellular_mask.size:
                     good_support_view = good_support_view[cellular_mask]
 
@@ -1556,6 +1604,8 @@ def select_topk_candidates_for_view(
                 dark_view_scores = dark_view_scores[dark_min_keep]
                 if quality_prior_view is not None and quality_prior_view.size == dark_min_keep.size:
                     quality_prior_view = quality_prior_view[dark_min_keep]
+                if quality_penalty_view is not None and quality_penalty_view.size == dark_min_keep.size:
+                    quality_penalty_view = quality_penalty_view[dark_min_keep]
                 if good_support_view is not None and good_support_view.size == dark_min_keep.size:
                     good_support_view = good_support_view[dark_min_keep]
 
@@ -1571,6 +1621,8 @@ def select_topk_candidates_for_view(
                 dark_view_scores = dark_view_scores[dark_keep]
                 if quality_prior_view is not None and quality_prior_view.size == dark_keep.size:
                     quality_prior_view = quality_prior_view[dark_keep]
+                if quality_penalty_view is not None and quality_penalty_view.size == dark_keep.size:
+                    quality_penalty_view = quality_penalty_view[dark_keep]
                 if good_support_view is not None and good_support_view.size == dark_keep.size:
                     good_support_view = good_support_view[dark_keep]
 
@@ -1578,11 +1630,15 @@ def select_topk_candidates_for_view(
             # Cellularity remains primary, but allow quality evidence to keep gray-black
             # trash from dominating the candidate list.
             combined_rank = (
-                0.68 * _zscore(dark_view_scores)
-                + 0.22 * _zscore(ranking_scores)
+                0.64 * _zscore(dark_view_scores)
+                + 0.18 * _zscore(ranking_scores)
             )
             if quality_prior_view is not None and quality_prior_view.size == dark_view_scores.size:
-                combined_rank = combined_rank + (0.10 * _zscore(quality_prior_view))
+                combined_rank = combined_rank + (0.18 * _zscore(quality_prior_view))
+            if quality_penalty_view is not None and quality_penalty_view.size == dark_view_scores.size:
+                combined_rank = combined_rank - (0.32 * quality_penalty_view)
+            if good_support_view is not None and good_support_view.size == dark_view_scores.size:
+                combined_rank = combined_rank + (0.06 * good_support_view.astype(np.float32, copy=False))
             ranking_scores = combined_rank.astype(np.float32, copy=False)
 
     order_local = np.argsort(ranking_scores)[::-1]
@@ -1704,8 +1760,19 @@ def select_topk_candidates_for_view(
             retrieval_good = quality_margin > AML_QUALITY_REJECT_MARGIN
             retrieval_bad = False
         else:
-            retrieval_good = quality_margin > 0.0 and bad_like < 0.5
-            retrieval_bad = quality_margin < 0.0 and bad_like >= 0.5
+            retrieval_good = (
+                quality_margin > AML_GOOD_LIKE_MARGIN_THRESHOLD
+                and bad_like < AML_GOOD_LIKE_BAD_LIKELIHOOD_MAX
+                and good_top1 >= (bad_top1 + AML_GOOD_LIKE_TOP1_GAP)
+            )
+            retrieval_bad = (
+                quality_margin <= AML_BAD_MARGIN_REJECT_THRESHOLD
+                or (
+                    bad_like >= AML_BORDERLINE_BAD_LIKELIHOOD
+                    and quality_margin <= AML_BORDERLINE_BAD_MARGIN_MAX
+                    and good_top1 <= (bad_top1 + AML_BORDERLINE_BAD_TOP1_GAP)
+                )
+            )
         bad_reference_reject = False if good_only_reference_mode else _bad_reference_is_rejected(
             bad_top1=bad_top1,
             good_top1=good_top1,
@@ -1720,7 +1787,7 @@ def select_topk_candidates_for_view(
         elif not good_only_reference_mode and retrieval_bad:
             quality_hint = "bad_like"
         else:
-            quality_hint = "good_like"
+            quality_hint = "uncertain"
         candidate = {
             "rank": rank,
             "tile_index": int(tile_idx),

@@ -27,7 +27,7 @@ from .openslide_prefilter import (
     screening_roi_score,
     screening_tile_metrics,
 )
-from .tile_prefilter import score_dark_informative_roi, select_informative_tile_indices
+from .tile_prefilter import score_dark_informative_roi, select_informative_tile_indices, tile_touches_tissue_edge
 
 ImageExtension: TypeAlias = Literal["png", "jpg"]
 EXTENSION_TO_FORMAT: Final[dict[ImageExtension, str]] = {"png": "PNG", "jpg": "JPEG"}
@@ -68,6 +68,7 @@ class _TilerParams(TypedDict):
     tile_size_px: TilePixels
     max_supertile_size_slide_px: SlidePixels
     brightness_cutoff: int | None
+    canny_cutoff: float | None
     tile_prefilter_method: str
     coarse_trigger_supertile_count: int | None
     coarse_keep_ratio: float | None
@@ -77,6 +78,7 @@ class _TilerParams(TypedDict):
     quality_min_keep_tile_count: int
     quality_trigger_tile_count: int | None
     quality_random_reserve_ratio: float | None
+    dark_region_boxes_hash: str | None
     code_sha256: str
     tile_ext: ImageExtension
 
@@ -158,12 +160,18 @@ def tiles_with_cache(
         return
 
     cache_dir.mkdir(parents=True, exist_ok=True)
+    dark_region_boxes_hash = None
+    if dark_region_boxes_level0:
+        dark_region_boxes_hash = hashlib.sha256(
+            json.dumps(dark_region_boxes_level0, sort_keys=True).encode()
+        ).hexdigest()
     tiler_params: _TilerParams = {
         "slide_path": str(slide_path),
         "tile_size_um": tile_size_um,
         "tile_size_px": tile_size_px,
         "max_supertile_size_slide_px": max_supertile_size_slide_px,
         "brightness_cutoff": brightness_cutoff,
+        "canny_cutoff": canny_cutoff,
         "tile_prefilter_method": tile_prefilter_method,
         "coarse_trigger_supertile_count": coarse_trigger_supertile_count,
         "coarse_keep_ratio": coarse_keep_ratio,
@@ -173,6 +181,7 @@ def tiles_with_cache(
         "quality_min_keep_tile_count": quality_min_keep_tile_count,
         "quality_trigger_tile_count": quality_trigger_tile_count,
         "quality_random_reserve_ratio": quality_random_reserve_ratio,
+        "dark_region_boxes_hash": dark_region_boxes_hash,
         "code_sha256": _CODE_HASH,
         "tile_ext": cache_tiles_ext,
     }
@@ -331,7 +340,14 @@ def _tiles_with_tissue(
                         if bx0 <= tile_center_x_px < bx1 and by0 <= tile_center_y_px < by1:
                             filtered_tiles.append(tile)
                             break
-            tiles = filtered_tiles
+            # Reject bright/pale tiles captured by oversized dark-region boxes, and
+            # reject tiles whose crop still straddles the tissue boundary.
+            _AML_DARK_TILE_BRIGHTNESS_CUTOFF: int = 210
+            tiles = [
+                t for t in filtered_tiles
+                if np.asarray(t.image.convert("L"), dtype=np.float32).mean() < _AML_DARK_TILE_BRIGHTNESS_CUTOFF
+                and not tile_touches_tissue_edge(t.image)
+            ]
 
         if not tiles:
             continue
