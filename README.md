@@ -7,6 +7,7 @@
 ![Illustrative ROI](static/assets/illustration.png)
 
 An illustration of AML agent
+Evaluation on a private dataset (50 AML, 50 normal marrow): UNI2 + GPT-OSS-120B achieves 93% accuracy, with only 1 AML → normal marrow error.
 
 ## Install
 
