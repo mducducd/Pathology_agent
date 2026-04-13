@@ -63,6 +63,114 @@ python main.py
 
 The web app starts on port `3008` by default. If that port is already in use, the server will fall back to the next available port.
 
+## CLI Runs
+
+The repo also includes headless CLI entrypoints for AML runs.
+
+### Single slide
+
+Run one slide without the web UI:
+
+```bash
+.venv/bin/python evaluate/run_single_slide.py \
+    --slide /path/to/patient.mrxs \
+    --output-dir ./batch_outputs \
+    --model GPT-OSS-120B \
+    --extractor reddino_large \
+    --tile-filter hybrid \
+    --tile-size-px 224 \
+    --batch-size 512 \
+    --agent aml
+```
+
+Useful flags:
+
+- `--model`: VLM name, for example `GPT-OSS-120B`, `GLM-4.6V-FP8`, `Qwen3.5-397B-A17B-FP8`
+- `--extractor`: embedding extractor key such as `uni2`, `reddino`, `reddino_base`, `reddino_large`, `dinobloom`
+- `--tile-filter`: one of `hybrid`, `quality`, `coarse`, `none`
+- `--experiment-root`: shared cache/output root for repeated runs
+- `--use-tile-cache`: reuse persisted tile cache across runs
+
+Outputs are written under `--output-dir/<patient>/` and include:
+
+- `summary.json`
+- `final_output.txt`
+- `report.json`
+- copied ROI/debug images when available
+
+### Batch AML run
+
+Run the AML detector across a CSV of patients or slide stems:
+
+```bash
+bash evaluate/run_batch_aml.sh \
+    --csv /path/to/patients.csv \
+    --slides-root /mnt/copernicus3/PATHOLOGY/others/private/haemadata/ALL_WSIs \
+    --output-dir ./batch_result_qwen_reddino_large \
+    --experiment-root ./batch_result_qwen_reddino_large \
+    --model Qwen3.5-397B-A17B-FP8 \
+    --extractor reddino_large \
+    --tile-filter hybrid \
+    --tile-size-px 224 \
+    --batch-size 512 \
+    --agent aml \
+    --resume \
+    --use-tile-cache
+```
+
+Notes:
+
+- The CSV is read line-by-line after the header.
+- Each row can be either a patient stem or a full `.mrxs` path.
+- `--resume` skips patients whose `summary.json` has `status="ok"` and a non-empty `final_decision`.
+- If a run fails during the current batch, the script automatically retries that slide once.
+
+### Pre-extract shared cache
+
+If you plan to run a large batch with `--use-tile-cache`, you can prewarm the shared AML tile cache first:
+
+```bash
+.venv/bin/python evaluate/preextract_hybrid_cache.py \
+    --csv /path/to/patients.csv \
+    --slides-root /mnt/copernicus3/PATHOLOGY/others/private/haemadata/ALL_WSIs \
+    --experiment-root ./aml_reddino_large_suite \
+    --extractor reddino_large \
+    --tile-filter hybrid \
+    --agent aml \
+    --tile-size-px 224 \
+    --tile-size-um 256 \
+    --batch-size 512 \
+    --skip-existing-cache
+```
+
+Notes:
+
+- This populates the shared cache under `<experiment-root>/_cache/tile_cache/<extractor>/`.
+- It also prepares the AML reference cache under `<experiment-root>/_cache/reference_hnsw/<extractor>/`.
+- `--skip-existing-cache` avoids recomputing slides that already have at least one cache zip for that extractor.
+- `--limit N` is useful for a quick dry run on a subset of slides.
+- This cache layout is the same one reused by `run_batch_aml.sh` and `run_batch_aml_suite.sh` when `--use-tile-cache` is enabled.
+
+### Batch suite
+
+`evaluate/run_batch_aml_suite.sh` is a wrapper for launching multiple model/extractor combinations defined in the `RUNS` array:
+
+```bash
+bash evaluate/run_batch_aml_suite.sh \
+    --output-parent /mnt/bulk-neptune/nguyenmin/stamp-dev/experiments/Narmin \
+    --experiment-name aml_reddino_hybrid_suite \
+    --cuda-device 0 \
+    --extractors reddino_large \
+    --resume \
+    --use-tile-cache
+```
+
+Notes:
+
+- `--extractors` filters the run specs by extractor key.
+- The suite script forwards into `evaluate/run_batch_aml.sh` for each selected run.
+- Edit the `RUNS` array in [evaluate/run_batch_aml_suite.sh](/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/evaluate/run_batch_aml_suite.sh) to choose which model/extractor combinations are launched.
+
 ## Workbench
 
 The web workbench has three main panels:
