@@ -20,6 +20,7 @@ from wsi_core_pkg.embeddings import (
     save_tile_features_npz,
     uni2,
 )
+from wsi_core_pkg.prompts import DEFAULT_AML_PROMPT, DEFAULT_TILE_PROMPT, DEFAULT_WSI_PROMPT
 from wsi_core import (
     run_wsi_agent_for_web,
     clear_wsi_outputs_state,
@@ -42,6 +43,7 @@ ALLOWED_MODEL_NAMES = {
     "qwen3.5-35b-a3b",
     "Qwen3.5-397B-A17B-FP8",
     "gpt-oss-20b",
+    "gemma-4-31B-it",
 }
 ALLOWED_EMBEDDING_EXTRACTORS = {"uni2", "dinobloom", "reddino", "reddino_base", "reddino_large"}
 ALLOWED_TILE_PREFILTER_METHODS = {"none", "coarse", "quality", "hybrid"}
@@ -738,6 +740,16 @@ def make_debug_image_url(abs_path: Optional[str]) -> Optional[str]:
 # -----------------------------
 # NEW API: create -> upload -> finalize
 # -----------------------------
+
+@app.get("/api/default_prompts")
+def get_default_prompts():
+    return {
+        "prompts": {
+            "tile": DEFAULT_TILE_PROMPT,
+            "aml": DEFAULT_AML_PROMPT,
+            "wsi": DEFAULT_WSI_PROMPT,
+        }
+    }
 
 @app.post("/api/runs/create")
 async def create_run(

@@ -47,7 +47,7 @@ AML_DISABLE_BAD_REFERENCES = os.getenv("AML_DISABLE_BAD_REFERENCES", "false").lo
 AML_BAD_TOP1_REJECT_THRESHOLD = float(os.getenv("AML_BAD_TOP1_REJECT_THRESHOLD", "0.60"))
 AML_BAD_TOP1_AMBIGUOUS_THRESHOLD = float(os.getenv("AML_BAD_TOP1_AMBIGUOUS_THRESHOLD", "0.48"))
 AML_GOOD_BAD_TOP1_MIN_GAP = float(os.getenv("AML_GOOD_BAD_TOP1_MIN_GAP", "0.08"))
-AML_BAD_LIKE_REJECT_THRESHOLD = float(os.getenv("AML_BAD_LIKE_REJECT_THRESHOLD", "0.60"))
+AML_BAD_LIKE_REJECT_THRESHOLD = float(os.getenv("AML_BAD_LIKE_REJECT_THRESHOLD", "0.45"))
 AML_BAD_MARGIN_REJECT_THRESHOLD = float(os.getenv("AML_BAD_MARGIN_REJECT_THRESHOLD", "-0.02"))
 AML_GOOD_LIKE_MARGIN_THRESHOLD = float(os.getenv("AML_GOOD_LIKE_MARGIN_THRESHOLD", "0.04"))
 AML_GOOD_LIKE_BAD_LIKELIHOOD_MAX = float(os.getenv("AML_GOOD_LIKE_BAD_LIKELIHOOD_MAX", "0.44"))
@@ -358,10 +358,25 @@ def _embed_reference_tiles(
     extractor: Any,
     device: torch.device,
     batch_size: int,
+    extractor_id: str,
+    use_cache: bool = True,
 ) -> tuple[npt.NDArray[np.float32], npt.NDArray[np.str_], tuple[str, ...]]:
     if not records:
         return np.empty((0, 0), dtype=np.float32), np.empty((0,), dtype=np.str_), ()
 
+    ref_paths = tuple(str(path) for path, _ in records)
+    ref_labels_list = [label for _, label in records]
+
+    # Respect environment variable for embedding cache
+    use_cache = use_cache and AML_REFERENCE_EMBEDDING_CACHE
+
+    # Try to load from cache first
+    if use_cache:
+        cached_result = _load_reference_embeddings_from_cache(ref_paths, extractor_id)
+        if cached_result is not None:
+            return cached_result
+
+    # Cache miss - need to embed
     model = extractor.model.to(device)
     model.eval()
 
@@ -393,6 +408,11 @@ def _embed_reference_tiles(
     feat = torch.cat(chunks, dim=0).numpy().astype(np.float32, copy=False)
     feat_l2 = _l2_normalize_rows(feat)
     labels = np.asarray(label_buf, dtype=np.str_)
+
+    # Save to cache
+    if use_cache:
+        _save_reference_embeddings_to_cache(feat_l2, labels, ref_paths, extractor_id)
+
     return feat_l2, labels, tuple(path_buf)
 
 
@@ -634,12 +654,47 @@ def _clear_reference_hnsw_cache() -> None:
     _reference_paths = None
 
 
+def _clear_reference_embeddings_cache() -> None:
+    """Clear the in-memory reference embeddings cache.
+
+    Call when reference tiles change or when you need to force re-embedding.
+    Note: This does NOT clear the persistent disk cache.
+    """
+    global _reference_embeddings_cache
+    _reference_embeddings_cache = None
+
+
+def clear_all_reference_caches() -> None:
+    """Clear all reference-related caches (both in-memory and persistent disk cache).
+
+    Call this when reference tiles have been modified, added, or removed.
+    """
+    global _persistent_cache_dir, _reference_embeddings_cache
+
+    # Clear in-memory caches
+    _clear_reference_hnsw_cache()
+    _clear_reference_embeddings_cache()
+
+    # Clear persistent disk cache
+    if _persistent_cache_dir is not None and _persistent_cache_dir.exists():
+        import shutil
+        shutil.rmtree(str(_persistent_cache_dir))
+    _persistent_cache_dir = None
+
+
 # Persistent cache paths
 _persistent_cache_dir: Path | None = None
 _prebuilt_embeddings_cache: dict[str, tuple[npt.NDArray[np.float32], npt.NDArray[np.str_], tuple[str, ...]]] | None = None
 
+# Module-level cache for precomputed reference embeddings
+_reference_embeddings_cache: dict[str, tuple[npt.NDArray[np.float32], npt.NDArray[np.str_], tuple[str, ...]]] | None = None
+
+# Environment variable to control embedding cache behavior
+AML_REFERENCE_EMBEDDING_CACHE = os.getenv("AML_REFERENCE_EMBEDDING_CACHE", "true").lower() in ("true", "1", "yes")
+
+
 def _get_persistent_cache_dir() -> Path:
-    """Get or create the persistent cache directory for HNSW indices."""
+    """Get or create the persistent cache directory for HNSW indices and embeddings."""
     global _persistent_cache_dir
     if _persistent_cache_dir is None:
         cache_dir = Path(os.getenv("AML_REFERENCE_CACHE_DIR", "./outputs/cache/reference_hnsw"))
@@ -650,23 +705,183 @@ def _get_persistent_cache_dir() -> Path:
 
 def _compute_reference_fingerprint(
     ref_paths: tuple[str, ...],
-    ref_features_l2: npt.NDArray[np.float32],
+    ref_features_l2: npt.NDArray[np.float32] | None = None,
 ) -> str:
     """Compute a fingerprint for cache invalidation.
 
-    Uses file paths and feature hash to detect changes.
+    Uses file paths and modification times to detect changes.
+    Optionally includes feature hash for additional verification.
     """
     import hashlib
+    import os
 
-    # Hash the sorted paths
-    paths_str = "|".join(sorted(ref_paths))
-    # Hash the features (sample for speed)
-    n_samples = min(10, len(ref_features_l2))
-    indices = np.linspace(0, len(ref_features_l2) - 1, n_samples, dtype=int)
-    feature_sample = ref_features_l2[indices].tobytes()
+    # Hash the sorted paths with their modification times
+    path_mtime_pairs = []
+    for p in sorted(ref_paths):
+        try:
+            mtime = os.path.getmtime(p)
+            path_mtime_pairs.append(f"{p}:{mtime}")
+        except OSError:
+            path_mtime_pairs.append(f"{p}:0")
+    paths_str = "|".join(path_mtime_pairs)
 
-    combined = f"{paths_str}:{feature_sample.hex()}"
+    # Optionally include feature hash if provided
+    if ref_features_l2 is not None and ref_features_l2.size > 0:
+        n_samples = min(10, len(ref_features_l2))
+        indices = np.linspace(0, len(ref_features_l2) - 1, n_samples, dtype=int)
+        feature_sample = ref_features_l2[indices].tobytes()
+        combined = f"{paths_str}:{feature_sample.hex()}"
+    else:
+        combined = paths_str
+
     return hashlib.sha256(combined.encode()).hexdigest()[:16]
+
+
+def _find_matching_reference_embedding_cache(
+    cache_dir: Path,
+    *,
+    ref_paths: tuple[str, ...],
+    extractor_id: str,
+) -> tuple[Path, Path, Path] | None:
+    """Locate a compatible on-disk embedding cache entry by metadata.
+
+    This provides backward compatibility for cache files written before the
+    cache-name fingerprint was stabilized for embedding reuse.
+    """
+    expected_paths = list(ref_paths)
+    for meta_path in sorted(cache_dir.glob(f"{extractor_id}_embed_*_meta.json")):
+        try:
+            import json
+
+            meta = json.loads(meta_path.read_text())
+        except Exception:
+            continue
+        if str(meta.get("extractor_id") or "") != str(extractor_id):
+            continue
+        if list(meta.get("paths") or []) != expected_paths:
+            continue
+
+        stem = meta_path.name.removesuffix("_meta.json")
+        features_path = cache_dir / f"{stem}_features.npy"
+        labels_path = cache_dir / f"{stem}_labels.npy"
+        if features_path.exists() and labels_path.exists():
+            return features_path, labels_path, meta_path
+    return None
+
+
+def _load_reference_embeddings_from_cache(
+    ref_paths: tuple[str, ...],
+    extractor_id: str,
+) -> tuple[npt.NDArray[np.float32], npt.NDArray[np.str_], tuple[str, ...]] | None:
+    """Load precomputed reference embeddings from persistent cache.
+
+    Returns (features_l2, labels, paths) if cache hit, None if cache miss or invalid.
+    """
+    global _reference_embeddings_cache
+
+    # Check in-memory cache first
+    if _reference_embeddings_cache is not None:
+        cache_key = f"{extractor_id}_{len(ref_paths)}"
+        if cache_key in _reference_embeddings_cache:
+            cached_feats, cached_labels, cached_paths = _reference_embeddings_cache[cache_key]
+            if cached_paths == ref_paths:
+                return cached_feats, cached_labels, cached_paths
+
+    # Try persistent cache
+    try:
+        cache_dir = _get_persistent_cache_dir()
+        fingerprint = _compute_reference_fingerprint(ref_paths)
+        cache_name = f"{extractor_id}_embed_{fingerprint}"
+
+        features_path = cache_dir / f"{cache_name}_features.npy"
+        labels_path = cache_dir / f"{cache_name}_labels.npy"
+        meta_path = cache_dir / f"{cache_name}_meta.json"
+
+        if not (features_path.exists() and labels_path.exists() and meta_path.exists()):
+            matched = _find_matching_reference_embedding_cache(
+                cache_dir,
+                ref_paths=ref_paths,
+                extractor_id=extractor_id,
+            )
+            if matched is None:
+                return None
+            features_path, labels_path, meta_path = matched
+
+        # Verify cache metadata
+        import json
+        meta = json.loads(meta_path.read_text())
+        meta_paths = tuple(str(path) for path in meta.get("paths") or ())
+        if meta_paths != ref_paths:
+            return None
+        if str(meta.get("extractor_id") or "") != str(extractor_id):
+            return None
+
+        # Load cached data
+        features_l2 = np.load(str(features_path), allow_pickle=False)
+        ref_labels = np.load(str(labels_path), allow_pickle=True)
+
+        # Validate shapes
+        if features_l2.ndim != 2 or len(ref_labels) != len(ref_paths):
+            return None
+
+        # Populate in-memory cache
+        cache_key = f"{extractor_id}_{len(ref_paths)}"
+        _reference_embeddings_cache = _reference_embeddings_cache or {}
+        _reference_embeddings_cache[cache_key] = (features_l2, ref_labels, ref_paths)
+
+        return features_l2, ref_labels, ref_paths
+
+    except Exception:
+        return None
+
+
+def _save_reference_embeddings_to_cache(
+    ref_features_l2: npt.NDArray[np.float32],
+    ref_labels: npt.NDArray[np.str_],
+    ref_paths: tuple[str, ...],
+    extractor_id: str,
+) -> Path | None:
+    """Save reference embeddings to persistent cache.
+
+    Returns the cache directory path if successful, None otherwise.
+    """
+    global _reference_embeddings_cache
+
+    try:
+        cache_dir = _get_persistent_cache_dir()
+        # Use only the reference paths/mtimes for the persistent embedding cache
+        # key so future runs can locate the cache before re-embedding.
+        fingerprint = _compute_reference_fingerprint(ref_paths)
+        cache_name = f"{extractor_id}_embed_{fingerprint}"
+
+        features_path = cache_dir / f"{cache_name}_features.npy"
+        labels_path = cache_dir / f"{cache_name}_labels.npy"
+        meta_path = cache_dir / f"{cache_name}_meta.json"
+
+        # Save features and labels
+        np.save(str(features_path), ref_features_l2, allow_pickle=False)
+        np.save(str(labels_path), ref_labels, allow_pickle=True)
+
+        # Save metadata
+        import json
+        meta = {
+            "extractor_id": extractor_id,
+            "count": len(ref_paths),
+            "dim": int(ref_features_l2.shape[1]),
+            "fingerprint": fingerprint,
+            "paths": ref_paths,
+            "created_at": __import__("datetime").datetime.now().isoformat(),
+        }
+        meta_path.write_text(json.dumps(meta, indent=2))
+
+        # Populate in-memory cache
+        cache_key = f"{extractor_id}_{len(ref_paths)}"
+        _reference_embeddings_cache = _reference_embeddings_cache or {}
+        _reference_embeddings_cache[cache_key] = (ref_features_l2, ref_labels, ref_paths)
+
+        return cache_dir
+    except Exception:
+        return None
 
 
 def _save_reference_hnsw_cache(
@@ -1199,6 +1414,8 @@ def build_unsupervised_roi_index(
                 extractor=extractor,
                 device=run_device,
                 batch_size=max(1, min(64, int(batch_size))),
+                extractor_id=extractor.identifier,
+                use_cache=True,
             )
             retrieval = _compute_reference_knn_scores(
                 features_l2=features_l2,
@@ -1834,4 +2051,5 @@ __all__ = [
     "UnsupervisedROIIndex",
     "build_unsupervised_roi_index",
     "select_topk_candidates_for_view",
+    "clear_all_reference_caches",
 ]

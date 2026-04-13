@@ -20,18 +20,20 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 RUN_SINGLE_SLIDE = REPO_ROOT / "evaluate" / "run_single_slide.py"
 DEFAULT_OUTPUT_ROOT = REPO_ROOT / "evaluate" / "outputs" / "aml_runtime_benchmarks"
-DEFAULT_MODELS = ("GPT-OSS-120B", "GLM-4.6V-FP8")
+DEFAULT_MODELS = ("GPT-OSS-120B", "GLM-4.6V-FP8", "Qwen3.5-122B-A10B-FP8")
 MODEL_ALIASES = {
     "GPT-OSS": "GPT-OSS-120B",
     "GPT-OSS-120B": "GPT-OSS-120B",
     "GLM-4.6V": "GLM-4.6V-FP8",
     "GLM-4.6V-FP8": "GLM-4.6V-FP8",
+    "Qwen3.5-122B": "Qwen3.5-122B-A10B-FP8",
+    "Qwen3.5-122B-A10B": "Qwen3.5-122B-A10B-FP8",
+    "Qwen3.5-122B-A10B-FP8": "Qwen3.5-122B-A10B-FP8",
 }
 
 
 def canonical_model_name(raw: str) -> str:
-    key = raw.strip()
-    return MODEL_ALIASES.get(key, key)
+    return MODEL_ALIASES.get(raw.strip(), raw.strip())
 
 
 def run_once(
@@ -46,6 +48,7 @@ def run_once(
     tile_size_um: float | None,
     batch_size: int | None,
     keep_existing: bool,
+    use_tile_cache: bool,
 ) -> dict:
     patient_name = slide_path.stem
     model_dir = output_root / model.replace("/", "_")
@@ -57,12 +60,9 @@ def run_once(
     cmd = [
         python_bin,
         str(RUN_SINGLE_SLIDE),
-        "--slide",
-        str(slide_path),
-        "--output-dir",
-        str(model_dir),
-        "--model",
-        model,
+        "--slide", str(slide_path),
+        "--output-dir", str(model_dir),
+        "--model", model,
         "--fresh-embedding-cache",
     ]
     if extractor is not None:
@@ -75,21 +75,15 @@ def run_once(
         cmd.extend(["--tile-size-um", str(tile_size_um)])
     if batch_size is not None:
         cmd.extend(["--batch-size", str(batch_size)])
+    if use_tile_cache:
+        cmd.extend(["--use-tile-cache", "--experiment-root", str(output_root)])
 
     t0 = time.perf_counter()
-    proc = subprocess.run(
-        cmd,
-        cwd=REPO_ROOT,
-        text=True,
-        capture_output=True,
-        check=False,
-    )
+    proc = subprocess.run(cmd, cwd=REPO_ROOT, text=True, capture_output=True, check=False)
     wall_sec = time.perf_counter() - t0
 
     summary_path = patient_out / "summary.json"
-    summary = {}
-    if summary_path.is_file():
-        summary = json.loads(summary_path.read_text())
+    summary = json.loads(summary_path.read_text()) if summary_path.is_file() else {}
 
     return {
         "model": model,
@@ -135,6 +129,7 @@ def main() -> int:
     parser.add_argument("--python-bin", default=sys.executable)
     parser.add_argument("--output-root", default=str(DEFAULT_OUTPUT_ROOT))
     parser.add_argument("--keep-existing", action="store_true")
+    parser.add_argument("--use-tile-cache", action="store_true", help="Reuse shared tile caches inside the benchmark folder")
     args = parser.parse_args()
 
     slide_path = Path(args.slide).resolve()
@@ -163,6 +158,7 @@ def main() -> int:
             tile_size_um=args.tile_size_um,
             batch_size=args.batch_size,
             keep_existing=args.keep_existing,
+            use_tile_cache=bool(args.use_tile_cache),
         )
 
         patient_out = Path(result["output_dir"])
@@ -178,29 +174,14 @@ def main() -> int:
     csv_path = bench_dir / "benchmark_results.csv"
     json_path = bench_dir / "benchmark_results.json"
 
+    fieldnames = [
+        "model", "slide", "status_code", "wall_sec", "summary_elapsed_sec",
+        "status", "final_decision", "run_id", "extractor", "tile_filter",
+        "tile_size_px", "tile_size_um", "batch_size", "output_dir",
+        "stdout_log", "stderr_log", "error",
+    ]
     with csv_path.open("w", newline="") as handle:
-        writer = csv.DictWriter(
-            handle,
-            fieldnames=[
-                "model",
-                "slide",
-                "status_code",
-                "wall_sec",
-                "summary_elapsed_sec",
-                "status",
-                "final_decision",
-                "run_id",
-                "extractor",
-                "tile_filter",
-                "tile_size_px",
-                "tile_size_um",
-                "batch_size",
-                "output_dir",
-                "stdout_log",
-                "stderr_log",
-                "error",
-            ],
-        )
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(results)
 

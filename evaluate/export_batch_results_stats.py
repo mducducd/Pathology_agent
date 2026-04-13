@@ -31,44 +31,61 @@ def normalize_prediction(final_decision: str | None) -> str:
     return "Unknown"
 
 
-def safe_load_json(path: Path) -> dict:
-    return json.loads(path.read_text())
+def iter_slide_dirs(root: Path):
+    for path in sorted(p for p in root.iterdir() if p.is_dir() and not p.name.startswith("_")):
+        yield path
+
+
+def load_report_json(slide_dir: Path) -> dict:
+    for path in (slide_dir / "report.json", slide_dir / "artifacts" / "wsi_reports" / "report.json"):
+        if path.exists():
+            return json.loads(path.read_text())
+    return {}
+
+
+def report_tile_size_px(report: dict) -> str:
+    tile_size = report.get("tile_size")
+    if isinstance(tile_size, dict):
+        px = tile_size.get("px")
+        if px not in (None, ""):
+            return str(px)
+    px = report.get("tile_size_px")
+    return "" if px in (None, "") else str(px)
 
 
 def pct(numerator: int, denominator: int) -> str:
-    if denominator == 0:
-        return ""
-    return f"{(100.0 * numerator / denominator):.2f}"
+    return "" if denominator == 0 else f"{(100.0 * numerator / denominator):.2f}"
 
 
 def build_rows(root: Path) -> list[dict]:
     rows: list[dict] = []
-    for slide_dir in sorted(p for p in root.iterdir() if p.is_dir()):
+    for slide_dir in iter_slide_dirs(root):
         slide_name = slide_dir.name
         ground_truth = infer_ground_truth(slide_name)
 
         summary_path = slide_dir / "summary.json"
-        report_path = slide_dir / "artifacts" / "wsi_reports" / "report.json"
-
-        summary = safe_load_json(summary_path) if summary_path.exists() else {}
-        report = safe_load_json(report_path) if report_path.exists() else {}
+        summary = json.loads(summary_path.read_text()) if summary_path.exists() else {}
+        report = load_report_json(slide_dir)
 
         status = summary.get("status", "missing")
-        final_decision = report.get("final_decision")
+        final_decision = summary.get("final_decision") or report.get("final_decision")
         predicted_label = normalize_prediction(final_decision)
         if status == "ok" and predicted_label == "Unknown":
             predicted_label = CALL_MORE_DECISION
 
         included_in_statistics = status != "error"
-        # A prediction is considered correct only when run succeeded and predicted label matches ground truth
-        is_correct = status == "ok" and predicted_label in {"AML", "Normal marrow"} and predicted_label == ground_truth
+        is_correct = (
+            status == "ok"
+            and predicted_label in {"AML", "Normal marrow"}
+            and predicted_label == ground_truth
+        )
 
         rows.append(
             {
                 "slide_name": slide_name,
                 "ground_truth": ground_truth,
                 "summary_status": status,
-                "tile_size_px": summary.get("tile_size_px", report.get("tile_size_px", "")),
+                "tile_size_px": summary.get("tile_size_px", report_tile_size_px(report)),
                 "predicted_label": predicted_label,
                 "included_in_statistics": included_in_statistics,
                 "is_correct": is_correct,
@@ -94,10 +111,7 @@ def build_summary(rows: list[dict]) -> list[dict]:
     )
     correct = sum(bool(row["is_correct"]) for row in rows_in_stats)
 
-    tp = sum(
-        row["ground_truth"] == "AML" and row["predicted_label"] == "AML"
-        for row in rows_in_stats
-    )
+    tp = sum(row["ground_truth"] == "AML" and row["predicted_label"] == "AML" for row in rows_in_stats)
     tn = sum(
         row["ground_truth"] == "Normal marrow" and row["predicted_label"] == "Normal marrow"
         for row in rows_in_stats
@@ -111,7 +125,7 @@ def build_summary(rows: list[dict]) -> list[dict]:
         for row in rows_in_stats
     )
 
-    summary = [
+    return [
         {"metric": "total_slides_all", "value": total_all},
         {"metric": "slides_in_statistics", "value": total},
         {"metric": "aml_slides", "value": aml_total},
@@ -131,11 +145,7 @@ def build_summary(rows: list[dict]) -> list[dict]:
         {"metric": "npv_normal_pct", "value": pct(tn, tn + fn)},
         {
             "metric": "f1_aml_pct",
-            "value": (
-                ""
-                if (2 * tp + fp + fn) == 0
-                else f"{(100.0 * (2 * tp) / (2 * tp + fp + fn)):.2f}"
-            ),
+            "value": "" if (2 * tp + fp + fn) == 0 else f"{(100.0 * (2 * tp) / (2 * tp + fp + fn)):.2f}",
         },
         {
             "metric": "balanced_accuracy_pct",
@@ -146,7 +156,6 @@ def build_summary(rows: list[dict]) -> list[dict]:
             ),
         },
     ]
-    return summary
 
 
 def write_csv(path: Path, rows: list[dict], fieldnames: list[str]) -> None:
@@ -154,6 +163,43 @@ def write_csv(path: Path, rows: list[dict], fieldnames: list[str]) -> None:
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(rows)
+
+
+def _detect_common_settings(root: Path) -> dict:
+    """Detect common agent/model/extractor/tile_size across all slides."""
+    models = set()
+    extractors = set()
+    agents = set()
+    tile_sizes = set()
+
+    for slide_dir in iter_slide_dirs(root):
+        summary_path = slide_dir / "summary.json"
+        summary = json.loads(summary_path.read_text()) if summary_path.exists() else {}
+        report = load_report_json(slide_dir)
+
+        m = summary.get("model") or report.get("model_name") or ""
+        if m:
+            models.add(str(m))
+        ex = summary.get("extractor") or (report.get("feature_extractor") or {}).get("key") or ""
+        if ex:
+            extractors.add(str(ex))
+        ag = summary.get("agent") or summary.get("agent_type") or ""
+        if ag:
+            agents.add(str(ag))
+        ts = summary.get("tile_size_px") or report_tile_size_px(report) or ""
+        if ts:
+            tile_sizes.add(str(ts))
+
+    result: dict = {}
+    if len(models) == 1:
+        result["model"] = next(iter(models))
+    if len(extractors) == 1:
+        result["extractor"] = next(iter(extractors))
+    if len(agents) == 1:
+        result["agent"] = next(iter(agents))
+    if len(tile_sizes) == 1:
+        result["tile_size_px"] = next(iter(tile_sizes))
+    return result
 
 
 def main() -> int:
@@ -168,8 +214,6 @@ def main() -> int:
         default="batch_results",
         help="Prefix for the generated CSV files",
     )
-    # NOTE: agent/model/extractor/tile-size are detected from per-slide report/summary files
-    # and are no longer accepted as explicit CLI args.
     parser.add_argument(
         "--output-dir",
         default=None,
@@ -180,9 +224,10 @@ def main() -> int:
     root = Path(args.root).resolve()
     output_dir = Path(args.output_dir).resolve() if args.output_dir else root
     output_dir.mkdir(parents=True, exist_ok=True)
+
     rows = build_rows(root)
     summary = build_summary(rows)
-# Compose CSVs: detect common settings and write files
+
     detected = _detect_common_settings(root)
     suffix_parts = []
     if detected.get("model"):
@@ -192,10 +237,7 @@ def main() -> int:
     if detected.get("tile_size_px"):
         suffix_parts.append(str(detected["tile_size_px"]))
 
-    if suffix_parts:
-        composed_prefix = f"{args.output_prefix}_" + "_".join(suffix_parts)
-    else:
-        composed_prefix = args.output_prefix
+    composed_prefix = f"{args.output_prefix}_" + "_".join(suffix_parts) if suffix_parts else args.output_prefix
 
     slides_csv = output_dir / f"{composed_prefix}_slides.csv"
     summary_csv = output_dir / f"{composed_prefix}_summary.csv"
@@ -220,48 +262,6 @@ def main() -> int:
     print(slides_csv)
     print(summary_csv)
     return 0
-
-
-def _detect_common_settings(root: Path) -> dict:
-    """Detect common agent/model/extractor/tile_size across all slides.
-
-    Returns a dict with keys present when a single non-empty value is shared by all slides.
-    """
-    models = set()
-    extractors = set()
-    agents = set()
-    tile_sizes = set()
-
-    for slide_dir in sorted(p for p in root.iterdir() if p.is_dir()):
-        summary_path = slide_dir / "summary.json"
-        report_path = slide_dir / "artifacts" / "wsi_reports" / "report.json"
-
-        summary = safe_load_json(summary_path) if summary_path.exists() else {}
-        report = safe_load_json(report_path) if report_path.exists() else {}
-
-        m = summary.get("model") or report.get("model_name") or ""
-        if m:
-            models.add(str(m))
-        ex = summary.get("extractor") or (report.get("feature_extractor") or {}).get("key") or ""
-        if ex:
-            extractors.add(str(ex))
-        ag = summary.get("agent") or summary.get("agent_type") or ""
-        if ag:
-            agents.add(str(ag))
-        ts = summary.get("tile_size_px") or report.get("tile_size_px") or ""
-        if ts:
-            tile_sizes.add(str(ts))
-
-    result: dict = {}
-    if len(models) == 1:
-        result["model"] = next(iter(models))
-    if len(extractors) == 1:
-        result["extractor"] = next(iter(extractors))
-    if len(agents) == 1:
-        result["agent"] = next(iter(agents))
-    if len(tile_sizes) == 1:
-        result["tile_size_px"] = next(iter(tile_sizes))
-    return result
 
 
 if __name__ == "__main__":

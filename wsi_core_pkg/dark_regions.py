@@ -223,8 +223,6 @@ def _refine_dark_region_boxes(
         trimmed = _trim_box_to_tissue(box, tissue_mask)
         if trimmed is None:
             continue
-        if _box_touches_tissue_edge(trimmed, tissue_mask):
-            continue
         refined.append(trimmed)
 
     refined.sort(key=lambda b: b["area"], reverse=True)

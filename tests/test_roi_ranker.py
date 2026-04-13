@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import numpy as np
+import os
 from pathlib import Path
 import sys
+import tempfile
 import types
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -117,3 +120,101 @@ def test_select_topk_candidates_for_view_marks_borderline_matches_uncertain() ->
     by_tile = {int(candidate["tile_index"]): candidate for candidate in candidates}
     assert by_tile[0]["quality_hint"] == "uncertain"
     assert by_tile[1]["quality_hint"] == "good_like"
+
+
+def test_reference_embedding_cache_round_trip_uses_persistent_files() -> None:
+    features = np.asarray([[1.0, 0.0], [0.0, 1.0]], dtype=np.float32)
+    labels = np.asarray(["good", "bad"], dtype=np.str_)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        ref_a = Path(tmpdir) / "good_a.jpg"
+        ref_b = Path(tmpdir) / "bad_b.jpg"
+        ref_a.write_bytes(b"a")
+        ref_b.write_bytes(b"b")
+        ref_paths = (str(ref_a), str(ref_b))
+
+        old_cache_dir = roi_ranker._persistent_cache_dir
+        old_mem_cache = roi_ranker._reference_embeddings_cache
+        old_env = os.environ.get("AML_REFERENCE_CACHE_DIR")
+        try:
+            os.environ["AML_REFERENCE_CACHE_DIR"] = tmpdir
+            roi_ranker._persistent_cache_dir = None
+            roi_ranker._reference_embeddings_cache = None
+
+            saved = roi_ranker._save_reference_embeddings_to_cache(
+                features,
+                labels,
+                ref_paths,
+                "DummyExtractor",
+            )
+            assert saved is not None
+
+            roi_ranker._reference_embeddings_cache = None
+            loaded = roi_ranker._load_reference_embeddings_from_cache(
+                ref_paths,
+                "DummyExtractor",
+            )
+            assert loaded is not None
+
+            loaded_features, loaded_labels, loaded_paths = loaded
+            assert np.array_equal(loaded_features, features)
+            assert np.array_equal(loaded_labels, labels)
+            assert loaded_paths == ref_paths
+        finally:
+            if old_env is None:
+                os.environ.pop("AML_REFERENCE_CACHE_DIR", None)
+            else:
+                os.environ["AML_REFERENCE_CACHE_DIR"] = old_env
+            roi_ranker._persistent_cache_dir = old_cache_dir
+            roi_ranker._reference_embeddings_cache = old_mem_cache
+
+
+def test_reference_embedding_cache_loads_legacy_named_entry_by_metadata() -> None:
+    features = np.asarray([[0.25, 0.75]], dtype=np.float32)
+    labels = np.asarray(["good"], dtype=np.str_)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        ref_a = Path(tmpdir) / "good_a.jpg"
+        ref_a.write_bytes(b"a")
+        ref_paths = (str(ref_a),)
+
+        cache_prefix = Path(tmpdir) / "DummyExtractor_embed_legacyfingerprint"
+        np.save(str(cache_prefix) + "_features.npy", features, allow_pickle=False)
+        np.save(str(cache_prefix) + "_labels.npy", labels, allow_pickle=True)
+        (Path(str(cache_prefix) + "_meta.json")).write_text(
+            json.dumps(
+                {
+                    "extractor_id": "DummyExtractor",
+                    "count": 1,
+                    "dim": 2,
+                    "fingerprint": "legacyfingerprint",
+                    "paths": list(ref_paths),
+                }
+            )
+        )
+
+        old_cache_dir = roi_ranker._persistent_cache_dir
+        old_mem_cache = roi_ranker._reference_embeddings_cache
+        old_env = os.environ.get("AML_REFERENCE_CACHE_DIR")
+        try:
+            os.environ["AML_REFERENCE_CACHE_DIR"] = tmpdir
+            roi_ranker._persistent_cache_dir = None
+            roi_ranker._reference_embeddings_cache = None
+
+            loaded = roi_ranker._load_reference_embeddings_from_cache(
+                ref_paths,
+                "DummyExtractor",
+            )
+            assert loaded is not None
+
+            loaded_features, loaded_labels, loaded_paths = loaded
+            assert np.array_equal(loaded_features, features)
+            assert np.array_equal(loaded_labels, labels)
+            assert loaded_paths == ref_paths
+        finally:
+            if old_env is None:
+                os.environ.pop("AML_REFERENCE_CACHE_DIR", None)
+            else:
+                os.environ["AML_REFERENCE_CACHE_DIR"] = old_env
+            roi_ranker._persistent_cache_dir = old_cache_dir
+            roi_ranker._reference_embeddings_cache = old_mem_cache

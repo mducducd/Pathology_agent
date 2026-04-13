@@ -76,91 +76,10 @@
   const explorerUseFolderBtn = document.getElementById("explorer-use-folder");
   const explorerUseFileBtn = document.getElementById("explorer-use-file");
 
-  const defaultPrompts = {
-    tile: `You are an expert pathologist’s assistant. Your task is to scan the whole WSI and save tiles for diagnostic analysis.
-
-Use the example good and bad tiles that I provided to you. First evaluate the difference between provided good and bad tiles. Understand the difference.
-
-Use a practical image hierarchy: first separate tissue from white/pale background, then prefer nucleated-cell-rich deep blue-purple regions over pink-red RBC-rich or empty areas, and treat dark red-pink regions only as a rare fallback when they are clearly cellular and not smooth clot/RBC material. Then within nucleated regions prefer morphologically informative fields that may be blast-enriched.
-
-Color is only a proxy. White/pale often means background, fat, or low tissue; smooth pink-red often means RBC-rich/hemorrhagic/clotted material; deep blue-purple usually means nuclei-rich marrow and is the PRIMARY target; gray-black/charcoal low-chroma darkness is usually debris, fold, crush, or precipitate and should be avoided unless clear nuclear detail is visible.
-
-PRIORITY: Always seek the DENSEST deep blue-purple cellular regions first. High cellularity with packed nucleated cells is the primary selection criterion. Never settle for sparse or low-density tissue when denser regions exist on the slide.
-
-A very good field contains MANY separate crisp round purple cells across much of the image. Reject fields dominated by broad gray/brown clumps or smears even if a few purple cells are present.
-
-Prefer deep dark blue-purple cellular marrow regions only when the darkness comes from packed viable cells with visible nuclear detail. Darkness alone is only a rough cue. Avoid pale/empty areas, gray-black low-chroma junk, and debris-dominated fields.
-
-Do not save tiles with large pale/white areas or sparse cells as good tiles. If a view looks pale/low density, do NOT save tiles there; instead keep zooming or move to a more cellular region with preserved nuclei.
-
-Do not treat a field as informative just because it is dark. Reject gray-black or black low-chroma regions caused by stain precipitate, tissue folds, hemorrhagic/clotted material, necrotic debris, out-of-focus dense areas, or smudged/crushed cells.
-
-Use the WSI navigation tools to explore the slide. When you see a diagnostically useful region, call:
-wsi_save_tile_norm(..., quality="good", label="...")
-
-Stop when you have saved 60 good tiles or when you can no longer find good tiles.
-
-For AML-style marrow selection, think of good vs bad like this:
-- Good tile/ROI: hypercellular, basophilic, nucleated, in focus, low artifact, and morphologically informative.
-- Bad tile/ROI: dark but uninterpretable, gray-black/low-chroma junk, empty/background-heavy, RBC/clot-dominant, artifact-dominated, blurred, or non-representative edge/debris.
-
-A good tile must:
-- Be sharply focused and clearly stained.
-- Show preserved nuclear detail and distinguishable cell morphology.
-- Have high enough cellularity to be informative, with limited empty background.
-- Avoid artifacts (folding/crush, empty/white areas, necrosis, peripheral/non-representative zones, dark crumbly debris, hemorrhagic clot, precipitate).
-- Avoid regions dominated by red blood cells, clot, blur, scanner defects, or isolated edge fragments.
-
-Typical cells expected: erythroid precursors, myeloid cells, megakaryocytes (if present).
-Reject areas dominated by fat, background, damaged tissue, or poor stain/focus.
-These heuristics are for selecting visually informative marrow tiles or blast-suspected ROIs, not for proving AML or an exact blast percentage.`,
-    aml: `You are an AML detector. Your task is to review a May–Grünwald–Giemsa stained bone marrow WSI and decide:
-- Normal marrow
-- Acute leukemia
-- Call for more diagnostics (if blast % is between 5% and 20%).
-
-Use the example GOOD tiles as guidance for where to search (dark, tissue-dense regions).
-Be efficient: inspect only a small number of diagnostically meaningful high-power ROIs, not an exhaustive survey.
-Examine only diagnostically relevant regions with good focus and staining. Avoid pale/empty or artifact regions.
-You MUST search for high-density cellular regions. Zoom in repeatedly until you reach true high-power views with clear cellular detail.
-Navigation outputs may include roi_candidates with quality_hint and retrieved nearest good/bad exemplars from exact reference-tile search; use these as navigation hints only. You may inspect bad_like candidates first, but do NOT diagnose AML from bad_like / closer-to-bad retrieval alone.
-Inspect a few high-value ROIs at high power and estimate blast percentage across them.
-Retrieval evidence can be noisy on normal marrow; if the kept ROIs show orderly maturation and blasts stay <5%, report Normal marrow even if some retrieval hits look suspicious.
-After each wsi_mark_roi_norm, if the ROI is background, low-cellularity, out of focus, or redundant, immediately call wsi_discard_last_roi.
-If the evidence you already have is enough for a stable final AML category, stop immediately instead of searching for extra confirmation.
-Once you have 2-3 informative ROIs and a stable blast estimate, stop calling tools and report.
-
-Normal marrow features:
-- ~60% granulocytic precursors, ~20% erythroid precursors, ~15% lymphocytes/plasma cells/monocytes/megakaryocytes.
-- Full spectrum of maturation in granulopoiesis and erythropoiesis.
-- Megakaryocytes: very large, multilobed nuclei, granular cytoplasm.
-
-Blast morphology (non-megakaryoblast):
-- Medium-to-large cells (~14–18 µm, relative if no scale).
-- Round/oval nucleus, fine chromatin, ≥1 nucleolus.
-- High N:C ratio (70–95%).
-- Basophilic, agranular cytoplasm.
-
-Diagnostic thresholds:
-- Acute leukemia: blasts ≥20% of all nucleated cells (average across ROIs).
-- Normal marrow: blasts <5%.
-- Call for more diagnostics: blasts 5–20%.
-- Use Call for more diagnostics only when morphology truly supports an intermediate or equivocal blast proportion, not because retrieval alone looks suspicious.
-
-Save up to 4 key tiles from the most informative high-density regions using wsi_save_tile_norm(..., quality="good", label="aml_key"). Do not keep searching only to fill a tile quota.
-Output:
-- Brief morphology summary.
-- Estimated blast percentage range.
-- Final decision (Normal marrow / Acute leukemia / Call for more diagnostics).
-- If morphology and retrieval disagree, state that explicitly and let morphology drive the final class.
-- For each kept ROI, include whether retrieval evidence was closer to bad or good exemplars if shown in the tool outputs.`,
-    wsi: `Inspect the whole-slide image and describe the likely tissue of origin and any key findings (including tumors, inflammatory infiltrates, necrosis, etc.).
-Use the WSI tools to get an overview and then pan/zoom as needed, similar to a human pathologist using a digital slide viewer.
-Use the approximate field width in micrometers and tissue_fraction to ensure you reach true high-power views on tissue when you need cellular detail.
-Provide nav_reason for each tool call.
-Mark important regions of interest with wsi_mark_roi_norm so they can be highlighted in the final report.
-After each ROI, review the CURRENT VIEW ROI image and call wsi_discard_last_roi if the ROI is mostly background or not diagnostic.
-If you cannot find a suspicious lesion after exploring representative areas at adequate magnification, state that no obvious lesion was identified.`
+  let defaultPrompts = {
+    tile: "",
+    aml: "",
+    wsi: ""
   };
   const uploadActionHints = {
     files: "Standard slides: .svs / .tif / .tiff / .ndpi (single file).",
@@ -284,6 +203,35 @@ If you cannot find a suspicious lesion after exploring representative areas at a
     }
   }
 
+  function isKnownDefaultPrompt(value) {
+    if (!value) return false;
+    return Object.values(defaultPrompts).some((prompt) => prompt && prompt === value);
+  }
+
+  async function loadDefaultPrompts() {
+    try {
+      const res = await fetch("/api/default_prompts", { cache: "no-store" });
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}`);
+      }
+      const payload = await res.json();
+      const prompts = payload && payload.prompts ? payload.prompts : {};
+      const nextPrompts = {
+        tile: typeof prompts.tile === "string" ? prompts.tile : "",
+        aml: typeof prompts.aml === "string" ? prompts.aml : "",
+        wsi: typeof prompts.wsi === "string" ? prompts.wsi : ""
+      };
+      const currentValue = promptEl.value;
+      const shouldReplace = !currentValue.trim() || isKnownDefaultPrompt(currentValue);
+      defaultPrompts = nextPrompts;
+      if (shouldReplace) {
+        promptEl.value = defaultPrompts[selectedAgentType()] || "";
+      }
+    } catch (err) {
+      console.warn("Failed to load default prompts from backend", err);
+    }
+  }
+
   function maybeLoadDefaultPrompt() {
     const type = selectedAgentType();
     const d = defaultPrompts[type] || "";
@@ -291,7 +239,7 @@ If you cannot find a suspicious lesion after exploring representative areas at a
       promptEl.value = d;
       return;
     }
-    if (promptEl.value === defaultPrompts.tile || promptEl.value === defaultPrompts.wsi) {
+    if (isKnownDefaultPrompt(promptEl.value)) {
       promptEl.value = d;
     }
   }
@@ -299,7 +247,7 @@ If you cannot find a suspicious lesion after exploring representative areas at a
   if (agentSelect) {
     agentSelect.addEventListener("change", maybeLoadDefaultPrompt);
   }
-  promptEl.value = defaultPrompts[selectedAgentType()];
+  loadDefaultPrompts();
 
   const allowedPrimary = new Set([".svs", ".tif", ".tiff", ".ndpi", ".mrxs", ".mrsx"]);
   const allowedZip = ".zip";
@@ -1735,7 +1683,10 @@ If you cannot find a suspicious lesion after exploring representative areas at a
     lastRenderedStep = 0;
     lastRenderedRoi = 0;
     darkRegionsLoaded = false;
-    setDarkRegionsEnabled(false);
+    // Keep dark regions enabled state, just reset loaded state
+    if (darkRegionsEnabled) {
+      clearDarkRegions();
+    }
   }
 
   function appendLogItem(listEl, title, subText, imgUrl) {
@@ -2463,8 +2414,15 @@ If you cannot find a suspicious lesion after exploring representative areas at a
         errorText.textContent = "";
       }
 
-      baseOverviewImageUrl = (st && st.overview_image_url) ? st.overview_image_url : "";
+      const newOverviewUrl = (st && st.overview_image_url) ? st.overview_image_url : "";
+      const overviewUrlChanged = baseOverviewImageUrl !== newOverviewUrl;
+      baseOverviewImageUrl = newOverviewUrl;
       applyOverviewDisplaySource();
+      // Re-fetch dark regions when overview image changes (if enabled)
+      if (overviewUrlChanged && darkRegionsEnabled && currentRunId) {
+        darkRegionsLoaded = false;  // Reset to allow re-fetch
+        fetchDarkRegions(currentRunId);
+      }
       updateSearchingBox(lastCurrentViewState, run.status);
 
       const hasReportPath = !!run.report_path;
@@ -3152,7 +3110,7 @@ If you cannot find a suspicious lesion after exploring representative areas at a
   currentModelName = selectedModelName();
   setModelStatus("idle");
   syncStatusPillVisibility("idle");
-  setDarkRegionsEnabled(false);
+  setDarkRegionsEnabled(true);
   setExplorerBusyState(false);
   updateExplorerSelectionPreview();
   render();
