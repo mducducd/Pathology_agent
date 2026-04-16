@@ -50,6 +50,7 @@ fi
 
 cd "$REPO_ROOT"
 
+
 # ── Parse arguments ──────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -71,6 +72,17 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# Force all output-related paths to absolute
+if [[ -n "$BASE_OUTPUT_ROOT" && "$BASE_OUTPUT_ROOT" != /* ]]; then
+    BASE_OUTPUT_ROOT="$(realpath "$BASE_OUTPUT_ROOT")"
+fi
+if [[ -n "$OUTPUT_DIR" && "$OUTPUT_DIR" != /* ]]; then
+    OUTPUT_DIR="$(realpath "$OUTPUT_DIR")"
+fi
+if [[ -n "$EXPERIMENT_ROOT" && "$EXPERIMENT_ROOT" != /* ]]; then
+    EXPERIMENT_ROOT="$(realpath "$EXPERIMENT_ROOT")"
+fi
+
 if [[ -z "$OUTPUT_DIR" ]]; then
     case "$EXTRACTOR" in
         uni2) EXTRACTOR_TAG="UNI2" ;;
@@ -80,9 +92,9 @@ if [[ -z "$OUTPUT_DIR" ]]; then
         *) EXTRACTOR_TAG="$EXTRACTOR" ;;
     esac
     OUTPUT_DIR="${BASE_OUTPUT_ROOT}/batch_result_${MODEL}_${EXTRACTOR_TAG}_${TILE_SIZE_PX}px"
+    BASE_OUTPUT_ROOT="$(dirname "$OUTPUT_DIR")"
 fi
 
-BASE_OUTPUT_ROOT="$(dirname "$OUTPUT_DIR")"
 if [[ -z "$EXPERIMENT_ROOT" ]]; then
     EXPERIMENT_ROOT="$OUTPUT_DIR"
 fi

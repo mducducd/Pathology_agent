@@ -263,16 +263,53 @@ def _extract_final_decision(final_output: str) -> str:
         return ""
 
     label_group = "|".join(re.escape(label) for label in FINAL_DECISIONS)
-    patterns = (
-        rf"final\s+decision\s*[:\-]\s*({label_group})",
-        rf"decision\s*[:\-]\s*({label_group})",
-        rf"^\s*({label_group})\s*$",
-    )
-    for pattern in patterns:
-        match = re.search(pattern, text, flags=re.IGNORECASE | re.MULTILINE)
-        if match:
-            return _normalize_final_decision(match.group(1))
 
+    # Priority 1: Explicit "Final decision:" or "Final diagnosis:" statement (most reliable)
+    # These are the most common and reliable formats
+    final_decision_pattern = rf"final\s+(?:decision|diagnosis)\s*[:\-]\s*({label_group})"
+    match = re.search(final_decision_pattern, text, flags=re.IGNORECASE)
+    if match:
+        return _normalize_final_decision(match.group(1))
+
+    # Priority 2: "Diagnosis:" or "Decision:" without "Final" prefix
+    diagnosis_pattern = rf"(?:diagnosis|decision)\s*[:\-]\s*({label_group})"
+    match = re.search(diagnosis_pattern, text, flags=re.IGNORECASE)
+    if match:
+        return _normalize_final_decision(match.group(1))
+
+    # Priority 3: "Consistent with X" or "Findings consistent with X" patterns
+    consistent_pattern = rf"(?:findings\s+)?(?:are\s+)?(?:most\s+)?(?:consistent\s+(?:with|:)\s+)({label_group})"
+    match = re.search(consistent_pattern, text, flags=re.IGNORECASE)
+    if match:
+        return _normalize_final_decision(match.group(1))
+
+    # Priority 4: "Conclusion:" statements
+    conclusion_pattern = rf"conclusion\s*[:\-]\s*({label_group})"
+    match = re.search(conclusion_pattern, text, flags=re.IGNORECASE)
+    if match:
+        return _normalize_final_decision(match.group(1))
+
+    # Priority 5: "X is the diagnosis/decision/conclusion" patterns
+    is_diagnosis_pattern = rf"({label_group})\s+(?:is\s+)?(?:the\s+)?(?:final\s+)?(?:diagnosis|decision|conclusion)"
+    match = re.search(is_diagnosis_pattern, text, flags=re.IGNORECASE)
+    if match:
+        return _normalize_final_decision(match.group(1))
+
+    # Priority 6: "I conclude/diagnose/decide X" patterns
+    conclude_pattern = rf"(?:I\s+(?:conclude|diagnose|decide|determine)\s+(?:that\s+)?(?:this\s+)?(?:is\s+)?(?:a\s+)?)(?:case\s+of\s+)?({label_group})"
+    match = re.search(conclude_pattern, text, flags=re.IGNORECASE)
+    if match:
+        return _normalize_final_decision(match.group(1))
+
+    # Priority 7: "Therefore/Thus/Hence X" patterns (sentence-ending conclusions)
+    therefore_pattern = rf"(?:therefore|thus|hence),?\s+(?:this\s+)?(?:is\s+)?(?:a\s+)?(?:case\s+of\s+)?({label_group})"
+    match = re.search(therefore_pattern, text, flags=re.IGNORECASE | re.MULTILINE)
+    if match:
+        return _normalize_final_decision(match.group(1))
+
+    # Last resort: Find the last mentioned label
+    # This is a fallback when no explicit decision statement format is detected
+    # Only labels appearing in explicit decision-like contexts should be considered
     seen_labels = [
         (text.lower().rfind(label.lower()), label)
         for label in FINAL_DECISIONS

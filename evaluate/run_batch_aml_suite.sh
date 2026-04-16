@@ -7,8 +7,8 @@ RUN_BATCH_SCRIPT="${SCRIPT_DIR}/run_batch_aml.sh"
 CSV="/mnt/bulk-neptune/nguyenmin/stamp-dev/experiments/Narmin/random_100_Normal_AML_Patients.csv"
 SLIDES_ROOT="/mnt/copernicus3/PATHOLOGY/others/private/haemadata/ALL_WSIs"
 OUTPUT_PARENT="/mnt/bulk-neptune/nguyenmin/stamp-dev/experiments/Narmin"
-EXPERIMENT_NAME="aml_reddino_hybrid_suite"
-BASE_OUTPUT_ROOT=""
+EXPERIMENT_NAME="new_runs_140425"
+BASE_OUTPUT_ROOT="/mnt/bulk-neptune/nguyenmin/stamp-dev/experiments/Narmin/new_runs_140425"
 CUDA_DEVICE=""
 TILE_FILTER="hybrid"
 TILE_SIZE_PX="224"
@@ -69,16 +69,13 @@ fi
 mkdir -p "$BASE_OUTPUT_ROOT"
 
 RUNS=(
-    "gemma-4-31B-it|reddino|batch_result_gemma-4-31B-it_RedDino-Small_224px"
+    # "GPT-OSS-120B|uni2|batch_result_GPT-OSS-120B_UNI2_224px"
     # "GPT-OSS-120B|reddino|batch_result_GPT-OSS-120B_RedDino-Small_224px"
-    # "GLM-4.6V-FP8|reddino_large|batch_result_GLM-4.6V-FP8_RedDino-Large_224px"
-    # "Qwen3.5-122B-A10B-FP8|reddino|batch_result_Qwen3.5-122B-A10B-FP8_RedDino-Small_224px"
-    # "Qwen3.5-397B-A17B-FP8|reddino|batch_result_Qwen3.5-397B-A17B-FP8_RedDino-Small_224px"
-    # "Qwen3.5-397B-A17B-FP8|reddino|batch_result_Qwen3.5-397B-A17B-FP8_RedDino-Small_224px"
-    # "GLM-4.6V-FP8|uni2|batch_result_GLM-4.6V-FP8_Uni2_224px"
-    # "Qwen3.5-122B-A10B-FP8|reddino|batch_result_Qwen3.5-122B-A10B-FP8_RedDino-Samll_224px"
-    
-)   
+    # "GPT-OSS-120B|reddino_large|batch_result_GPT-OSS-120B_RedDino-large_224px"
+    "Qwen3.5-397B-A17B-FP8|uni2|batch_result_Qwen3.5-397B-A17B-FP8_UNI2_224px"
+    "Qwen3.5-397B-A17B-FP8|reddino|batch_result_Qwen3.5-397B-A17B-FP8_RedDino-Small_224px"
+    "Qwen3.5-397B-A17B-FP8|reddino_large|batch_result_Qwen3.5-397B-A17B-FP8_RedDino-large_224px"
+)
 
 FILTERED_RUNS=()
 if [[ -n "$EXTRACTORS_FILTER" ]]; then
@@ -119,9 +116,19 @@ echo " Extractors:       ${EXTRACTORS_FILTER:-all}"
 echo " Runs:             ${#FILTERED_RUNS[@]}"
 echo "═══════════════════════════════════════════════════════════════"
 
+
+# Force BASE_OUTPUT_ROOT to absolute path
+if [[ -n "$BASE_OUTPUT_ROOT" && "$BASE_OUTPUT_ROOT" != /* ]]; then
+    BASE_OUTPUT_ROOT="$(realpath "$BASE_OUTPUT_ROOT")"
+fi
+
 for spec in "${FILTERED_RUNS[@]}"; do
     IFS="|" read -r MODEL EXTRACTOR OUTPUT_NAME <<<"$spec"
     OUTPUT_DIR="${BASE_OUTPUT_ROOT}/${OUTPUT_NAME}"
+    # Force OUTPUT_DIR to absolute path
+    if [[ "$OUTPUT_DIR" != /* ]]; then
+        OUTPUT_DIR="$(realpath "$OUTPUT_DIR")"
+    fi
 
     echo ""
     echo "───────────────────────────────────────────────────────────────"

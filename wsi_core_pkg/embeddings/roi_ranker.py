@@ -36,29 +36,28 @@ ROI_CANDIDATE_MAX_IOU = float(os.getenv("ROI_CANDIDATE_MAX_IOU", "0.28"))
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".tif", ".tiff"}
 
 # Scoring weights for generic WSI mode: score = w_nov*z(novelty) + w_cen*z(centroid_dist)
-WSI_W_NOVELTY = float(os.getenv("WSI_W_NOVELTY", "0.65"))
-WSI_W_CENTROID = float(os.getenv("WSI_W_CENTROID", "0.35"))
+# Reduced novelty weight to less aggressive outlier-seeking (reduces false positives)
+WSI_W_NOVELTY = float(os.getenv("WSI_W_NOVELTY", "0.55"))
+WSI_W_CENTROID = float(os.getenv("WSI_W_CENTROID", "0.40"))
 
-AML_REFERENCE_TOP_K = int(os.getenv("AML_REFERENCE_TOP_K", "5"))
+AML_REFERENCE_TOP_K = int(os.getenv("AML_REFERENCE_TOP_K", "7"))
 AML_REFERENCE_QUERY_BLOCK_ROWS = int(os.getenv("AML_REFERENCE_QUERY_BLOCK_ROWS", "1024"))
-AML_REFERENCE_LOGIT_SCALE = float(os.getenv("AML_REFERENCE_LOGIT_SCALE", "4.0"))
+AML_REFERENCE_LOGIT_SCALE = float(os.getenv("AML_REFERENCE_LOGIT_SCALE", "3.0"))  # Softer bad_likelihood for fewer false rejections
 AML_REFERENCE_EVIDENCE_PER_CLASS = int(os.getenv("AML_REFERENCE_EVIDENCE_PER_CLASS", "3"))
 AML_DISABLE_BAD_REFERENCES = os.getenv("AML_DISABLE_BAD_REFERENCES", "false").lower() in ("true", "1", "yes")
-AML_BAD_TOP1_REJECT_THRESHOLD = float(os.getenv("AML_BAD_TOP1_REJECT_THRESHOLD", "0.60"))
+AML_BAD_TOP1_REJECT_THRESHOLD = float(os.getenv("AML_BAD_TOP1_REJECT_THRESHOLD", "0.65"))
 AML_BAD_TOP1_AMBIGUOUS_THRESHOLD = float(os.getenv("AML_BAD_TOP1_AMBIGUOUS_THRESHOLD", "0.48"))
 AML_GOOD_BAD_TOP1_MIN_GAP = float(os.getenv("AML_GOOD_BAD_TOP1_MIN_GAP", "0.08"))
-AML_BAD_LIKE_REJECT_THRESHOLD = float(os.getenv("AML_BAD_LIKE_REJECT_THRESHOLD", "0.45"))
+AML_BAD_LIKE_REJECT_THRESHOLD = float(os.getenv("AML_BAD_LIKE_REJECT_THRESHOLD", "0.40"))
 AML_BAD_MARGIN_REJECT_THRESHOLD = float(os.getenv("AML_BAD_MARGIN_REJECT_THRESHOLD", "-0.02"))
-AML_GOOD_LIKE_MARGIN_THRESHOLD = float(os.getenv("AML_GOOD_LIKE_MARGIN_THRESHOLD", "0.04"))
+AML_GOOD_LIKE_MARGIN_THRESHOLD = float(os.getenv("AML_GOOD_LIKE_MARGIN_THRESHOLD", "0.03"))
 AML_GOOD_LIKE_BAD_LIKELIHOOD_MAX = float(os.getenv("AML_GOOD_LIKE_BAD_LIKELIHOOD_MAX", "0.44"))
 AML_GOOD_LIKE_TOP1_GAP = float(os.getenv("AML_GOOD_LIKE_TOP1_GAP", "0.04"))
 AML_BORDERLINE_BAD_LIKELIHOOD = float(os.getenv("AML_BORDERLINE_BAD_LIKELIHOOD", "0.52"))
 AML_BORDERLINE_BAD_MARGIN_MAX = float(os.getenv("AML_BORDERLINE_BAD_MARGIN_MAX", "0.04"))
 AML_BORDERLINE_BAD_TOP1_GAP = float(os.getenv("AML_BORDERLINE_BAD_TOP1_GAP", "0.03"))
-AML_DARK_PRIOR_WEIGHT = float(os.getenv("AML_DARK_PRIOR_WEIGHT", "0.45"))
 AML_DARK_VIEW_PERCENTILE = float(os.getenv("AML_DARK_VIEW_PERCENTILE", "50.0"))
 AML_DARK_VIEW_MIN_TILES = int(os.getenv("AML_DARK_VIEW_MIN_TILES", "8"))
-AML_DARK_REGION_BOX_BONUS = float(os.getenv("AML_DARK_REGION_BOX_BONUS", "0.75"))
 
 # Aggregation method for K-NN retrieval: "mean", "max", or "weighted"
 AML_REFERENCE_AGGREGATION = os.getenv("AML_REFERENCE_AGGREGATION", "mean")
@@ -78,6 +77,13 @@ _blast_paths: tuple[str, ...] | None = None
 _blast_extractor_id: str | None = None
 
 AML_QUALITY_REJECT_MARGIN = float(os.getenv("AML_QUALITY_REJECT_MARGIN", "0.15"))  # Margin below which tiles are hard-rejected
+
+# VLLM optimization: pre-filter candidates before sending to VLM
+# These filters remove low-quality, out-of-domain candidates EARLY to reduce VLM token count
+VLLM_PREFILTER_ENABLED = os.getenv("VLLM_PREFILTER_ENABLED", "true").lower() in ("true", "1", "yes")
+VLLM_MAX_CANDIDATES = int(os.getenv("VLLM_MAX_CANDIDATES", "12"))  # Hard limit on candidates sent to VLM (reduced for higher quality)
+VLLM_MIN_DARK_SCORE = float(os.getenv("VLLM_MIN_DARK_SCORE", "0.15"))  # Minimum cellularity score (increased to filter low-cellularity tiles)
+VLLM_BAD_LIKE_REJECT = os.getenv("VLLM_BAD_LIKE_REJECT", "true").lower() in ("true", "1", "yes")  # Reject bad_like candidates
 
 
 def _load_blast_cell_embeddings(
@@ -684,7 +690,6 @@ def clear_all_reference_caches() -> None:
 
 # Persistent cache paths
 _persistent_cache_dir: Path | None = None
-_prebuilt_embeddings_cache: dict[str, tuple[npt.NDArray[np.float32], npt.NDArray[np.str_], tuple[str, ...]]] | None = None
 
 # Module-level cache for precomputed reference embeddings
 _reference_embeddings_cache: dict[str, tuple[npt.NDArray[np.float32], npt.NDArray[np.str_], tuple[str, ...]]] | None = None
@@ -1643,6 +1648,58 @@ def _reference_matches_for_tile(
     return bad_refs, good_refs, blast_refs, bad_top1, good_top1, blast_top1
 
 
+def _prefilter_candidates_for_vllm(
+    candidates: list[dict[str, Any]],
+    *,
+    max_candidates: int = VLLM_MAX_CANDIDATES,
+    min_dark_score: float = VLLM_MIN_DARK_SCORE,
+    reject_bad_like: bool = VLLM_BAD_LIKE_REJECT,
+) -> list[dict[str, Any]]:
+    """Pre-filter ROI candidates before sending to VLM.
+
+    This reduces token count and prevents VLM confusion from:
+    - Low-cellularity tiles (acellular debris, empty background)
+    - Bad-like tiles (already classified as non-diagnostic)
+    - Redundant overlapping candidates
+
+    Args:
+        candidates: Raw ranked candidate list from select_topk_candidates_for_view
+        max_candidates: Maximum number of candidates to send to VLM
+        min_dark_score: Minimum dark_roi_score (cellularity) threshold
+        reject_bad_like: Whether to reject candidates with quality_hint='bad_like'
+
+    Returns:
+        Filtered candidate list optimized for VLM processing
+    """
+    if not VLLM_PREFILTER_ENABLED or not candidates:
+        return candidates[:max_candidates]
+
+    filtered = []
+    for cand in candidates:
+        # HARD REJECT: bad_like tiles are non-diagnostic
+        if reject_bad_like and cand.get("quality_hint") == "bad_like":
+            continue
+
+        # HARD REJECT: low cellularity tiles (acellular/background)
+        dark_score = cand.get("dark_roi_score")
+        if dark_score is not None and dark_score < min_dark_score:
+            # Exception: keep if good_support evidence exists
+            if cand.get("good_top1_similarity", 0.0) < 0.35:
+                continue
+
+        filtered.append(cand)
+
+        # Stop once we have enough candidates
+        if len(filtered) >= max_candidates:
+            break
+
+    # If filtering removed everything, fall back to top candidates
+    if not filtered:
+        filtered = candidates[:max_candidates]
+
+    return filtered
+
+
 def select_topk_candidates_for_view(
     *,
     index: UnsupervisedROIIndex,
@@ -2051,5 +2108,11 @@ __all__ = [
     "UnsupervisedROIIndex",
     "build_unsupervised_roi_index",
     "select_topk_candidates_for_view",
+    "_prefilter_candidates_for_vllm",
     "clear_all_reference_caches",
+    # VLLM optimization config
+    "VLLM_PREFILTER_ENABLED",
+    "VLLM_MAX_CANDIDATES",
+    "VLLM_MIN_DARK_SCORE",
+    "VLLM_BAD_LIKE_REJECT",
 ]

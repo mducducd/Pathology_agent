@@ -47,7 +47,8 @@ ROI_CANDIDATE_MIN_SEPARATION_PX = int(os.getenv("ROI_CANDIDATE_MIN_SEPARATION_PX
 ROI_MARK_CANDIDATE_TOLERANCE_NORM = int(os.getenv("ROI_MARK_CANDIDATE_TOLERANCE_NORM", "170"))
 ROI_CANDIDATE_ALLOW_FALLBACK = os.getenv("ROI_CANDIDATE_ALLOW_FALLBACK", "1").strip().lower() in {"1", "true", "yes", "y"}
 # Hard cap on how many candidates the VLM sees in AML mode after raw retrieval ranking.
-ROI_CANDIDATE_TOP_K_AML = int(os.getenv("ROI_CANDIDATE_TOP_K_AML", "30"))
+# REDUCED from 30 to 10 for faster VLLM inference while preserving accuracy.
+ROI_CANDIDATE_TOP_K_AML = int(os.getenv("ROI_CANDIDATE_TOP_K_AML", "10"))
 ROI_RANKER_BATCH_SIZE = int(os.getenv("ROI_RANKER_BATCH_SIZE", "64"))
 ROI_RANKER_MAX_WORKERS = int(os.getenv("ROI_RANKER_MAX_WORKERS", "4"))
 ROI_COARSE_PREFILTER_TRIGGER_SUPERTILES = int(os.getenv("ROI_COARSE_PREFILTER_TRIGGER_SUPERTILES", "128"))
@@ -239,6 +240,17 @@ def _postprocess_roi_candidates_for_view(
         )
 
         processed = candidates_ranked[:ROI_CANDIDATE_TOP_K_AML]
+
+        # VLLM OPTIMIZATION: Apply additional pre-filtering to reduce token count
+        # This runs AFTER the main AML ranking to keep only the most promising candidates
+        if processed:
+            from .embeddings.roi_ranker import _prefilter_candidates_for_vllm
+            processed = _prefilter_candidates_for_vllm(
+                processed,
+                max_candidates=min(len(processed), 8),  # Aggressive limit for VLLM speed
+                min_dark_score=0.18,  # Higher threshold for VLLM input
+                reject_bad_like=True,
+            )
 
     return processed, source, meta
 
@@ -878,25 +890,23 @@ def _refresh_roi_candidates_for_current_view(top_k: int = ROI_CANDIDATE_TOP_K) -
     return candidates
 
 
-_CANDIDATE_REFERENCE_FIELDS = {
-    "quality_hint",
-    "bad_likelihood",
-    "bad_margin",
-    "bad_top1_similarity",
-    "good_top1_similarity",
-    "blast_top1_similarity",
-    "blast_similarity_score",
-    "retrieved_bad_refs",
-    "retrieved_good_refs",
-    "retrieved_blast_refs",
-    "reference_mode",
-    "aml_reference_evidence",
-}
-
-
 def _candidate_for_vlm(candidate: Dict[str, Any]) -> Dict[str, Any]:
-    """Return a copy of candidate with internal reference/ranking fields removed."""
-    return {k: v for k, v in candidate.items() if k not in _CANDIDATE_REFERENCE_FIELDS}
+    """Return a copy of candidate with only essential VLM fields.
+
+    Strips all internal scoring, ranking, and reference fields to:
+    - Reduce token count for faster VLLM inference
+    - Keep VLM focused on visual evidence, not numerical scores
+    - Prevent "out of domain" confusion from ML metadata
+    """
+    # Minimal fields the VLM actually needs for ROI decision
+    essential_fields = {
+        "rank", "tile_index", "center_norm", "bbox_norm",
+        "center_level0", "tile_bbox_level0",
+        "quality_hint",  # good_like / bad_like / uncertain
+        "dark_roi_score",  # cellularity measure (AML mode only)
+        "inside_dark_region",  # whether tile is in dark region (AML mode only)
+    }
+    return {k: v for k, v in candidate.items() if k in essential_fields}
 
 
 def _attach_roi_candidates(info: Dict[str, Any], top_k: int = ROI_CANDIDATE_TOP_K) -> Dict[str, Any]:
@@ -916,17 +926,21 @@ def _attach_roi_candidates(info: Dict[str, Any], top_k: int = ROI_CANDIDATE_TOP_
         kept_roi_count = len(state._roi_marks)
         if kept_roi_count >= 4:
             info["aml_stop_hint"] = (
-                "If the evidence you already have is enough for a stable final AML decision "
-                "(Normal marrow / Acute leukemia / Call for more diagnostics), stop now and give the final answer. "
-                f"You already have {kept_roi_count} kept ROI(s); do not explore another ROI unless it could materially change the decision."
+                "You have 4+ kept ROIs. If they consistently show either: "
+                "(a) heterogeneous maturation with blasts <5% → Normal marrow, OR "
+                "(b) dominant blast-like population with blasts ≥20% → Acute leukemia, "
+                "stop now and give the final decision. Do NOT explore more ROIs unless the current evidence is genuinely non-diagnostic."
             )
         elif kept_roi_count == 1:
             info["aml_stop_hint"] = (
-                "One ROI is screening evidence only. Try to inspect additional representative top-ranked ROIs from distinct slide regions before a final AML category if feasible."
+                "One ROI is screening evidence only. Inspect 1-3 additional representative ROIs from distinct slide regions before final decision. "
+                "Remember: scattered immature cells are NORMAL - require convincing diffuse blast population for AML."
             )
         else:
             info["aml_stop_hint"] = (
-                "Two to five ROIs are supportive but still limited for diffuse AML assessment. Prefer additional representative top-ranked ROIs across the slide before the final category when feasible."
+                f"You have {kept_roi_count} kept ROIs. This is often sufficient for a final decision. "
+                "If ROIs show mixed maturation or lack convincing blasts → default to Normal marrow. "
+                "Only continue if you genuinely need more evidence to distinguish 5-20% blast range."
             )
 
     # Detect how many consecutive recent steps have stayed in the same slide region.
@@ -1081,6 +1095,13 @@ def _attach_roi_candidates(info: Dict[str, Any], top_k: int = ROI_CANDIDATE_TOP_
                 "Use one of the top-K candidate centers/bboxes for wsi_mark_roi_norm; "
                 "arbitrary ROI coordinates are rejected."
             )
+            # VLLM OPTIMIZATION: Add metadata about candidate filtering
+            info["vllm_optimization"] = {
+                "candidates_filtered": len(candidates),
+                "max_candidates_sent": min(len(candidates), 8),
+                "bad_like_rejected": True,
+                "low_cellularity_filtered": True,
+            }
         else:
             info["roi_candidate_guidance"] = (
                 "Use one of the top-K candidate centers/bboxes for wsi_mark_roi_norm. "
@@ -1703,7 +1724,21 @@ def wsi_save_tile_norm(
             },
         )
 
-        return {
+        # Check if this tile overlaps with any marked ROI
+        tile_cx = x0 + tile_px // 2
+        tile_cy = y0 + tile_px // 2
+        matching_roi = None
+        for roi in state._roi_marks:
+            roi_bbox = roi.get("view_bbox_level0")
+            if roi_bbox:
+                roi_cx = roi_bbox[0] + roi_bbox[2] // 2
+                roi_cy = roi_bbox[1] + roi_bbox[3] // 2
+                dist = ((tile_cx - roi_cx) ** 2 + (tile_cy - roi_cy) ** 2) ** 0.5
+                if dist < tile_px * 0.75:  # Within ~3/4 of tile width
+                    matching_roi = roi
+                    break
+
+        response = {
             "ok": True,
             "quality": quality,
             "path": out_path,
@@ -1713,6 +1748,21 @@ def wsi_save_tile_norm(
             "tile_um": TILE_SIZE_UM,
             "mpp_used": mpp,
         }
+
+        if matching_roi:
+            response["roi_id"] = matching_roi["roi_id"]
+            response["roi_label"] = matching_roi["label"]
+            response["note"] = f"Tile saved from marked ROI #{matching_roi['roi_id']} ({matching_roi['label']})"
+        else:
+            response["roi_id"] = None
+            response["note"] = (
+                "TIP: This tile was saved WITHOUT a corresponding marked ROI. "
+                "For proper documentation, first call wsi_mark_roi_norm on diagnostic regions, "
+                "then call wsi_save_tile_norm to save tiles from those marked ROIs. "
+                "ROIs appear in the GUI report; saved tiles do not."
+            )
+
+        return response
 
     return _safe(
         _inner,

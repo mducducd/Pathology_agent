@@ -5,6 +5,10 @@ runs/
 outputs/
 wsi_debug/
 wsi_reports/
+Selected_Tiles/backup/
+temp_run_non_personal_150425_aml_suite.sh
+run_batch_aml.sh
+.codex
 *.egg-info
 .venv
 

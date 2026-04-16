@@ -11,7 +11,8 @@ An illustration of AML agent
 > **Info**
 >
 > Evaluation on a private dataset (50 AML, 50 normal marrow):  
-> **UNI2 + GPT-OSS-120B** achieves **93% accuracy**, with only **1 AML → normal marrow** error.
+> ([**Gemma-4-31B-it**](https://huggingface.co/google/gemma-4-31B-it)) achieves the highest decision accuracy.
+> ([**UNI-2**](https://github.com/mahmoodlab/UNI)) provides the strongest visual embeddings, outperforming domain-specific blood cell DINO variants.
 
 ## Install
 
