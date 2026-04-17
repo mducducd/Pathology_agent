@@ -16,6 +16,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from wsi_core_pkg.embeddings import (
+    available_embedding_extractors,
+    embedding_extractor_display_name,
     extract_wsi_features_by_tiles,
     save_tile_features_npz,
     uni2,
@@ -45,7 +47,16 @@ ALLOWED_MODEL_NAMES = {
     "gpt-oss-20b",
     "gemma-4-31B-it",
 }
-ALLOWED_EMBEDDING_EXTRACTORS = {"uni2", "dinobloom", "reddino", "reddino_base", "reddino_large"}
+EMBEDDING_EXTRACTOR_OPTIONS = [
+    {
+        "name": name,
+        "label": embedding_extractor_display_name(name),
+    }
+    for name in available_embedding_extractors()
+    if not str(name).endswith("_onnx")
+]
+ALLOWED_EMBEDDING_EXTRACTORS = {item["name"] for item in EMBEDDING_EXTRACTOR_OPTIONS}
+DEFAULT_EMBEDDING_EXTRACTOR = "uni2"
 ALLOWED_TILE_PREFILTER_METHODS = {"none", "coarse", "quality", "hybrid"}
 DEFAULT_SERVER_SLIDE_ROOTS = [
     Path("/mnt/copernicus3/PATHOLOGY/others/private/haemadata/ALL_WSIs/"),
@@ -751,12 +762,20 @@ def get_default_prompts():
         }
     }
 
+
+@app.get("/api/embedding_extractors")
+def get_embedding_extractors():
+    return {
+        "default_extractor": DEFAULT_EMBEDDING_EXTRACTOR,
+        "extractors": EMBEDDING_EXTRACTOR_OPTIONS,
+    }
+
 @app.post("/api/runs/create")
 async def create_run(
     prompt: str = Form(""),
     agent_type: str = Form("wsi"),
     model_name: str = Form(MODEL_NAME),
-    extractor_name: str = Form("uni2"),
+    extractor_name: str = Form(DEFAULT_EMBEDDING_EXTRACTOR),
     tile_size_px: int = Form(224),
     tile_size_um: float = Form(256.0),
     batch_size: int = Form(128),
@@ -1092,6 +1111,7 @@ def get_dark_regions(
         max_regions=max_regions,
     )
     result["image_url"] = make_debug_image_url(result.get("image_path"))
+    result["mask_url"] = make_debug_image_url(result.get("mask_path"))
     return result
 
 

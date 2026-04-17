@@ -24,6 +24,23 @@ from datetime import datetime
 from pathlib import Path
 
 
+_EXTRACTOR_ALIASES = {
+    "uni2": "uni2",
+    "uni_2": "uni2",
+    "virchow2": "virchow2",
+    "virchow_2": "virchow2",
+    "h_optimus_1": "h_optimus_1",
+    "dinobloom": "dinobloom",
+    "dino_bloom": "dinobloom",
+    "dinobloom_s": "dinobloom",
+    "dinobloom_small": "dinobloom",
+    "dinobloom_g": "dinobloom_giant",
+    "dino_bloom_g": "dinobloom_giant",
+    "dinobloom_giant": "dinobloom_giant",
+    "dino_bloom_giant": "dinobloom_giant",
+}
+
+
 def _extract_cuda_device_arg(argv: list[str]) -> str | None:
     for index, arg in enumerate(argv):
         if arg == "--cuda-device" and index + 1 < len(argv):
@@ -47,6 +64,12 @@ def _sanitize_stem(value: str) -> str:
     return safe.strip("._-") or "item"
 
 
+def _canonicalize_extractor_alias(name: str | None, default: str = "reddino") -> str:
+    raw = str(name or default).strip().lower()
+    raw = raw.replace("-", "_").replace(" ", "_")
+    return _EXTRACTOR_ALIASES.get(raw, raw or default)
+
+
 def _shared_cache_dir(experiment_root: Path, extractor_name: str) -> Path:
     return experiment_root / "_cache" / "tile_cache" / _sanitize_stem(extractor_name)
 
@@ -60,7 +83,7 @@ if _EARLY_CUDA_DEVICE not in (None, ""):
     os.environ["CUDA_VISIBLE_DEVICES"] = str(_EARLY_CUDA_DEVICE)
 
 _EARLY_EXPERIMENT_ROOT = _extract_cli_value(sys.argv[1:], "--experiment-root")
-_EARLY_EXTRACTOR = _extract_cli_value(sys.argv[1:], "--extractor") or "reddino"
+_EARLY_EXTRACTOR = _canonicalize_extractor_alias(_extract_cli_value(sys.argv[1:], "--extractor"))
 if _EARLY_EXPERIMENT_ROOT not in (None, ""):
     early_experiment_root = Path(_EARLY_EXPERIMENT_ROOT).expanduser().resolve()
     os.environ["ROI_TILE_CACHE_DIR"] = str(
@@ -76,6 +99,7 @@ if str(REPO_ROOT) not in sys.path:
 
 try:
     from wsi_core_pkg import state
+    from wsi_core_pkg.embeddings import available_embedding_extractors, normalize_embedding_extractor_name
     from wsi_core_pkg.state import reset_wsi_state, set_slide_path
     from wsi_core_pkg.tools import _ensure_unsupervised_roi_index
 except ModuleNotFoundError as exc:
@@ -95,6 +119,17 @@ MIRAX_EXTS = {".mrxs", ".mrsx"}
 def _make_run_id(patient_name: str) -> str:
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     return f"precache_{stamp}_{_sanitize_stem(patient_name)[:60]}"
+
+
+def _normalize_extractor_name(name: str | None) -> str:
+    candidate = _canonicalize_extractor_alias(name)
+    try:
+        return normalize_embedding_extractor_name(candidate)
+    except ValueError as exc:
+        extractor_options = ", ".join(sorted(available_embedding_extractors()))
+        raise SystemExit(
+            f"Unknown extractor '{name}'. Use one of: {extractor_options}"
+        ) from exc
 
 
 def _iter_entries(csv_path: Path) -> list[str]:
@@ -166,7 +201,11 @@ def main() -> int:
         required=True,
         help="Experiment root whose _cache/ directory should be populated",
     )
-    parser.add_argument("--extractor", default="reddino", help="Extractor key, e.g. reddino or uni2")
+    parser.add_argument(
+        "--extractor",
+        default="reddino",
+        help="Extractor key, e.g. uni2, virchow2, h_optimus_1, dinobloom, dinobloom_giant (aliases like h-optimus-1, dino-bloom-s, and dino-bloom-g also work)",
+    )
     parser.add_argument("--tile-filter", default="hybrid", help="Tile prefilter method")
     parser.add_argument("--agent", default="aml", help="Agent mode used for cache prep")
     parser.add_argument("--cuda-device", default=None, help="Set CUDA_VISIBLE_DEVICES, e.g. 1")
@@ -184,9 +223,15 @@ def main() -> int:
     csv_path = Path(args.csv).resolve()
     slides_root = Path(args.slides_root).resolve()
     experiment_root = Path(args.experiment_root).resolve()
-    cache_dir = _shared_cache_dir(experiment_root, args.extractor)
-    reference_cache_dir = _shared_reference_cache_dir(experiment_root, args.extractor)
-    manifest_path = experiment_root / "_cache" / "preextract_manifest.json"
+    extractor_key = _normalize_extractor_name(args.extractor)
+    cache_dir = _shared_cache_dir(experiment_root, extractor_key)
+    reference_cache_dir = _shared_reference_cache_dir(experiment_root, extractor_key)
+    manifest_path = (
+        experiment_root
+        / "_cache"
+        / "preextract_manifests"
+        / f"{_sanitize_stem(extractor_key)}.json"
+    )
 
     experiment_root.mkdir(parents=True, exist_ok=True)
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -206,7 +251,7 @@ def main() -> int:
     print(f" Experiment root: {experiment_root}")
     print(f" Cache dir:       {cache_dir}")
     print(f" Ref cache dir:   {reference_cache_dir}")
-    print(f" Extractor:       {args.extractor}")
+    print(f" Extractor:       {extractor_key}")
     print(f" Agent:           {args.agent}")
     print(f" CUDA devices:    {os.getenv('CUDA_VISIBLE_DEVICES', 'all')}")
     print(f" Tile filter:     {args.tile_filter}")
@@ -242,6 +287,7 @@ def main() -> int:
             skipped += 1
             results.append(
                 {
+                    "extractor": extractor_key,
                     "patient": patient_name,
                     "slide": str(slide_path),
                     "status": "skip",
@@ -260,7 +306,7 @@ def main() -> int:
             set_slide_path(str(slide_path))
             reset_wsi_state(
                 run_id=run_id,
-                extractor_name=args.extractor,
+                extractor_name=extractor_key,
                 tile_size_um=args.tile_size_um,
                 tile_size_px=args.tile_size_px,
                 batch_size=args.batch_size,
@@ -277,6 +323,7 @@ def main() -> int:
             ok += 1
             results.append(
                 {
+                    "extractor": extractor_key,
                     "patient": patient_name,
                     "slide": str(slide_path),
                     "status": "ok",
@@ -292,6 +339,7 @@ def main() -> int:
             failed += 1
             results.append(
                 {
+                    "extractor": extractor_key,
                     "patient": patient_name,
                     "slide": str(slide_path),
                     "status": "error",

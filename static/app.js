@@ -232,6 +232,46 @@
     }
   }
 
+  async function loadEmbeddingExtractorOptions() {
+    if (!extractorSelect) return;
+    try {
+      const res = await fetch("/api/embedding_extractors", { cache: "no-store" });
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}`);
+      }
+      const payload = await res.json();
+      const extractors = Array.isArray(payload && payload.extractors) ? payload.extractors : [];
+      if (!extractors.length) return;
+
+      const currentValue = extractorSelect.value;
+      const defaultExtractor =
+        payload && typeof payload.default_extractor === "string" && payload.default_extractor
+          ? payload.default_extractor
+          : "uni2";
+
+      extractorSelect.innerHTML = "";
+      for (const item of extractors) {
+        const name = item && typeof item.name === "string" ? item.name : "";
+        if (!name) continue;
+        const label =
+          item && typeof item.label === "string" && item.label.trim()
+            ? item.label
+            : name;
+        const option = document.createElement("option");
+        option.value = name;
+        option.textContent = label;
+        extractorSelect.appendChild(option);
+      }
+
+      const nextValue = Array.from(extractorSelect.options).some((opt) => opt.value === currentValue)
+        ? currentValue
+        : defaultExtractor;
+      extractorSelect.value = nextValue;
+    } catch (err) {
+      console.warn("Failed to load embedding extractor options from backend", err);
+    }
+  }
+
   function maybeLoadDefaultPrompt() {
     const type = selectedAgentType();
     const d = defaultPrompts[type] || "";
@@ -248,6 +288,7 @@
     agentSelect.addEventListener("change", maybeLoadDefaultPrompt);
   }
   loadDefaultPrompts();
+  loadEmbeddingExtractorOptions();
 
   const allowedPrimary = new Set([".svs", ".tif", ".tiff", ".ndpi", ".mrxs", ".mrsx"]);
   const allowedZip = ".zip";
@@ -271,6 +312,7 @@
   let lastRenderedRoi = 0;
   let darkRegionsLoaded = false;
   let darkBoxes = [];
+  let darkMaskMode = false;
   let darkRegionsEnabled = false;
   let baseOverviewImageUrl = "";
   let selectedOverviewRoiId = null;
@@ -864,8 +906,7 @@
   }
 
   function applyOverviewDisplaySource() {
-    const darkUrl = (darkRegionsEnabled && darkRegionsLoaded && darkImg && darkImg.src) ? darkImg.src : "";
-    const nextSrc = darkUrl || baseOverviewImageUrl || "";
+    const nextSrc = baseOverviewImageUrl || "";
 
     if (!nextSrc) {
       overviewImg.hidden = true;
@@ -887,6 +928,7 @@
   function clearDarkRegions() {
     darkImg.hidden = true;
     darkImg.src = "";
+    darkMaskMode = false;
     setDarkEmptyState(darkRegionsEnabled ? DARK_EMPTY_LOADING_TEXT : DARK_EMPTY_OFF_TEXT);
     darkBoxes = [];
     const ctx = darkCanvas.getContext("2d");
@@ -2022,42 +2064,64 @@
     }
     ctx.clearRect(0, 0, overviewCanvas.width, overviewCanvas.height);
 
-    if (darkRegionsEnabled && darkRegionsLoaded && darkImg && darkImg.src && overviewImg.src === darkImg.src) {
-      ctx.save();
-      ctx.lineWidth = Math.max(1, Math.round(Math.min(imgW, imgH) * 0.003));
-      ctx.strokeStyle = "rgba(124,240,193,0.92)";
-      ctx.setLineDash([10, 7]);
-      for (const b of darkBoxes) {
-        if (!b || !Number.isFinite(Number(b.x)) || !Number.isFinite(Number(b.y)) ||
-            !Number.isFinite(Number(b.w)) || !Number.isFinite(Number(b.h))) {
-          continue;
+    if (darkRegionsEnabled && darkRegionsLoaded) {
+      const darkW = (darkImg && (darkImg.naturalWidth || darkImg.width)) || 0;
+      const darkH = (darkImg && (darkImg.naturalHeight || darkImg.height)) || 0;
+      const canDrawMask = !!(darkMaskMode && darkImg && darkImg.src && darkW && darkH);
+
+      if (canDrawMask) {
+        try {
+          ctx.save();
+          ctx.fillStyle = "rgba(0,0,0,0.45)";
+          ctx.fillRect(0, 0, overviewCanvas.width, overviewCanvas.height);
+          ctx.globalCompositeOperation = "destination-out";
+          ctx.drawImage(darkImg, 0, 0, overviewCanvas.width, overviewCanvas.height);
+        } catch (e) {
+          // ignore drawing errors
+        } finally {
+          ctx.restore();
         }
-        ctx.strokeRect(Number(b.x), Number(b.y), Number(b.w), Number(b.h));
-      }
-      ctx.setLineDash([]);
-      ctx.fillStyle = "rgba(124,240,193,0.98)";
-      ctx.font = "bold 11px sans-serif";
-      ctx.fillText("Dark-region heuristic", 10, 18);
-      // Dim non-dark regions by overlaying a translucent dark layer,
-      // then carve out the dark-region boxes so they remain fully visible.
-      try {
+
         ctx.save();
-        ctx.fillStyle = "rgba(0,0,0,0.45)"; // adjust dimming here
-        ctx.fillRect(0, 0, overviewCanvas.width, overviewCanvas.height);
-        ctx.globalCompositeOperation = "destination-out";
+        ctx.fillStyle = "rgba(124,240,193,0.98)";
+        ctx.font = "bold 11px sans-serif";
+        ctx.fillText("Dark-region refined mask", 10, 18);
+        ctx.restore();
+      } else if (darkImg && darkImg.src && darkBoxes.length) {
+        ctx.save();
+        ctx.lineWidth = Math.max(1, Math.round(Math.min(imgW, imgH) * 0.003));
+        ctx.strokeStyle = "rgba(124,240,193,0.92)";
+        ctx.setLineDash([10, 7]);
         for (const b of darkBoxes) {
           if (!b || !Number.isFinite(Number(b.x)) || !Number.isFinite(Number(b.y)) ||
               !Number.isFinite(Number(b.w)) || !Number.isFinite(Number(b.h))) {
             continue;
           }
-          ctx.fillRect(Number(b.x), Number(b.y), Number(b.w), Number(b.h));
+          ctx.strokeRect(Number(b.x), Number(b.y), Number(b.w), Number(b.h));
         }
-      } catch (e) {
-        // ignore drawing errors
-      } finally {
+        ctx.setLineDash([]);
+        ctx.fillStyle = "rgba(124,240,193,0.98)";
+        ctx.font = "bold 11px sans-serif";
+        ctx.fillText("Dark-region heuristic", 10, 18);
+        try {
+          ctx.save();
+          ctx.fillStyle = "rgba(0,0,0,0.45)";
+          ctx.fillRect(0, 0, overviewCanvas.width, overviewCanvas.height);
+          ctx.globalCompositeOperation = "destination-out";
+          for (const b of darkBoxes) {
+            if (!b || !Number.isFinite(Number(b.x)) || !Number.isFinite(Number(b.y)) ||
+                !Number.isFinite(Number(b.w)) || !Number.isFinite(Number(b.h))) {
+              continue;
+            }
+            ctx.fillRect(Number(b.x), Number(b.y), Number(b.w), Number(b.h));
+          }
+        } catch (e) {
+          // ignore drawing errors
+        } finally {
+          ctx.restore();
+        }
         ctx.restore();
       }
-      ctx.restore();
     }
 
     const roiEntries = Array.from(roiById.values())
@@ -2557,7 +2621,7 @@
   }
 
   function renderDarkOverlay() {
-    if (!darkImg.src || !darkBoxes.length) {
+    if (!darkImg.src) {
       const ctx = darkCanvas.getContext("2d");
       ctx.clearRect(0, 0, darkCanvas.width, darkCanvas.height);
       return;
@@ -2569,6 +2633,22 @@
     darkCanvas.height = h;
     const ctx = darkCanvas.getContext("2d");
     ctx.clearRect(0, 0, w, h);
+    if (darkMaskMode) {
+      try {
+        ctx.fillStyle = "rgba(0,0,0,0.45)";
+        ctx.fillRect(0, 0, w, h);
+        ctx.globalCompositeOperation = "destination-out";
+        ctx.drawImage(darkImg, 0, 0, w, h);
+      } catch (e) {
+        // ignore drawing errors
+      } finally {
+        ctx.globalCompositeOperation = "source-over";
+      }
+      return;
+    }
+    if (!darkBoxes.length) {
+      return;
+    }
     ctx.lineWidth = Math.max(1, Math.round(Math.min(w, h) * 0.003));
     ctx.strokeStyle = "rgba(124,240,193,0.9)";
     for (const b of darkBoxes) {
@@ -2582,22 +2662,25 @@
       const res = await fetch(`/api/runs/${encodeURIComponent(runId)}/dark_regions`, { cache: "no-store" });
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
-      if (!data.image_url) throw new Error("No overview image returned.");
+      const overlayUrl = data.mask_url || data.image_url || "";
+      if (!overlayUrl) throw new Error("No dark-region overlay returned.");
 
       darkRegionsLoaded = true;
       darkBoxes = Array.isArray(data.boxes) ? data.boxes : [];
+      darkMaskMode = Boolean(data.mask_url);
       darkImg.hidden = true;
       darkImg.onload = () => {
-        applyOverviewDisplaySource();
+        renderDarkOverlay();
         renderOverviewRoiOverlay();
       };
-      darkImg.src = data.image_url;
-      setDarkEmptyState("Showing in Overview.");
+      darkImg.src = overlayUrl;
+      setDarkEmptyState(darkMaskMode ? "Showing refined mask in Overview." : "Showing coarse boxes in Overview.");
       applyOverviewDisplaySource();
     } catch (e) {
       darkRegionsLoaded = false;
       darkImg.hidden = true;
       darkImg.src = "";
+      darkMaskMode = false;
       setDarkEmptyState(String(e && e.message ? e.message : e));
       applyOverviewDisplaySource();
     }

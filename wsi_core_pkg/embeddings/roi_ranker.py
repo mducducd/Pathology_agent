@@ -13,17 +13,29 @@ from PIL import Image
 
 from .extractors.uni2 import uni2
 from .tiling import SlideMPP, extract_wsi_features_by_tiles, get_slide_mpp_
+from ..tuning_config import tuning_section
 
 try:
     import hnswlib
 except Exception:  # pragma: no cover - optional runtime acceleration
     hnswlib = None
 
+SHARED_AML_SUPPORT_CFG = tuning_section("shared.aml_quality_support")
+ROI_RANKER_CORE_CFG = tuning_section("roi_ranker.core")
+ROI_RANKER_REFERENCE_HNSW_CFG = tuning_section("roi_ranker.reference_hnsw")
+ROI_RANKER_REFERENCE_SCORING_CFG = tuning_section("roi_ranker.reference_scoring")
+ROI_RANKER_BLAST_CFG = tuning_section("roi_ranker.blast_reference")
+ROI_RANKER_VLLM_CFG = tuning_section("roi_ranker.vllm")
+ROI_RANKER_KNN_GRAPH_CFG = tuning_section("roi_ranker.knn_graph")
+ROI_RANKER_QUALITY_CFG = tuning_section("roi_ranker.quality_scoring")
+
 # HNSW parameters for reference tile indexing
-AML_REFERENCE_HNSW_M = int(os.getenv("AML_REFERENCE_HNSW_M", "32"))
-AML_REFERENCE_HNSW_EF_CONSTRUCTION = int(os.getenv("AML_REFERENCE_HNSW_EF_CONSTRUCTION", "200"))
-AML_REFERENCE_HNSW_EF_SEARCH = int(os.getenv("AML_REFERENCE_HNSW_EF_SEARCH", "100"))
-AML_REFERENCE_USE_HNSW = os.getenv("AML_REFERENCE_USE_HNSW", "auto").lower() in ("true", "1", "auto")
+AML_REFERENCE_HNSW_M = int(ROI_RANKER_REFERENCE_HNSW_CFG["AML_REFERENCE_HNSW_M"])
+AML_REFERENCE_HNSW_EF_CONSTRUCTION = int(ROI_RANKER_REFERENCE_HNSW_CFG["AML_REFERENCE_HNSW_EF_CONSTRUCTION"])
+AML_REFERENCE_HNSW_EF_SEARCH = int(ROI_RANKER_REFERENCE_HNSW_CFG["AML_REFERENCE_HNSW_EF_SEARCH"])
+AML_REFERENCE_USE_HNSW = bool(ROI_RANKER_REFERENCE_HNSW_CFG["AML_REFERENCE_USE_HNSW"])
+AML_REFERENCE_EMBEDDING_CACHE = bool(ROI_RANKER_REFERENCE_HNSW_CFG["AML_REFERENCE_EMBEDDING_CACHE"])
+AML_REFERENCE_CACHE_DIR = str(ROI_RANKER_REFERENCE_HNSW_CFG["AML_REFERENCE_CACHE_DIR"])
 
 # Module-level cache for HNSW reference index
 _reference_hnsw_index: hnswlib.Index | None = None
@@ -31,59 +43,77 @@ _reference_features: npt.NDArray[np.float32] | None = None
 _reference_labels: npt.NDArray[np.str_] | None = None
 _reference_paths: tuple[str, ...] | None = None
 
-ROI_KNN_RANDOM_SEED = int(os.getenv("ROI_KNN_RANDOM_SEED", "42"))
-ROI_CANDIDATE_MAX_IOU = float(os.getenv("ROI_CANDIDATE_MAX_IOU", "0.28"))
+ROI_KNN_RANDOM_SEED = int(ROI_RANKER_CORE_CFG["ROI_KNN_RANDOM_SEED"])
+ROI_CANDIDATE_MAX_IOU = float(ROI_RANKER_CORE_CFG["ROI_CANDIDATE_MAX_IOU"])
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".tif", ".tiff"}
 
 # Scoring weights for generic WSI mode: score = w_nov*z(novelty) + w_cen*z(centroid_dist)
 # Reduced novelty weight to less aggressive outlier-seeking (reduces false positives)
-WSI_W_NOVELTY = float(os.getenv("WSI_W_NOVELTY", "0.55"))
-WSI_W_CENTROID = float(os.getenv("WSI_W_CENTROID", "0.40"))
+WSI_W_NOVELTY = float(ROI_RANKER_CORE_CFG["WSI_W_NOVELTY"])
+WSI_W_CENTROID = float(ROI_RANKER_CORE_CFG["WSI_W_CENTROID"])
+ROI_NOVELTY_CLIP_PERCENTILE = float(ROI_RANKER_CORE_CFG["ROI_NOVELTY_CLIP_PERCENTILE"])
 
-AML_REFERENCE_TOP_K = int(os.getenv("AML_REFERENCE_TOP_K", "7"))
-AML_REFERENCE_QUERY_BLOCK_ROWS = int(os.getenv("AML_REFERENCE_QUERY_BLOCK_ROWS", "1024"))
-AML_REFERENCE_LOGIT_SCALE = float(os.getenv("AML_REFERENCE_LOGIT_SCALE", "3.0"))  # Softer bad_likelihood for fewer false rejections
-AML_REFERENCE_EVIDENCE_PER_CLASS = int(os.getenv("AML_REFERENCE_EVIDENCE_PER_CLASS", "3"))
-AML_DISABLE_BAD_REFERENCES = os.getenv("AML_DISABLE_BAD_REFERENCES", "false").lower() in ("true", "1", "yes")
-AML_BAD_TOP1_REJECT_THRESHOLD = float(os.getenv("AML_BAD_TOP1_REJECT_THRESHOLD", "0.65"))
-AML_BAD_TOP1_AMBIGUOUS_THRESHOLD = float(os.getenv("AML_BAD_TOP1_AMBIGUOUS_THRESHOLD", "0.48"))
-AML_GOOD_BAD_TOP1_MIN_GAP = float(os.getenv("AML_GOOD_BAD_TOP1_MIN_GAP", "0.08"))
-AML_BAD_LIKE_REJECT_THRESHOLD = float(os.getenv("AML_BAD_LIKE_REJECT_THRESHOLD", "0.40"))
-AML_BAD_MARGIN_REJECT_THRESHOLD = float(os.getenv("AML_BAD_MARGIN_REJECT_THRESHOLD", "-0.02"))
-AML_GOOD_LIKE_MARGIN_THRESHOLD = float(os.getenv("AML_GOOD_LIKE_MARGIN_THRESHOLD", "0.03"))
-AML_GOOD_LIKE_BAD_LIKELIHOOD_MAX = float(os.getenv("AML_GOOD_LIKE_BAD_LIKELIHOOD_MAX", "0.44"))
-AML_GOOD_LIKE_TOP1_GAP = float(os.getenv("AML_GOOD_LIKE_TOP1_GAP", "0.04"))
-AML_BORDERLINE_BAD_LIKELIHOOD = float(os.getenv("AML_BORDERLINE_BAD_LIKELIHOOD", "0.52"))
-AML_BORDERLINE_BAD_MARGIN_MAX = float(os.getenv("AML_BORDERLINE_BAD_MARGIN_MAX", "0.04"))
-AML_BORDERLINE_BAD_TOP1_GAP = float(os.getenv("AML_BORDERLINE_BAD_TOP1_GAP", "0.03"))
-AML_DARK_VIEW_PERCENTILE = float(os.getenv("AML_DARK_VIEW_PERCENTILE", "50.0"))
-AML_DARK_VIEW_MIN_TILES = int(os.getenv("AML_DARK_VIEW_MIN_TILES", "8"))
-
-# Aggregation method for K-NN retrieval: "mean", "max", or "weighted"
-AML_REFERENCE_AGGREGATION = os.getenv("AML_REFERENCE_AGGREGATION", "mean")
-
-# Minimum dark_roi_score percentile for candidate eligibility (filters empty/background tiles)
-AML_MIN_DARK_SCORE_PERCENTILE = float(os.getenv("AML_MIN_DARK_SCORE_PERCENTILE", "15.0"))
+AML_REFERENCE_TOP_K = int(ROI_RANKER_REFERENCE_SCORING_CFG["AML_REFERENCE_TOP_K"])
+AML_REFERENCE_QUERY_BLOCK_ROWS = int(ROI_RANKER_REFERENCE_SCORING_CFG["AML_REFERENCE_QUERY_BLOCK_ROWS"])
+AML_REFERENCE_LOGIT_SCALE = float(ROI_RANKER_REFERENCE_SCORING_CFG["AML_REFERENCE_LOGIT_SCALE"])
+AML_REFERENCE_EVIDENCE_PER_CLASS = int(ROI_RANKER_REFERENCE_SCORING_CFG["AML_REFERENCE_EVIDENCE_PER_CLASS"])
+AML_DISABLE_BAD_REFERENCES = bool(ROI_RANKER_REFERENCE_SCORING_CFG["AML_DISABLE_BAD_REFERENCES"])
+AML_BAD_TOP1_REJECT_THRESHOLD = float(ROI_RANKER_REFERENCE_SCORING_CFG["AML_BAD_TOP1_REJECT_THRESHOLD"])
+AML_BAD_TOP1_AMBIGUOUS_THRESHOLD = float(ROI_RANKER_REFERENCE_SCORING_CFG["AML_BAD_TOP1_AMBIGUOUS_THRESHOLD"])
+AML_GOOD_BAD_TOP1_MIN_GAP = float(ROI_RANKER_REFERENCE_SCORING_CFG["AML_GOOD_BAD_TOP1_MIN_GAP"])
+AML_BAD_LIKE_REJECT_THRESHOLD = float(ROI_RANKER_REFERENCE_SCORING_CFG["AML_BAD_LIKE_REJECT_THRESHOLD"])
+AML_BAD_MARGIN_REJECT_THRESHOLD = float(ROI_RANKER_REFERENCE_SCORING_CFG["AML_BAD_MARGIN_REJECT_THRESHOLD"])
+AML_GOOD_LIKE_MARGIN_THRESHOLD = float(ROI_RANKER_REFERENCE_SCORING_CFG["AML_GOOD_LIKE_MARGIN_THRESHOLD"])
+AML_GOOD_LIKE_BAD_LIKELIHOOD_MAX = float(ROI_RANKER_REFERENCE_SCORING_CFG["AML_GOOD_LIKE_BAD_LIKELIHOOD_MAX"])
+AML_GOOD_LIKE_TOP1_GAP = float(ROI_RANKER_REFERENCE_SCORING_CFG["AML_GOOD_LIKE_TOP1_GAP"])
+AML_BORDERLINE_BAD_LIKELIHOOD = float(ROI_RANKER_REFERENCE_SCORING_CFG["AML_BORDERLINE_BAD_LIKELIHOOD"])
+AML_BORDERLINE_BAD_MARGIN_MAX = float(ROI_RANKER_REFERENCE_SCORING_CFG["AML_BORDERLINE_BAD_MARGIN_MAX"])
+AML_BORDERLINE_BAD_TOP1_GAP = float(ROI_RANKER_REFERENCE_SCORING_CFG["AML_BORDERLINE_BAD_TOP1_GAP"])
+AML_DARK_VIEW_PERCENTILE = float(ROI_RANKER_REFERENCE_SCORING_CFG["AML_DARK_VIEW_PERCENTILE"])
+AML_DARK_VIEW_MIN_TILES = int(ROI_RANKER_REFERENCE_SCORING_CFG["AML_DARK_VIEW_MIN_TILES"])
+AML_REFERENCE_AGGREGATION = str(ROI_RANKER_REFERENCE_SCORING_CFG["AML_REFERENCE_AGGREGATION"])
+AML_MIN_DARK_SCORE_PERCENTILE = float(ROI_RANKER_REFERENCE_SCORING_CFG["AML_MIN_DARK_SCORE_PERCENTILE"])
+AML_QUALITY_REJECT_MARGIN = float(ROI_RANKER_REFERENCE_SCORING_CFG["AML_QUALITY_REJECT_MARGIN"])
 
 # Blast cell reference configuration
-AML_BLAST_CELLS_ROOT = os.getenv("AML_BLAST_CELLS_ROOT", "./Selected_Tiles/blast_cells")
-AML_BLAST_SIMILARITY_WEIGHT = float(os.getenv("AML_BLAST_SIMILARITY_WEIGHT", "0.25"))  # Weight for blast similarity in ranking
-AML_BLAST_TOP_K = int(os.getenv("AML_BLAST_TOP_K", "3"))  # Top-K blast neighbors for similarity
-AML_ENABLE_BLAST_REFERENCES = os.getenv("AML_ENABLE_BLAST_REFERENCES", "false").lower() in ("true", "1", "yes")
+AML_BLAST_CELLS_ROOT = str(ROI_RANKER_BLAST_CFG["AML_BLAST_CELLS_ROOT"])
+AML_BLAST_SIMILARITY_WEIGHT = float(ROI_RANKER_BLAST_CFG["AML_BLAST_SIMILARITY_WEIGHT"])
+AML_BLAST_TOP_K = int(ROI_RANKER_BLAST_CFG["AML_BLAST_TOP_K"])
+AML_ENABLE_BLAST_REFERENCES = bool(ROI_RANKER_BLAST_CFG["AML_ENABLE_BLAST_REFERENCES"])
 
 # Cache for blast cell embeddings
 _blast_features: npt.NDArray[np.float32] | None = None
 _blast_paths: tuple[str, ...] | None = None
 _blast_extractor_id: str | None = None
 
-AML_QUALITY_REJECT_MARGIN = float(os.getenv("AML_QUALITY_REJECT_MARGIN", "0.15"))  # Margin below which tiles are hard-rejected
-
 # VLLM optimization: pre-filter candidates before sending to VLM
 # These filters remove low-quality, out-of-domain candidates EARLY to reduce VLM token count
-VLLM_PREFILTER_ENABLED = os.getenv("VLLM_PREFILTER_ENABLED", "true").lower() in ("true", "1", "yes")
-VLLM_MAX_CANDIDATES = int(os.getenv("VLLM_MAX_CANDIDATES", "12"))  # Hard limit on candidates sent to VLM (reduced for higher quality)
-VLLM_MIN_DARK_SCORE = float(os.getenv("VLLM_MIN_DARK_SCORE", "0.15"))  # Minimum cellularity score (increased to filter low-cellularity tiles)
-VLLM_BAD_LIKE_REJECT = os.getenv("VLLM_BAD_LIKE_REJECT", "true").lower() in ("true", "1", "yes")  # Reject bad_like candidates
+VLLM_PREFILTER_ENABLED = bool(ROI_RANKER_VLLM_CFG["VLLM_PREFILTER_ENABLED"])
+VLLM_MAX_CANDIDATES = int(ROI_RANKER_VLLM_CFG["VLLM_MAX_CANDIDATES"])
+VLLM_MIN_DARK_SCORE = float(ROI_RANKER_VLLM_CFG["VLLM_MIN_DARK_SCORE"])
+VLLM_BAD_LIKE_REJECT = bool(ROI_RANKER_VLLM_CFG["VLLM_BAD_LIKE_REJECT"])
+AML_VLLM_GOOD_SUPPORT_EXEMPTION_TOP1_MIN = float(ROI_RANKER_VLLM_CFG["AML_VLLM_GOOD_SUPPORT_EXEMPTION_TOP1_MIN"])
+AML_SUPPORT_GOOD_TOP1_FLOOR = float(SHARED_AML_SUPPORT_CFG["AML_SUPPORT_GOOD_TOP1_FLOOR"])
+AML_SUPPORT_BAD_TOP1_CEILING = float(SHARED_AML_SUPPORT_CFG["AML_SUPPORT_BAD_TOP1_CEILING"])
+AML_SUPPORT_BAD_LIKE_CEILING = float(SHARED_AML_SUPPORT_CFG["AML_SUPPORT_BAD_LIKE_CEILING"])
+ROI_KNN_HNSW_EF_CONSTRUCTION = int(ROI_RANKER_KNN_GRAPH_CFG["ROI_KNN_HNSW_EF_CONSTRUCTION"])
+ROI_KNN_HNSW_M = int(ROI_RANKER_KNN_GRAPH_CFG["ROI_KNN_HNSW_M"])
+ROI_KNN_HNSW_EF_SEARCH_MIN = int(ROI_RANKER_KNN_GRAPH_CFG["ROI_KNN_HNSW_EF_SEARCH_MIN"])
+AML_QUALITY_PRIOR_BAD_MARGIN_WEIGHT = float(ROI_RANKER_QUALITY_CFG["AML_QUALITY_PRIOR_BAD_MARGIN_WEIGHT"])
+AML_QUALITY_PRIOR_SIMILARITY_GAP_WEIGHT = float(ROI_RANKER_QUALITY_CFG["AML_QUALITY_PRIOR_SIMILARITY_GAP_WEIGHT"])
+AML_BAD_LIKE_SOFT_PENALTY_BASELINE = float(ROI_RANKER_QUALITY_CFG["AML_BAD_LIKE_SOFT_PENALTY_BASELINE"])
+AML_BAD_MATCH_SOFT_PENALTY_OFFSET = float(ROI_RANKER_QUALITY_CFG["AML_BAD_MATCH_SOFT_PENALTY_OFFSET"])
+AML_BAD_MATCH_SOFT_PENALTY_SCALE = float(ROI_RANKER_QUALITY_CFG["AML_BAD_MATCH_SOFT_PENALTY_SCALE"])
+AML_QUALITY_PENALTY_BAD_LIKE_WEIGHT = float(ROI_RANKER_QUALITY_CFG["AML_QUALITY_PENALTY_BAD_LIKE_WEIGHT"])
+AML_QUALITY_PENALTY_BAD_MATCH_WEIGHT = float(ROI_RANKER_QUALITY_CFG["AML_QUALITY_PENALTY_BAD_MATCH_WEIGHT"])
+AML_ABSOLUTE_MIN_DARK_SCORE = float(ROI_RANKER_QUALITY_CFG["AML_ABSOLUTE_MIN_DARK_SCORE"])
+AML_COMBINED_RANK_DARK_WEIGHT = float(ROI_RANKER_QUALITY_CFG["AML_COMBINED_RANK_DARK_WEIGHT"])
+AML_COMBINED_RANK_BASE_SCORE_WEIGHT = float(ROI_RANKER_QUALITY_CFG["AML_COMBINED_RANK_BASE_SCORE_WEIGHT"])
+AML_COMBINED_RANK_QUALITY_PRIOR_WEIGHT = float(ROI_RANKER_QUALITY_CFG["AML_COMBINED_RANK_QUALITY_PRIOR_WEIGHT"])
+AML_COMBINED_RANK_QUALITY_PENALTY_WEIGHT = float(ROI_RANKER_QUALITY_CFG["AML_COMBINED_RANK_QUALITY_PENALTY_WEIGHT"])
+AML_COMBINED_RANK_GOOD_SUPPORT_BONUS = float(ROI_RANKER_QUALITY_CFG["AML_COMBINED_RANK_GOOD_SUPPORT_BONUS"])
+ROI_ADAPTIVE_MIN_SEPARATION_TILE_RATIO = float(ROI_RANKER_QUALITY_CFG["ROI_ADAPTIVE_MIN_SEPARATION_TILE_RATIO"])
+AML_DARK_REGION_BOX_PRIOR_WEIGHT = 0.08
 
 
 def _load_blast_cell_embeddings(
@@ -170,12 +200,6 @@ def _load_blast_cell_embeddings(
     _blast_extractor_id = extractor_id
 
     return features_l2, tuple(paths)
-
-# Novelty outlier clipping: tiles above this percentile of novelty are likely artifacts
-# (tissue folds, pen marks, torn edges). Clipped to this ceiling before z-scoring so
-# they don't dominate the ranking. Set to 100 to disable.
-ROI_NOVELTY_CLIP_PERCENTILE = float(os.getenv("ROI_NOVELTY_CLIP_PERCENTILE", "97.0"))
-
 
 @dataclass(frozen=True)
 class UnsupervisedROIIndex:
@@ -694,15 +718,13 @@ _persistent_cache_dir: Path | None = None
 # Module-level cache for precomputed reference embeddings
 _reference_embeddings_cache: dict[str, tuple[npt.NDArray[np.float32], npt.NDArray[np.str_], tuple[str, ...]]] | None = None
 
-# Environment variable to control embedding cache behavior
-AML_REFERENCE_EMBEDDING_CACHE = os.getenv("AML_REFERENCE_EMBEDDING_CACHE", "true").lower() in ("true", "1", "yes")
-
-
 def _get_persistent_cache_dir() -> Path:
     """Get or create the persistent cache directory for HNSW indices and embeddings."""
     global _persistent_cache_dir
-    if _persistent_cache_dir is None:
-        cache_dir = Path(os.getenv("AML_REFERENCE_CACHE_DIR", "./outputs/cache/reference_hnsw"))
+    env_override = os.getenv("AML_REFERENCE_CACHE_DIR", "").strip()
+    cache_root = Path(env_override) if env_override else Path(AML_REFERENCE_CACHE_DIR)
+    if _persistent_cache_dir is None or _persistent_cache_dir != cache_root:
+        cache_dir = cache_root
         cache_dir.mkdir(parents=True, exist_ok=True)
         _persistent_cache_dir = cache_dir
     return _persistent_cache_dir
@@ -1200,7 +1222,8 @@ def _suppress_artifact_outliers(
     cannot pull the z-score distribution so far that all normal tissue tiles
     collapse to near-zero score.
 
-    Set ROI_NOVELTY_CLIP_PERCENTILE=100 to disable.
+    Set `ROI_NOVELTY_CLIP_PERCENTILE = 100` in `configs/config.yaml`
+    (or via env override) to disable.
     """
     if novelty.size == 0 or percentile >= 100.0:
         return novelty
@@ -1225,13 +1248,13 @@ def _novelty_scores_from_knn(
         index = hnswlib.Index(space="cosine", dim=int(features_l2.shape[1]))
         index.init_index(
             max_elements=n,
-            ef_construction=200,
-            M=32,
+            ef_construction=ROI_KNN_HNSW_EF_CONSTRUCTION,
+            M=ROI_KNN_HNSW_M,
             random_seed=ROI_KNN_RANDOM_SEED,
         )
         ids = np.arange(n, dtype=np.int64)
         index.add_items(features_l2, ids, num_threads=1)
-        index.set_ef(max(64, k_eff))
+        index.set_ef(max(ROI_KNN_HNSW_EF_SEARCH_MIN, k_eff))
         _, distances = index.knn_query(features_l2, k=k_eff)
         # For cosine space in hnswlib, distance = 1 - cosine_similarity.
         return np.mean(distances[:, 1:], axis=1).astype(np.float32, copy=False)
@@ -1684,7 +1707,7 @@ def _prefilter_candidates_for_vllm(
         dark_score = cand.get("dark_roi_score")
         if dark_score is not None and dark_score < min_dark_score:
             # Exception: keep if good_support evidence exists
-            if cand.get("good_top1_similarity", 0.0) < 0.35:
+            if cand.get("good_top1_similarity", 0.0) < AML_VLLM_GOOD_SUPPORT_EXEMPTION_TOP1_MIN:
                 continue
 
         filtered.append(cand)
@@ -1727,6 +1750,7 @@ def select_topk_candidates_for_view(
     ranking_scores = index.scores[idxs].astype(np.float32, copy=False)
     dark_region_mode = "none"
     inside_dark_region_all: npt.NDArray[np.bool_] | None = None
+    dark_box_prior_view: npt.NDArray[np.float32] | None = None
     if focus_boxes_level0:
         inside_dark_region_all = np.zeros((index.num_tiles,), dtype=bool)
         for box in focus_boxes_level0:
@@ -1747,19 +1771,11 @@ def select_topk_candidates_for_view(
             )
 
         inside_dark_view = inside_dark_region_all[idxs]
-        # STRICT dark region gating: always restrict to tiles inside dark regions
-        # If no tiles are inside dark regions in this view, return empty candidates
-        # to force the agent to navigate to a different view.
-        if int(np.count_nonzero(inside_dark_view)) >= 2:
-            idxs = idxs[inside_dark_view]
-            ranking_scores = ranking_scores[inside_dark_view]
-            dark_region_mode = "restricted"
-        elif np.any(inside_dark_view):
-            # If only 1 tile is inside dark region, still restrict to it
-            idxs = idxs[inside_dark_view]
-            ranking_scores = ranking_scores[inside_dark_view]
-            dark_region_mode = "restricted"
-        # else: no tiles inside dark regions - return empty candidates (force navigation)
+        # Dark-region boxes are a coarse thumbnail prior, not a hard exclusion mask.
+        # Keep them as a ranking bonus so strong rescued tiles just outside the coarse
+        # boxes can still survive.
+        dark_box_prior_view = inside_dark_view.astype(np.float32, copy=False)
+        dark_region_mode = "prioritized" if np.any(inside_dark_view) else "outside"
 
     quality_prior_view: npt.NDArray[np.float32] | None = None
     quality_penalty_view: npt.NDArray[np.float32] | None = None
@@ -1788,14 +1804,16 @@ def select_topk_candidates_for_view(
             bad_margin=bad_margin_view,
         )
         good_support_view = (
-            (good_top1_view >= 0.38)
-            & (bad_top1_view <= 0.46)
-            & (bad_like_view <= 0.48)
+            (good_top1_view >= AML_SUPPORT_GOOD_TOP1_FLOOR)
+            & (bad_top1_view <= AML_SUPPORT_BAD_TOP1_CEILING)
+            & (bad_like_view <= AML_SUPPORT_BAD_LIKE_CEILING)
         )
         quality_keep = ~low_quality_mask
         if int(np.count_nonzero(quality_keep)) >= 2:
             idxs = idxs[quality_keep]
             ranking_scores = ranking_scores[quality_keep]
+            if dark_box_prior_view is not None and dark_box_prior_view.size == quality_keep.size:
+                dark_box_prior_view = dark_box_prior_view[quality_keep]
             bad_like_view = bad_like_view[quality_keep]
             bad_margin_view = bad_margin_view[quality_keep]
             bad_top1_view = bad_top1_view[quality_keep]
@@ -1814,6 +1832,8 @@ def select_topk_candidates_for_view(
         if int(np.count_nonzero(borderline_keep)) >= 2 and int(np.count_nonzero(borderline_bad_mask)) > 0:
             idxs = idxs[borderline_keep]
             ranking_scores = ranking_scores[borderline_keep]
+            if dark_box_prior_view is not None and dark_box_prior_view.size == borderline_keep.size:
+                dark_box_prior_view = dark_box_prior_view[borderline_keep]
             bad_like_view = bad_like_view[borderline_keep]
             bad_margin_view = bad_margin_view[borderline_keep]
             bad_top1_view = bad_top1_view[borderline_keep]
@@ -1822,20 +1842,25 @@ def select_topk_candidates_for_view(
                 good_support_view = good_support_view[borderline_keep]
 
         similarity_gap_view = (good_top1_view - bad_top1_view).astype(np.float32, copy=False)
-        quality_prior_view = (0.70 * bad_margin_view + 0.30 * similarity_gap_view).astype(np.float32, copy=False)
+        quality_prior_view = (
+            AML_QUALITY_PRIOR_BAD_MARGIN_WEIGHT * bad_margin_view
+            + AML_QUALITY_PRIOR_SIMILARITY_GAP_WEIGHT * similarity_gap_view
+        ).astype(np.float32, copy=False)
         bad_like_soft_penalty = np.clip(
-            (bad_like_view - 0.40) / max(AML_BAD_LIKE_REJECT_THRESHOLD - 0.40, 1e-6),
+            (
+                bad_like_view - AML_BAD_LIKE_SOFT_PENALTY_BASELINE
+            ) / max(AML_BAD_LIKE_REJECT_THRESHOLD - AML_BAD_LIKE_SOFT_PENALTY_BASELINE, 1e-6),
             0.0,
             1.0,
         )
         bad_match_soft_penalty = np.clip(
-            (bad_top1_view - good_top1_view + 0.02) / 0.16,
+            (bad_top1_view - good_top1_view + AML_BAD_MATCH_SOFT_PENALTY_OFFSET) / AML_BAD_MATCH_SOFT_PENALTY_SCALE,
             0.0,
             1.0,
         )
         quality_penalty_view = (
-            0.72 * bad_like_soft_penalty
-            + 0.28 * bad_match_soft_penalty
+            AML_QUALITY_PENALTY_BAD_LIKE_WEIGHT * bad_like_soft_penalty
+            + AML_QUALITY_PENALTY_BAD_MATCH_WEIGHT * bad_match_soft_penalty
         ).astype(np.float32, copy=False)
 
     dark_view_scores: npt.NDArray[np.float32] | None = None
@@ -1849,13 +1874,14 @@ def select_topk_candidates_for_view(
         # Score < 0.25 typically indicates acellular/light-stain material
         # This is a HARD FILTER — light stain-only tiles must not be candidates
         if dark_view_scores.size > 0:
-            absolute_min_score = 0.18
-            cellular_mask = dark_view_scores >= absolute_min_score
+            cellular_mask = dark_view_scores >= AML_ABSOLUTE_MIN_DARK_SCORE
             if good_support_view is not None and good_support_view.size == dark_view_scores.size:
                 cellular_mask = cellular_mask | good_support_view
             if int(np.count_nonzero(cellular_mask)) >= 2:
                 idxs = idxs[cellular_mask]
                 ranking_scores = ranking_scores[cellular_mask]
+                if dark_box_prior_view is not None and dark_box_prior_view.size == cellular_mask.size:
+                    dark_box_prior_view = dark_box_prior_view[cellular_mask]
                 dark_view_scores = dark_view_scores[cellular_mask]
                 if quality_prior_view is not None and quality_prior_view.size == cellular_mask.size:
                     quality_prior_view = quality_prior_view[cellular_mask]
@@ -1875,6 +1901,8 @@ def select_topk_candidates_for_view(
             if int(np.count_nonzero(dark_min_keep)) >= 2:
                 idxs = idxs[dark_min_keep]
                 ranking_scores = ranking_scores[dark_min_keep]
+                if dark_box_prior_view is not None and dark_box_prior_view.size == dark_min_keep.size:
+                    dark_box_prior_view = dark_box_prior_view[dark_min_keep]
                 dark_view_scores = dark_view_scores[dark_min_keep]
                 if quality_prior_view is not None and quality_prior_view.size == dark_min_keep.size:
                     quality_prior_view = quality_prior_view[dark_min_keep]
@@ -1892,6 +1920,8 @@ def select_topk_candidates_for_view(
             if int(np.count_nonzero(dark_keep)) >= int(top_k):
                 idxs = idxs[dark_keep]
                 ranking_scores = ranking_scores[dark_keep]
+                if dark_box_prior_view is not None and dark_box_prior_view.size == dark_keep.size:
+                    dark_box_prior_view = dark_box_prior_view[dark_keep]
                 dark_view_scores = dark_view_scores[dark_keep]
                 if quality_prior_view is not None and quality_prior_view.size == dark_keep.size:
                     quality_prior_view = quality_prior_view[dark_keep]
@@ -1904,16 +1934,22 @@ def select_topk_candidates_for_view(
             # Cellularity remains primary, but allow quality evidence to keep gray-black
             # trash from dominating the candidate list.
             combined_rank = (
-                0.64 * _zscore(dark_view_scores)
-                + 0.18 * _zscore(ranking_scores)
+                AML_COMBINED_RANK_DARK_WEIGHT * _zscore(dark_view_scores)
+                + AML_COMBINED_RANK_BASE_SCORE_WEIGHT * _zscore(ranking_scores)
             )
             if quality_prior_view is not None and quality_prior_view.size == dark_view_scores.size:
-                combined_rank = combined_rank + (0.18 * _zscore(quality_prior_view))
+                combined_rank = combined_rank + (AML_COMBINED_RANK_QUALITY_PRIOR_WEIGHT * _zscore(quality_prior_view))
             if quality_penalty_view is not None and quality_penalty_view.size == dark_view_scores.size:
-                combined_rank = combined_rank - (0.32 * quality_penalty_view)
+                combined_rank = combined_rank - (AML_COMBINED_RANK_QUALITY_PENALTY_WEIGHT * quality_penalty_view)
             if good_support_view is not None and good_support_view.size == dark_view_scores.size:
-                combined_rank = combined_rank + (0.06 * good_support_view.astype(np.float32, copy=False))
+                combined_rank = combined_rank + (
+                    AML_COMBINED_RANK_GOOD_SUPPORT_BONUS * good_support_view.astype(np.float32, copy=False)
+                )
+            if dark_box_prior_view is not None and dark_box_prior_view.size == dark_view_scores.size:
+                combined_rank = combined_rank + (AML_DARK_REGION_BOX_PRIOR_WEIGHT * dark_box_prior_view)
             ranking_scores = combined_rank.astype(np.float32, copy=False)
+    elif dark_box_prior_view is not None and dark_box_prior_view.size == ranking_scores.size:
+        ranking_scores = ranking_scores + (AML_DARK_REGION_BOX_PRIOR_WEIGHT * dark_box_prior_view)
 
     order_local = np.argsort(ranking_scores)[::-1]
     order = idxs[order_local]
@@ -1926,7 +1962,10 @@ def select_topk_candidates_for_view(
     # Keep candidates spatially distinct: require near-tile-sized center spacing.
     # This reduces heavy overlap even when tile_size_level0_px is larger than the
     # external min_center_separation_px setting.
-    adaptive_min_sep_px = max(int(max(1, min_center_separation_px)), int(round(index.tile_size_level0_px * 0.38)))
+    adaptive_min_sep_px = max(
+        int(max(1, min_center_separation_px)),
+        int(round(index.tile_size_level0_px * ROI_ADAPTIVE_MIN_SEPARATION_TILE_RATIO)),
+    )
     min_sep_sq = float(adaptive_min_sep_px ** 2)
 
     def _bbox_iou(

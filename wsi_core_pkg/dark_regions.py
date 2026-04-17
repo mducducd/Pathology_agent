@@ -3,6 +3,7 @@ from typing import Any, Dict, List
 
 import numpy as np
 import openslide
+from PIL import Image
 
 from .config import DEBUG_ROOT_DIR
 from .slide_utils import _read_region_rgb, _resize_to_max_dim
@@ -214,6 +215,84 @@ def _box_touches_tissue_edge(box: Dict[str, int], tissue_mask: np.ndarray) -> bo
     return border_tissue_fraction < 0.90
 
 
+def _boxes_touch_or_near(
+    a: Dict[str, int],
+    b: Dict[str, int],
+    *,
+    gap: int,
+) -> bool:
+    ax0, ay0, ax1, ay1 = _box_bounds(a)
+    bx0, by0, bx1, by1 = _box_bounds(b)
+    return not (
+        (ax1 + gap) < bx0
+        or (bx1 + gap) < ax0
+        or (ay1 + gap) < by0
+        or (by1 + gap) < ay0
+    )
+
+
+def _merge_nearby_boxes(
+    boxes: List[Dict[str, int]],
+    *,
+    gap: int,
+) -> List[Dict[str, int]]:
+    pending = [dict(box) for box in boxes]
+    if len(pending) <= 1:
+        return pending
+
+    changed = True
+    while changed:
+        changed = False
+        merged: List[Dict[str, int]] = []
+        while pending:
+            current = pending.pop()
+            cx0, cy0, cx1, cy1 = _box_bounds(current)
+            area = int(current.get("area", max(1, (cx1 - cx0) * (cy1 - cy0))))
+
+            i = 0
+            while i < len(pending):
+                other = pending[i]
+                if not _boxes_touch_or_near(current, other, gap=gap):
+                    i += 1
+                    continue
+                ox0, oy0, ox1, oy1 = _box_bounds(other)
+                cx0 = min(cx0, ox0)
+                cy0 = min(cy0, oy0)
+                cx1 = max(cx1, ox1)
+                cy1 = max(cy1, oy1)
+                area += int(other.get("area", max(1, (ox1 - ox0) * (oy1 - oy0))))
+                current = _box_from_bounds(cx0, cy0, cx1, cy1, area=area)
+                pending.pop(i)
+                changed = True
+            merged.append(current)
+        pending = merged
+
+    pending.sort(key=lambda box: box["area"], reverse=True)
+    return pending
+
+
+def _clip_mask_to_boxes(mask: np.ndarray, boxes: List[Dict[str, int]]) -> np.ndarray:
+    if mask.size == 0 or not boxes:
+        return np.zeros_like(mask, dtype=bool)
+    clipped = np.zeros_like(mask, dtype=bool)
+    h, w = mask.shape
+    for box in boxes:
+        x0 = max(0, int(box["x"]))
+        y0 = max(0, int(box["y"]))
+        x1 = min(w, x0 + max(0, int(box["w"])))
+        y1 = min(h, y0 + max(0, int(box["h"])))
+        if x1 <= x0 or y1 <= y0:
+            continue
+        clipped[y0:y1, x0:x1] = True
+    return mask & clipped
+
+
+def _soft_alpha_mask(mask: np.ndarray) -> np.ndarray:
+    mask_float = mask.astype(np.float32, copy=False)
+    softened = _mean_filter3(_mean_filter3(mask_float))
+    return np.clip(softened, 0.0, 1.0)
+
+
 def _refine_dark_region_boxes(
     boxes: List[Dict[str, int]],
     tissue_mask: np.ndarray,
@@ -252,10 +331,19 @@ def _select_dark_core_boxes(
     out_h: int,
     min_area: int,
     max_regions: int,
-) -> List[Dict[str, int]]:
+) -> tuple[List[Dict[str, int]], np.ndarray]:
+    empty_mask = np.zeros((out_h, out_w), dtype=bool)
+    min_dim = min(out_w, out_h)
+    score = np.clip(score.astype(np.float32, copy=False), 0.0, 1.0)
+    tissue_float = tissue_mask.astype(np.float32, copy=False)
+
+    # Coarse-to-fine context map: keep strong local dark-purple neighborhoods even
+    # when the finest thumbnail pixels are slightly lighter than the densest core.
+    coarse_context = _mean_filter3(_mean_filter3(score * tissue_float)).astype(np.float32, copy=False)
+
     # Seed from dense purple cores, but keep the seed threshold broad enough that
     # lighter blue-purple basophilic regions are not missed entirely.
-    core_threshold_pct = min(99.0, max(float(threshold_pct) + 8.0, 92.0))
+    core_threshold_pct = min(98.5, max(float(threshold_pct) + 6.0, 90.0))
     core_threshold = float(np.percentile(score[tissue_mask], core_threshold_pct))
     core_mask = tissue_mask & (score >= core_threshold)
     core_min_area = max(24, int(min_area // 6))  # Smaller minimum to catch small dense clusters
@@ -269,21 +357,46 @@ def _select_dark_core_boxes(
     if not core_boxes:
         # Fallback: use broader threshold if no dense cores found
         base_threshold = float(np.percentile(score[tissue_mask], float(threshold_pct)))
-        base_mask = tissue_mask & (score >= base_threshold)
+        coarse_threshold = float(np.percentile(coarse_context[tissue_mask], float(max(threshold_pct - 10, 60))))
+        base_mask = tissue_mask & ((score >= base_threshold) | (coarse_context >= coarse_threshold))
         base_boxes = _find_connected_components(base_mask.reshape(-1).tolist(), out_w, out_h, min_area=min_area)
         if not base_boxes:
-            return []
-        return base_boxes[:max_regions]
+            return [], empty_mask
+        merged = _merge_nearby_boxes(
+            _refine_dark_region_boxes(base_boxes[:max_regions], tissue_mask),
+            gap=max(1, int(round(min_dim * 0.006))),
+        )
+        refined = _refine_dark_region_boxes(merged, tissue_mask)[:max_regions]
+        return refined, _clip_mask_to_boxes(base_mask, refined)
 
     # Expand cores into the surrounding basophilic region, not just the densest
     # nucleus core, while still avoiding pale background.
-    base_threshold = float(np.percentile(score[tissue_mask], float(max(threshold_pct - 4, 72))))
-    base_mask = tissue_mask & (score >= base_threshold)
+    base_threshold = float(np.percentile(score[tissue_mask], float(max(threshold_pct - 6, 68))))
+    coarse_threshold = float(np.percentile(coarse_context[tissue_mask], float(max(threshold_pct - 12, 60))))
+    score_mid = float(np.percentile(score[tissue_mask], 50))
+    score_hi = float(np.percentile(score[tissue_mask], 95))
+    coarse_mid = float(np.percentile(coarse_context[tissue_mask], 50))
+    coarse_hi = float(np.percentile(coarse_context[tissue_mask], 95))
+    expansion_score_floor = max(base_threshold, score_mid + 0.35 * max(score_hi - score_mid, 0.08))
+    expansion_coarse_floor = max(coarse_threshold, coarse_mid + 0.25 * max(coarse_hi - coarse_mid, 0.06))
+    base_mask = tissue_mask & (
+        (score >= expansion_score_floor)
+        | (
+            (score >= max(expansion_score_floor - 0.05, 0.0))
+            & (coarse_context >= expansion_coarse_floor)
+        )
+    )
 
-    region_mask = core_mask
+    region_mask = core_mask | (
+        tissue_mask
+        & (score >= max(expansion_score_floor - 0.03, 0.0))
+        & (coarse_context >= max(expansion_coarse_floor - 0.02, 0.0))
+    )
     if core_boxes:
-        growth_steps = max(4, int(round(min(out_w, out_h) * 0.008)))
-        grown_mask = _grow_mask_within(base_mask, core_mask, steps=growth_steps)
+        # Keep the coarse prior conservative. Nearby supertiles can still recover
+        # adjacent purple tissue later, so avoid letting the thumbnail mask sprawl.
+        growth_steps = max(4, int(round(min_dim * 0.007)))
+        grown_mask = _grow_mask_within(base_mask, region_mask, steps=growth_steps)
         if np.any(grown_mask):
             region_mask = grown_mask
 
@@ -296,10 +409,16 @@ def _select_dark_core_boxes(
         min_area=region_min_area,
     )
     boxes = region_boxes if region_boxes else core_boxes
-    pad = max(2, int(round(min(out_w, out_h) * 0.005)))
+    pad = max(1, int(round(min_dim * 0.003)))
     expanded = [_expand_box(box, out_w, out_h, pad) for box in boxes]
     refined = _refine_dark_region_boxes(expanded, tissue_mask)
-    return refined[:max_regions]
+    merged = _merge_nearby_boxes(
+        refined,
+        gap=max(1, int(round(min_dim * 0.006))),
+    )
+    refined = _refine_dark_region_boxes(merged, tissue_mask)
+    refined = refined[:max_regions]
+    return refined, _clip_mask_to_boxes(region_mask, refined)
 
 
 def detect_dark_regions(
@@ -321,6 +440,7 @@ def detect_dark_regions(
         rgb = np.asarray(region.convert("RGB"), dtype=np.float32)
         gray = 0.299 * rgb[..., 0] + 0.587 * rgb[..., 1] + 0.114 * rgb[..., 2]
         tissue_mask = gray < 242.0
+        selected_mask = np.zeros((out_h, out_w), dtype=bool)
         if np.any(tissue_mask):
             r, g, b = rgb[..., 0], rgb[..., 1], rgb[..., 2]
             ch_max = np.maximum(r, np.maximum(g, b))
@@ -386,7 +506,7 @@ def detect_dark_regions(
                 - 0.12 * light_penalty
             ).astype(np.float32, copy=False)
             threshold = float(np.percentile(score[tissue_mask], float(threshold_pct)))
-            boxes = _select_dark_core_boxes(
+            boxes, selected_mask = _select_dark_core_boxes(
                 score=score,
                 tissue_mask=tissue_mask,
                 threshold_pct=threshold_pct,
@@ -395,15 +515,17 @@ def detect_dark_regions(
                 min_area=min_area,
                 max_regions=max_regions,
             )
-            mask_np = tissue_mask & (score >= threshold)
+            if not np.any(selected_mask):
+                selected_mask = tissue_mask & (score >= threshold)
         else:
             hist = region.convert("L").histogram()
             threshold = float(_percentile_from_hist(hist, float(threshold_pct)))
-            mask_np = gray <= threshold
-            mask = mask_np.reshape(-1).tolist()
+            selected_mask = gray <= threshold
+            mask = selected_mask.reshape(-1).tolist()
             boxes = _find_connected_components(mask, out_w, out_h, min_area=min_area)
             boxes.sort(key=lambda b: b["area"], reverse=True)
             boxes = _refine_dark_region_boxes(boxes[:max_regions], tissue_mask)
+            selected_mask = _clip_mask_to_boxes(selected_mask, boxes)
 
         base_w0, base_h0 = slide.level_dimensions[0]
         scale_x = base_w0 / float(out_w)
@@ -424,9 +546,16 @@ def detect_dark_regions(
         os.makedirs(out_dir, exist_ok=True)
         out_path = os.path.join(out_dir, "overview.jpg")
         region.save(out_path, format="JPEG", quality=90)
+        mask_alpha = (_soft_alpha_mask(selected_mask) * 255.0).astype(np.uint8)
+        mask_rgba = np.zeros((out_h, out_w, 4), dtype=np.uint8)
+        mask_rgba[..., 0:3] = 255
+        mask_rgba[..., 3] = mask_alpha
+        mask_path = os.path.join(out_dir, "mask.png")
+        Image.fromarray(mask_rgba, mode="RGBA").save(mask_path, format="PNG")
 
         return {
             "image_path": out_path,
+            "mask_path": mask_path,
             "image_dims": [out_w, out_h],
             "threshold": float(threshold),
             "threshold_pct": int(threshold_pct),

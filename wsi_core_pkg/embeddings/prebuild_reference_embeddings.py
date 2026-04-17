@@ -246,6 +246,10 @@ def prebuild_embeddings(
 
 
 def main() -> None:
+    from . import available_embedding_extractors
+
+    extractor_options = ", ".join(available_embedding_extractors())
+
     parser = argparse.ArgumentParser(
         description="Pre-build reference embeddings from curated tile images."
     )
@@ -267,7 +271,10 @@ def main() -> None:
         "--extractor",
         type=str,
         default="reddino_base",
-        help="Name of the extractor to use (default: reddino_base, options: reddino_base, reddino_large, reddino, dinobloom, uni2)",
+        help=(
+            "Name of the extractor to use "
+            f"(default: reddino_base, options: {extractor_options})"
+        ),
     )
 
     args = parser.parse_args()

@@ -104,7 +104,7 @@ def test_select_topk_candidates_for_view_marks_borderline_matches_uncertain() ->
     index = _make_index(
         scores=[0.55, 0.50],
         dark_roi_scores=[0.74, 0.72],
-        bad_likelihood=[0.49, 0.33],
+        bad_likelihood=[0.39, 0.33],
         bad_margin=[0.01, 0.12],
         bad_top1=[0.40, 0.26],
         good_top1=[0.42, 0.55],
@@ -120,6 +120,31 @@ def test_select_topk_candidates_for_view_marks_borderline_matches_uncertain() ->
     by_tile = {int(candidate["tile_index"]): candidate for candidate in candidates}
     assert by_tile[0]["quality_hint"] == "uncertain"
     assert by_tile[1]["quality_hint"] == "good_like"
+
+
+def test_select_topk_candidates_for_view_uses_dark_boxes_as_prior_not_hard_gate() -> None:
+    index = _make_index(
+        scores=[0.52, 0.78],
+        dark_roi_scores=[0.58, 0.86],
+        bad_likelihood=[0.22, 0.24],
+        bad_margin=[0.15, 0.16],
+        bad_top1=[0.18, 0.20],
+        good_top1=[0.62, 0.66],
+    )
+
+    candidates = select_topk_candidates_for_view(
+        index=index,
+        view_bbox_level0=(0, 0, 1200, 1000),
+        top_k=2,
+        min_center_separation_px=128,
+        focus_boxes_level0=[{"x0": 0, "y0": 0, "w": 300, "h": 300}],
+    )
+
+    assert [candidate["tile_index"] for candidate in candidates] == [1, 0]
+    by_tile = {int(candidate["tile_index"]): candidate for candidate in candidates}
+    assert by_tile[0]["inside_dark_region"] is True
+    assert by_tile[1]["inside_dark_region"] is False
+    assert all(candidate["dark_region_mode"] == "prioritized" for candidate in candidates)
 
 
 def test_reference_embedding_cache_round_trip_uses_persistent_files() -> None:

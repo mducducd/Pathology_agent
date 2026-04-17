@@ -8,6 +8,8 @@
 
 An illustration of AML agent
 
+![Slide Agent demo](static/assets/demo.png)
+
 > **Info**
 >
 > Evaluation on a private dataset (50 AML, 50 normal marrow):  
@@ -88,7 +90,7 @@ Run one slide without the web UI:
 Useful flags:
 
 - `--model`: VLM name, for example `GPT-OSS-120B`, `gemma-4-31B-it`, `Qwen3.5-397B-A17B-FP8`, `GLM-4.6V-FP8`
-- `--extractor`: embedding extractor key such as `uni2`, `reddino`, `reddino_base`, `reddino_large`, `dinobloom`
+- `--extractor`: embedding extractor key such as `uni2`, `h_optimus_1`, `virchow2`, `dinobloom`, `dinobloom_giant`, `reddino`, `reddino_base`, `reddino_large`
 - `--tile-filter`: one of `hybrid`, `quality`, `coarse`, `none`
 - `--experiment-root`: shared cache/output root for repeated runs
 - `--use-tile-cache`: reuse persisted tile cache across runs
@@ -160,9 +162,9 @@ Notes:
 ```bash
 bash evaluate/run_batch_aml_suite.sh \
     --output-parent /mnt/bulk-neptune/nguyenmin/stamp-dev/experiments/Narmin \
-    --experiment-name aml_reddino_hybrid_suite \
+    --experiment-name aml_gemma4_embedding_suite \
     --cuda-device 0 \
-    --extractors reddino_large \
+    --extractors h_optimus_1 \
     --resume \
     --use-tile-cache
 ```
@@ -173,10 +175,10 @@ Notes:
 - The suite script forwards into `evaluate/run_batch_aml.sh` for each selected run.
 - Edit the `RUNS` array in [evaluate/run_batch_aml_suite.sh](/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/evaluate/run_batch_aml_suite.sh) to choose which model/extractor combinations are launched.
 - Each `RUNS` entry has the form `"MODEL|EXTRACTOR|OUTPUT_DIR_NAME"`.
-- Example: `"Qwen3.5-397B-A17B-FP8|reddino_large|batch_result_Qwen3.5-397B-A17B-FP8_RedDino-large_224px"`
+- Example: `"gemma-4-31B-it|virchow2|batch_result_gemma-4-31B-it_Virchow2_224px"`
 - `MODEL` is passed to `--model`, `EXTRACTOR` is passed to `--extractor`, and `OUTPUT_DIR_NAME` becomes the subdirectory created under `--output-parent/--experiment-name` or `--base-output-root`.
 - The current checked-in `RUNS` array launches:
-  `Qwen3.5-397B-A17B-FP8 + uni2`, `Qwen3.5-397B-A17B-FP8 + reddino`, and `Qwen3.5-397B-A17B-FP8 + reddino_large`.
+  `gemma-4-31B-it + uni2`, `gemma-4-31B-it + h_optimus_1`, `gemma-4-31B-it + virchow2`, `gemma-4-31B-it + dinobloom_giant`, and `gemma-4-31B-it + dinobloom`.
 
 ## Workbench
 
@@ -233,7 +235,7 @@ python -m wsi_core_pkg.embeddings.prebuild_reference_embeddings \
 
 **Documentation:** See [REFERENCE_EMBEDDINGS.md](REFERENCE_EMBEDDINGS.md) for detailed instructions on:
 - Organizing curated tiles
-- Extractor options (reddino, dinobloom, uni2)
+- Extractor options (uni2, h_optimus_1, virchow2, dinobloom, dinobloom_giant, reddino)
 - Cache management and invalidation
 - Environment variable configuration
 - Dynamic prototype bank updates

@@ -7,8 +7,8 @@ RUN_BATCH_SCRIPT="${SCRIPT_DIR}/run_batch_aml.sh"
 CSV="/mnt/bulk-neptune/nguyenmin/stamp-dev/experiments/Narmin/random_100_Normal_AML_Patients.csv"
 SLIDES_ROOT="/mnt/copernicus3/PATHOLOGY/others/private/haemadata/ALL_WSIs"
 OUTPUT_PARENT="/mnt/bulk-neptune/nguyenmin/stamp-dev/experiments/Narmin"
-EXPERIMENT_NAME="new_runs_140425"
-BASE_OUTPUT_ROOT="/mnt/bulk-neptune/nguyenmin/stamp-dev/experiments/Narmin/new_runs_140425"
+EXPERIMENT_NAME="aml_gemma4_embedding_suite"
+BASE_OUTPUT_ROOT=""
 CUDA_DEVICE=""
 TILE_FILTER="hybrid"
 TILE_SIZE_PX="224"
@@ -31,6 +31,7 @@ Options:
   --base-output-root PATH    Explicit full output directory; overrides parent/name
   --cuda-device ID           Set CUDA_VISIBLE_DEVICES, e.g. 1
   --extractors LIST          Comma-separated extractors to keep, e.g. reddino
+  --tile-filter NAME         Tile prefilter method, e.g. hybrid or coarse
   --use-tile-cache
   --resume
   -h, --help
@@ -46,6 +47,7 @@ while [[ $# -gt 0 ]]; do
         --base-output-root) BASE_OUTPUT_ROOT="$2"; shift 2 ;;
         --cuda-device) CUDA_DEVICE="$2"; shift 2 ;;
         --extractors) EXTRACTORS_FILTER="$2"; shift 2 ;;
+        --tile-filter) TILE_FILTER="$2"; shift 2 ;;
         --use-tile-cache) USE_TILE_CACHE=true; shift ;;
         --resume) RESUME=true; shift ;;
         -h|--help) usage; exit 0 ;;
@@ -69,12 +71,11 @@ fi
 mkdir -p "$BASE_OUTPUT_ROOT"
 
 RUNS=(
-    # "GPT-OSS-120B|uni2|batch_result_GPT-OSS-120B_UNI2_224px"
-    # "GPT-OSS-120B|reddino|batch_result_GPT-OSS-120B_RedDino-Small_224px"
-    # "GPT-OSS-120B|reddino_large|batch_result_GPT-OSS-120B_RedDino-large_224px"
-    "Qwen3.5-397B-A17B-FP8|uni2|batch_result_Qwen3.5-397B-A17B-FP8_UNI2_224px"
-    "Qwen3.5-397B-A17B-FP8|reddino|batch_result_Qwen3.5-397B-A17B-FP8_RedDino-Small_224px"
-    "Qwen3.5-397B-A17B-FP8|reddino_large|batch_result_Qwen3.5-397B-A17B-FP8_RedDino-large_224px"
+    "gemma-4-31B-it|uni2|batch_result_gemma-4-31B-it_UNI2_224px"
+    "gemma-4-31B-it|h_optimus_1|batch_result_gemma-4-31B-it_H-optimus-1_224px"
+    "gemma-4-31B-it|virchow2|batch_result_gemma-4-31B-it_Virchow2_224px"
+    "gemma-4-31B-it|dinobloom_giant|batch_result_gemma-4-31B-it_DinoBloom-G_224px"
+    "gemma-4-31B-it|dinobloom|batch_result_gemma-4-31B-it_DinoBloom-S_224px"
 )
 
 FILTERED_RUNS=()

@@ -47,24 +47,24 @@ ROI_CANDIDATE_MIN_SEPARATION_PX = int(os.getenv("ROI_CANDIDATE_MIN_SEPARATION_PX
 ROI_MARK_CANDIDATE_TOLERANCE_NORM = int(os.getenv("ROI_MARK_CANDIDATE_TOLERANCE_NORM", "170"))
 ROI_CANDIDATE_ALLOW_FALLBACK = os.getenv("ROI_CANDIDATE_ALLOW_FALLBACK", "1").strip().lower() in {"1", "true", "yes", "y"}
 # Hard cap on how many candidates the VLM sees in AML mode after raw retrieval ranking.
-# REDUCED from 30 to 10 for faster VLLM inference while preserving accuracy.
-ROI_CANDIDATE_TOP_K_AML = int(os.getenv("ROI_CANDIDATE_TOP_K_AML", "10"))
-ROI_RANKER_BATCH_SIZE = int(os.getenv("ROI_RANKER_BATCH_SIZE", "64"))
+ROI_CANDIDATE_TOP_K_AML = int(os.getenv("ROI_CANDIDATE_TOP_K_AML", "30"))
+ROI_RANKER_BATCH_SIZE = int(os.getenv("ROI_RANKER_BATCH_SIZE", "32"))
 ROI_RANKER_MAX_WORKERS = int(os.getenv("ROI_RANKER_MAX_WORKERS", "4"))
 ROI_COARSE_PREFILTER_TRIGGER_SUPERTILES = int(os.getenv("ROI_COARSE_PREFILTER_TRIGGER_SUPERTILES", "128"))
 ROI_COARSE_PREFILTER_KEEP_RATIO = float(os.getenv("ROI_COARSE_PREFILTER_KEEP_RATIO", "0.22"))
 ROI_COARSE_PREFILTER_MIN_KEEP_SUPERTILES = int(os.getenv("ROI_COARSE_PREFILTER_MIN_KEEP_SUPERTILES", "36"))
 ROI_COARSE_PREFILTER_MAX_KEEP_SUPERTILES = int(os.getenv("ROI_COARSE_PREFILTER_MAX_KEEP_SUPERTILES", "56"))
 ROI_QUALITY_PREFILTER_KEEP_RATIO = float(os.getenv("ROI_QUALITY_PREFILTER_KEEP_RATIO", "0.25"))
-ROI_QUALITY_PREFILTER_MIN_KEEP_TILES = int(os.getenv("ROI_QUALITY_PREFILTER_MIN_KEEP_TILES", "2"))
-ROI_QUALITY_PREFILTER_TRIGGER_TILES = int(os.getenv("ROI_QUALITY_PREFILTER_TRIGGER_TILES", "8"))
+ROI_QUALITY_PREFILTER_MIN_KEEP_TILES = int(os.getenv("ROI_QUALITY_PREFILTER_MIN_KEEP_TILES", "4"))
+ROI_QUALITY_PREFILTER_TRIGGER_TILES = int(os.getenv("ROI_QUALITY_PREFILTER_TRIGGER_TILES", "12"))
 ROI_QUALITY_PREFILTER_RANDOM_RESERVE_RATIO = float(os.getenv("ROI_QUALITY_PREFILTER_RANDOM_RESERVE_RATIO", "0.05"))
+ROI_TILE_CACHE_DIR = os.getenv("ROI_TILE_CACHE_DIR", "").strip()
 DARK_REGION_THRESHOLD_PCT = int(os.getenv("DARK_REGION_THRESHOLD_PCT", "85"))
 DARK_REGION_MIN_AREA = int(os.getenv("DARK_REGION_MIN_AREA", "800"))
 DARK_REGION_MAX_REGIONS = int(os.getenv("DARK_REGION_MAX_REGIONS", "30"))
 DARK_REGION_MAX_DIM = int(os.getenv("DARK_REGION_MAX_DIM", "1024"))
-DARK_REGION_PIPELINE_VERSION = 2
-ROI_INDEX_PIPELINE_VERSION = 2
+DARK_REGION_PIPELINE_VERSION = 3
+ROI_INDEX_PIPELINE_VERSION = 3
 
 
 def _selected_batch_size() -> int:
@@ -72,11 +72,6 @@ def _selected_batch_size() -> int:
         return max(1, int(getattr(state, "BATCH_SIZE", ROI_RANKER_BATCH_SIZE) or ROI_RANKER_BATCH_SIZE))
     except Exception:
         return int(ROI_RANKER_BATCH_SIZE)
-
-
-def _selected_tile_cache_dir() -> Path:
-    raw = os.getenv("ROI_TILE_CACHE_DIR", "").strip()
-    return Path(raw) if raw else Path(OUTPUTS_ROOT_DIR) / "_tile_cache"
 
 
 def _selected_extractor_label() -> str:
@@ -241,17 +236,6 @@ def _postprocess_roi_candidates_for_view(
 
         processed = candidates_ranked[:ROI_CANDIDATE_TOP_K_AML]
 
-        # VLLM OPTIMIZATION: Apply additional pre-filtering to reduce token count
-        # This runs AFTER the main AML ranking to keep only the most promising candidates
-        if processed:
-            from .embeddings.roi_ranker import _prefilter_candidates_for_vllm
-            processed = _prefilter_candidates_for_vllm(
-                processed,
-                max_candidates=min(len(processed), 8),  # Aggressive limit for VLLM speed
-                min_dark_score=0.18,  # Higher threshold for VLLM input
-                reject_bad_like=True,
-            )
-
     return processed, source, meta
 
 
@@ -330,13 +314,10 @@ def _ensure_unsupervised_roi_index():
     extractor_name = str(getattr(state, "EXTRACTOR_NAME", "uni2") or "uni2")
     tile_prefilter_method = _selected_tile_prefilter_method()
     use_dark_region_gating = _use_dark_region_gating(tile_prefilter_method, aml_mode=aml_mode)
-    # When dark region gating is active, disable coarse/quality prefilters.
-    # Dark region detection already selects the areas - we want ALL tiles from those regions.
-    use_coarse_prefilter = _use_coarse_prefilter(tile_prefilter_method) and not use_dark_region_gating
-    use_quality_prefilter = _use_quality_prefilter(tile_prefilter_method) and not use_dark_region_gating
+    use_coarse_prefilter = _use_coarse_prefilter(tile_prefilter_method)
+    use_quality_prefilter = _use_quality_prefilter(tile_prefilter_method)
 
-    # STRICT DARK REGION GATING: Detect dark regions FIRST and pass to embedding extraction
-    # Only tiles within dark regions will be embedded (for AML mode)
+    # Detect dark regions first and use them as a coarse supertile prior for AML.
     dark_region_boxes = _ensure_dark_region_boxes_level0() if use_dark_region_gating else []
     dark_region_boxes_hash = (
         hashlib.sha256(json.dumps(dark_region_boxes, sort_keys=True).encode()).hexdigest()
@@ -363,7 +344,7 @@ def _ensure_unsupervised_roi_index():
     if use_dark_region_gating and dark_region_boxes:
         _log_step(
             "wsi_dark_region_gating",
-            "Strict dark region gating: only tiles within detected deep blue-purple cellular regions will be embedded.",
+            "Dark-region guided coarse-to-fine filtering: coarse dark boxes seed supertile selection, then hybrid tile scoring refines within those regions.",
             {
                 "dark_region_count": len(dark_region_boxes),
                 "dark_region_boxes_level0": dark_region_boxes[:10],  # First 10 for brevity
@@ -371,18 +352,17 @@ def _ensure_unsupervised_roi_index():
         )
 
     if aml_mode:
-        # STRICT DARK REGION GATING pipeline
         if tile_prefilter_method == "hybrid":
             pipeline_desc = (
-                f"Detect deep blue-purple basophilic regions -> Thumbnail coarse region filter -> raw-tile quality score filter -> {extractor_label} tile embeddings (STRICT: only tiles within dark regions) -> ROI-quality exemplar retrieval + nuclei/dark-region heuristics -> top-K candidate blast-suspected ROIs per view"
+                f"Detect deep blue-purple basophilic regions -> dark-guided supertile coarse filter -> raw-tile hybrid quality filter -> {extractor_label} tile embeddings -> ROI-quality exemplar retrieval + nuclei/dark-region priors -> top-K candidate blast-suspected ROIs per view"
             )
         elif tile_prefilter_method == "quality":
             pipeline_desc = (
-                f"Detect deep blue-purple basophilic regions -> Raw-tile quality score filter -> {extractor_label} tile embeddings (STRICT: only tiles within dark regions) -> ROI-quality exemplar retrieval + nuclei/dark-region heuristics -> top-K candidate blast-suspected ROIs per view"
+                f"Detect deep blue-purple basophilic regions -> dark-guided supertile coarse filter -> raw-tile quality filter -> {extractor_label} tile embeddings -> ROI-quality exemplar retrieval + nuclei/dark-region priors -> top-K candidate blast-suspected ROIs per view"
             )
         elif tile_prefilter_method == "coarse":
             pipeline_desc = (
-                f"Detect deep blue-purple basophilic regions -> Thumbnail coarse region filter -> {extractor_label} tile embeddings (STRICT: only tiles within dark regions) -> ROI-quality exemplar retrieval + nuclei/dark-region heuristics -> top-K candidate blast-suspected ROIs per view"
+                f"Detect deep blue-purple basophilic regions -> dark-guided supertile coarse filter -> {extractor_label} tile embeddings -> ROI-quality exemplar retrieval + nuclei/dark-region priors -> top-K candidate blast-suspected ROIs per view"
             )
         else:
             pipeline_desc = (
@@ -398,7 +378,7 @@ def _ensure_unsupervised_roi_index():
             pipeline_desc = f"Thumbnail coarse region filter -> {extractor_label} tile embeddings -> kNN novelty ranking -> top-K per view"
         else:
             pipeline_desc = f"{extractor_label} tile embeddings -> kNN novelty ranking -> top-K per view"
-    cache_dir = _selected_tile_cache_dir()
+    cache_dir = Path(ROI_TILE_CACHE_DIR) if ROI_TILE_CACHE_DIR else Path(OUTPUTS_ROOT_DIR) / "_tile_cache"
     _set_roi_candidate_prep(
         phase="starting",
         status="starting",
@@ -431,7 +411,12 @@ def _ensure_unsupervised_roi_index():
                 total = evt.get("coarse_total_supertile_count")
                 kept = evt.get("coarse_selected_supertile_count")
                 used = bool(evt.get("coarse_prefilter_used"))
-                if not use_coarse_prefilter:
+                if use_dark_region_gating and total is not None and kept is not None:
+                    if kept < total:
+                        msg = f"Dark-guided coarse pass kept {kept}/{total} slide regions for fine embedding..."
+                    else:
+                        msg = f"Dark-guided coarse pass kept all {total} slide regions..."
+                elif not use_coarse_prefilter:
                     if total is not None:
                         msg = f"Scanning all {total} foreground slide regions..."
                     else:
@@ -890,23 +875,25 @@ def _refresh_roi_candidates_for_current_view(top_k: int = ROI_CANDIDATE_TOP_K) -
     return candidates
 
 
-def _candidate_for_vlm(candidate: Dict[str, Any]) -> Dict[str, Any]:
-    """Return a copy of candidate with only essential VLM fields.
+_CANDIDATE_REFERENCE_FIELDS = {
+    "quality_hint",
+    "bad_likelihood",
+    "bad_margin",
+    "bad_top1_similarity",
+    "good_top1_similarity",
+    "blast_top1_similarity",
+    "blast_similarity_score",
+    "retrieved_bad_refs",
+    "retrieved_good_refs",
+    "retrieved_blast_refs",
+    "reference_mode",
+    "aml_reference_evidence",
+}
 
-    Strips all internal scoring, ranking, and reference fields to:
-    - Reduce token count for faster VLLM inference
-    - Keep VLM focused on visual evidence, not numerical scores
-    - Prevent "out of domain" confusion from ML metadata
-    """
-    # Minimal fields the VLM actually needs for ROI decision
-    essential_fields = {
-        "rank", "tile_index", "center_norm", "bbox_norm",
-        "center_level0", "tile_bbox_level0",
-        "quality_hint",  # good_like / bad_like / uncertain
-        "dark_roi_score",  # cellularity measure (AML mode only)
-        "inside_dark_region",  # whether tile is in dark region (AML mode only)
-    }
-    return {k: v for k, v in candidate.items() if k in essential_fields}
+
+def _candidate_for_vlm(candidate: Dict[str, Any]) -> Dict[str, Any]:
+    """Return a copy of candidate with internal reference/ranking fields removed."""
+    return {k: v for k, v in candidate.items() if k not in _CANDIDATE_REFERENCE_FIELDS}
 
 
 def _attach_roi_candidates(info: Dict[str, Any], top_k: int = ROI_CANDIDATE_TOP_K) -> Dict[str, Any]:
@@ -922,25 +909,56 @@ def _attach_roi_candidates(info: Dict[str, Any], top_k: int = ROI_CANDIDATE_TOP_
     info["roi_candidate_count"] = len(candidates)
     info["marked_roi_count"] = len(state._roi_marks)
     info["marked_roi_labels"] = [r.get("label", "") for r in state._roi_marks]
+
+    # Option E: Auto-recommend action + exploration budget (force faster VLM behavior)
+    if aml_mode and candidates:
+        top = candidates[0]
+        info["recommended_action"] = {
+            "tool": "wsi_mark_roi_norm",
+            "urgency": "HIGH",
+            "reason": f"Candidate #1 is pre-ranked by AML relevance. dark_roi_score={top.get('dark_roi_score', 0):.2f}, quality_hint='{top.get('quality_hint', 'unknown')}'",
+            "params": {
+                "x0_999": top["bbox_norm"][0],
+                "y0_999": top["bbox_norm"][1],
+                "x1_999": top["bbox_norm"][2],
+                "y1_999": top["bbox_norm"][3],
+                "label": "aml_roi",
+            },
+        }
+
+    # Exploration budget counter - shows VLM how many steps it has used
+    total_steps = len(state._step_log) if state._step_log else 0
+    navigation_steps = sum(1 for e in (state._step_log[-12:] if state._step_log else [])
+                          if e.get("tool") in ("wsi_get_overview_view", "wsi_zoom_current_norm", "wsi_zoom_full_norm", "wsi_pan_current"))
+    roi_steps = len(state._roi_marks)
+    info["exploration_budget"] = {
+        "total_steps": total_steps,
+        "navigation_steps": navigation_steps,
+        "rois_marked": roi_steps,
+        "recommended_max_steps": 12,
+        "status": "OVER_BUDGET" if navigation_steps > 4 else ("WARNING" if navigation_steps >= 3 else "OK"),
+        "message": (
+            f"Used {total_steps} steps ({navigation_steps} navigation, {roi_steps} ROIs). "
+            f"Recommended max ~12 steps total. "
+            "If navigation_steps > 4, STOP and mark an ROI immediately."
+        ),
+    }
+
     if aml_mode:
         kept_roi_count = len(state._roi_marks)
         if kept_roi_count >= 4:
             info["aml_stop_hint"] = (
-                "You have 4+ kept ROIs. If they consistently show either: "
-                "(a) heterogeneous maturation with blasts <5% → Normal marrow, OR "
-                "(b) dominant blast-like population with blasts ≥20% → Acute leukemia, "
-                "stop now and give the final decision. Do NOT explore more ROIs unless the current evidence is genuinely non-diagnostic."
+                "If the evidence you already have is enough for a stable final AML decision "
+                "(Normal marrow / Acute leukemia / Call for more diagnostics), stop now and give the final answer. "
+                f"You already have {kept_roi_count} kept ROI(s); do not explore another ROI unless it could materially change the decision."
             )
         elif kept_roi_count == 1:
             info["aml_stop_hint"] = (
-                "One ROI is screening evidence only. Inspect 1-3 additional representative ROIs from distinct slide regions before final decision. "
-                "Remember: scattered immature cells are NORMAL - require convincing diffuse blast population for AML."
+                "One ROI is screening evidence only. Try to inspect additional representative top-ranked ROIs from distinct slide regions before a final AML category if feasible."
             )
         else:
             info["aml_stop_hint"] = (
-                f"You have {kept_roi_count} kept ROIs. This is often sufficient for a final decision. "
-                "If ROIs show mixed maturation or lack convincing blasts → default to Normal marrow. "
-                "Only continue if you genuinely need more evidence to distinguish 5-20% blast range."
+                "Two to five ROIs are supportive but still limited for diffuse AML assessment. Prefer additional representative top-ranked ROIs across the slide before the final category when feasible."
             )
 
     # Detect how many consecutive recent steps have stayed in the same slide region.
@@ -987,6 +1005,22 @@ def _attach_roi_candidates(info: Dict[str, Any], top_k: int = ROI_CANDIDATE_TOP_
             "then navigate to a region with visible tissue (pink/purple staining)."
         )
 
+    # CRITICAL: Exploration budget exceeded warning
+    if aml_mode and navigation_steps >= 5 and roi_steps == 0:
+        info["exploration_over_budget_warning"] = (
+            f"CRITICAL: You have navigated {navigation_steps} times without marking any ROI. "
+            "This is excessive exploration. "
+            "IMMEDIATE ACTION REQUIRED: Call wsi_mark_roi_norm on candidate #1 NOW, "
+            "or call wsi_get_overview_view and pick a completely different region. "
+            "Do NOT continue navigating in this view."
+        )
+    elif aml_mode and navigation_steps >= 3 and roi_steps == 0:
+        info["exploration_warning"] = (
+            f"WARNING: {navigation_steps} navigation steps with 0 ROIs marked. "
+            "You are over-exploring. Mark candidate #1 with wsi_mark_roi_norm now. "
+            "The ranking is pre-computed—do not waste steps comparing candidates."
+        )
+
     info["roi_candidate_source"] = state._last_roi_candidate_source
     info["roi_candidate_prep"] = dict(state._roi_candidate_prep) if state._roi_candidate_prep else None
     info["roi_candidate_overlay_path"] = state._last_roi_candidate_overlay_path
@@ -1019,7 +1053,7 @@ def _attach_roi_candidates(info: Dict[str, Any], top_k: int = ROI_CANDIDATE_TOP_
     if aml_mode:
         if use_dark_region_gating:
             info["roi_candidate_pipeline"] = (
-                f"Detect deep blue-purple basophilic regions -> {extractor_label} tile embeddings (STRICT: only tiles within dark regions) -> ROI-quality exemplar retrieval + nuclei/dark-region heuristics -> top-K candidate blast-suspected ROIs per current view"
+                f"Detect deep blue-purple basophilic regions -> dark-guided supertile coarse filter -> tile-level refinement -> {extractor_label} tile embeddings -> ROI-quality exemplar retrieval + nuclei/dark-region priors -> top-K candidate blast-suspected ROIs per current view"
             )
         else:
             info["roi_candidate_pipeline"] = (
@@ -1027,10 +1061,9 @@ def _attach_roi_candidates(info: Dict[str, Any], top_k: int = ROI_CANDIDATE_TOP_
             )
         if outside_dark_region_warning:
             info["outside_dark_region_warning"] = (
-                "ALERT: Current view is OUTSIDE all detected deep blue-purple basophilic regions. "
-                "In AML mode, the backend ONLY provides roi_candidates within dark regions. "
-                "Use wsi_get_overview_view or wsi_zoom_full_norm to navigate to a dark region (look for deep blue-purple cellular tissue areas, not gray-black debris), "
-                "then use the roi_candidates from that view. Navigation outside dark regions will not yield valid candidates."
+                "ALERT: Current view is OUTSIDE the coarse dark-region prior boxes. "
+                "That usually lowers candidate quality, but the backend can still rescue strong deep purple tiles just outside the coarse boxes. "
+                "Prefer navigating toward dark blue-purple cellular tissue, not gray-black debris, if the current candidates look weak."
             )
     else:
         info["roi_candidate_pipeline"] = f"{extractor_label} tile embeddings -> kNN novelty ranking -> top-K per current view"
@@ -1082,8 +1115,8 @@ def _attach_roi_candidates(info: Dict[str, Any], top_k: int = ROI_CANDIDATE_TOP_
     if candidates:
         if aml_mode:
             guidance_intro = (
-                "For AML, the pipeline uses STRICT DARK REGION GATING: only tiles within detected deep blue-purple basophilic regions are embedded and ranked. "
-                "Treat roi_candidates as candidate blast-suspected ROIs selected from tissue, nucleated-cell, focus, RBC, and artifact heuristics WITHIN dark regions. Prioritize deep dark blue-purple cellular fields; dark red-pink is only a rare fallback when clearly cellular, and gray-black low-chroma junk should be rejected. "
+                "For AML, the pipeline uses coarse-to-fine dark-region guidance: coarse thumbnail dark boxes bias supertile selection, then tile-level scoring refines within those regions and can rescue strong deep purple tiles near coarse-box boundaries. "
+                "Treat roi_candidates as candidate blast-suspected ROIs selected from tissue, nucleated-cell, focus, RBC, and artifact heuristics, with detected dark regions used as a prior rather than a perfect boundary. Prioritize deep dark blue-purple cellular fields; dark red-pink is only a rare fallback when clearly cellular, and gray-black low-chroma junk should be rejected. "
                 if use_dark_region_gating else
                 "For AML with tile filter='none', roi_candidates are ranked from the full embedded tile set without dark-region gating. "
                 "Treat roi_candidates as candidate blast-suspected ROIs selected from tissue, nucleated-cell, focus, RBC, and artifact heuristics across the current view. Prioritize deep dark blue-purple cellular fields; dark red-pink is only a rare fallback when clearly cellular, and gray-black low-chroma junk should be rejected. "
@@ -1095,13 +1128,6 @@ def _attach_roi_candidates(info: Dict[str, Any], top_k: int = ROI_CANDIDATE_TOP_
                 "Use one of the top-K candidate centers/bboxes for wsi_mark_roi_norm; "
                 "arbitrary ROI coordinates are rejected."
             )
-            # VLLM OPTIMIZATION: Add metadata about candidate filtering
-            info["vllm_optimization"] = {
-                "candidates_filtered": len(candidates),
-                "max_candidates_sent": min(len(candidates), 8),
-                "bad_like_rejected": True,
-                "low_cellularity_filtered": True,
-            }
         else:
             info["roi_candidate_guidance"] = (
                 "Use one of the top-K candidate centers/bboxes for wsi_mark_roi_norm. "
@@ -1724,21 +1750,7 @@ def wsi_save_tile_norm(
             },
         )
 
-        # Check if this tile overlaps with any marked ROI
-        tile_cx = x0 + tile_px // 2
-        tile_cy = y0 + tile_px // 2
-        matching_roi = None
-        for roi in state._roi_marks:
-            roi_bbox = roi.get("view_bbox_level0")
-            if roi_bbox:
-                roi_cx = roi_bbox[0] + roi_bbox[2] // 2
-                roi_cy = roi_bbox[1] + roi_bbox[3] // 2
-                dist = ((tile_cx - roi_cx) ** 2 + (tile_cy - roi_cy) ** 2) ** 0.5
-                if dist < tile_px * 0.75:  # Within ~3/4 of tile width
-                    matching_roi = roi
-                    break
-
-        response = {
+        return {
             "ok": True,
             "quality": quality,
             "path": out_path,
@@ -1748,21 +1760,6 @@ def wsi_save_tile_norm(
             "tile_um": TILE_SIZE_UM,
             "mpp_used": mpp,
         }
-
-        if matching_roi:
-            response["roi_id"] = matching_roi["roi_id"]
-            response["roi_label"] = matching_roi["label"]
-            response["note"] = f"Tile saved from marked ROI #{matching_roi['roi_id']} ({matching_roi['label']})"
-        else:
-            response["roi_id"] = None
-            response["note"] = (
-                "TIP: This tile was saved WITHOUT a corresponding marked ROI. "
-                "For proper documentation, first call wsi_mark_roi_norm on diagnostic regions, "
-                "then call wsi_save_tile_norm to save tiles from those marked ROIs. "
-                "ROIs appear in the GUI report; saved tiles do not."
-            )
-
-        return response
 
     return _safe(
         _inner,

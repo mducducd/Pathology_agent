@@ -62,3 +62,59 @@ def test_refine_dark_region_boxes_keeps_boxes_touching_tissue_edge_after_trim() 
     assert kept["y"] >= 0
     assert kept["w"] > 0
     assert kept["h"] > 0
+
+
+def test_select_dark_core_boxes_bridges_split_dark_shoulder_with_coarse_context() -> None:
+    score = np.zeros((64, 64), dtype=np.float32)
+    tissue_mask = np.zeros((64, 64), dtype=bool)
+    tissue_mask[20:44, 20:45] = True
+    score[tissue_mask] = 0.10
+
+    # Dense dark core plus a second deep-purple shoulder separated by a narrow gap.
+    # The coarse-to-fine context should merge them into one broader dark region.
+    score[24:32, 24:32] = 0.95
+    score[24:32, 35:43] = 0.60
+
+    boxes, selected_mask = dark_regions._select_dark_core_boxes(
+        score=score,
+        tissue_mask=tissue_mask,
+        threshold_pct=90,
+        out_w=64,
+        out_h=64,
+        min_area=16,
+        max_regions=4,
+    )
+
+    assert boxes
+    assert np.any(selected_mask)
+    merged = boxes[0]
+    assert merged["x"] <= 24
+    assert merged["x"] + merged["w"] >= 43
+
+
+def test_select_dark_core_boxes_keeps_isolated_core_compact() -> None:
+    score = np.zeros((96, 96), dtype=np.float32)
+    tissue_mask = np.zeros((96, 96), dtype=bool)
+    tissue_mask[16:80, 18:78] = True
+    score[tissue_mask] = 0.12
+
+    # A small dense core inside otherwise low-score tissue should stay tight
+    # instead of inflating into a broad tissue-level rectangle.
+    score[40:48, 42:50] = 0.92
+
+    boxes, selected_mask = dark_regions._select_dark_core_boxes(
+        score=score,
+        tissue_mask=tissue_mask,
+        threshold_pct=90,
+        out_w=96,
+        out_h=96,
+        min_area=16,
+        max_regions=4,
+    )
+
+    assert boxes
+    assert np.any(selected_mask)
+    kept = boxes[0]
+    assert kept["w"] <= 14
+    assert kept["h"] <= 14
+    assert int(np.sum(selected_mask)) <= 180

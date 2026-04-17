@@ -98,6 +98,14 @@ class TileFeatureMatrix:
     extractor_id: str
 
 
+_AML_DARK_TILE_BRIGHTNESS_CUTOFF: Final[int] = 226
+_AML_SUPERTILE_DARK_WEIGHT: Final[float] = 0.52
+_AML_SUPERTILE_SCREEN_WEIGHT: Final[float] = 0.24
+_AML_SUPERTILE_BOX_PRIOR_WEIGHT: Final[float] = 0.24
+_AML_SUPERTILE_MIN_BOX_OVERLAP: Final[float] = 0.015
+_AML_SUPERTILE_MIN_DARK_SCORE: Final[float] = 0.16
+
+
 def tiles_with_cache(
     slide_path: Path | str,
     *,
@@ -125,9 +133,8 @@ def tiles_with_cache(
     """Iterate over tiles in a WSI, using cache if configured.
 
     Args:
-        dark_region_boxes_level0: If provided, only yield tiles whose centers fall
-            within these bounding boxes (level-0 coordinates). Enables strict dark-region
-            gating for AML mode.
+        dark_region_boxes_level0: If provided, use these coarse dark-region boxes as a
+            supertile-level prior for AML tile extraction.
     """
     slide_path = Path(slide_path)
 
@@ -264,11 +271,11 @@ def _tiles_with_tissue(
     dark_region_boxes_level0: list[dict[str, int]] | None = None,
     progress_cb: Callable[[dict[str, Any]], None] | None,
 ) -> Iterator[_Tile[Microns]]:
-    """Iterate over tiles in tissue regions, optionally restricted to dark regions.
+    """Iterate over tiles in tissue regions, optionally guided by dark regions.
 
     Args:
-        dark_region_boxes_level0: If provided, only yield tiles whose centers fall
-            within these bounding boxes (level-0 coordinates).
+        dark_region_boxes_level0: If provided, use these coarse level-0 dark boxes to
+            bias supertile selection before tile-level refinement.
     """
     use_quality_prefilter = (
         quality_keep_ratio is not None
@@ -276,11 +283,6 @@ def _tiles_with_tissue(
         and tile_prefilter_method in {"quality", "hybrid"}
     )
     use_dark_region_gating = dark_region_boxes_level0 is not None and len(dark_region_boxes_level0) > 0
-    if use_dark_region_gating:
-        # In AML mode we want all tiles from the detected dark regions to be embedded.
-        # The dark-region boxes already define the candidate area, so do not prune again
-        # with the per-tile quality prefilter here.
-        use_quality_prefilter = False
     quality_total_tiles = 0
     quality_kept_tiles = 0
     quality_pool_tiles = 0
@@ -310,6 +312,7 @@ def _tiles_with_tissue(
         coarse_keep_ratio=coarse_keep_ratio,
         coarse_min_keep_supertile_count=coarse_min_keep_supertile_count,
         coarse_max_keep_supertile_count=coarse_max_keep_supertile_count,
+        dark_region_boxes_level0=dark_region_boxes_level0,
         progress_cb=progress_cb,
     ):
         tiles = _split_supertile_into_tiles(
@@ -319,32 +322,12 @@ def _tiles_with_tissue(
             tile_size_px=tile_size_px,
         )
 
-        # STRICT DARK REGION GATING: Filter tiles whose centers fall outside dark regions
         if use_dark_region_gating:
-            slide_mpp = cast(SlideMPP, get_slide_mpp_(slide, default_mpp=default_slide_mpp))
-            filtered_tiles: list[_Tile[Microns]] = []
-            for tile in tiles:
-                # tile.coordinates.x/y are absolute level-0 micron coordinates (top-left corner)
-                # Tile center in microns
-                tile_center_x_um = float(tile.coordinates.x) + (float(tile_size_um) / 2.0)
-                tile_center_y_um = float(tile.coordinates.y) + (float(tile_size_um) / 2.0)
-                # Convert to level-0 pixels
-                if slide_mpp is not None:
-                    tile_center_x_px = int(tile_center_x_um / float(slide_mpp))
-                    tile_center_y_px = int(tile_center_y_um / float(slide_mpp))
-                    # Check if tile center falls within any dark region box
-                    for box in dark_region_boxes_level0:
-                        bx0, by0 = int(box["x0"]), int(box["y0"])
-                        bw, bh = int(box["w"]), int(box["h"])
-                        bx1, by1 = bx0 + bw, by0 + bh
-                        if bx0 <= tile_center_x_px < bx1 and by0 <= tile_center_y_px < by1:
-                            filtered_tiles.append(tile)
-                            break
-            # Reject bright/pale tiles captured by oversized dark-region boxes, and
-            # reject tiles whose crop still straddles the tissue boundary.
-            _AML_DARK_TILE_BRIGHTNESS_CUTOFF: int = 210
+            # Dark boxes are now a coarse supertile prior rather than a brittle
+            # tile-center gate. Keep a light cleanup here for obvious pale/edge tiles;
+            # the hybrid quality filter below performs the fine-grained selection.
             tiles = [
-                t for t in filtered_tiles
+                t for t in tiles
                 if np.asarray(t.image.convert("L"), dtype=np.float32).mean() < _AML_DARK_TILE_BRIGHTNESS_CUTOFF
                 and not tile_touches_tissue_edge(t.image)
             ]
@@ -430,6 +413,69 @@ def _split_supertile_into_tiles(
     return out
 
 
+def _bbox_intersection_area(
+    ax0: int,
+    ay0: int,
+    ax1: int,
+    ay1: int,
+    bx0: int,
+    by0: int,
+    bx1: int,
+    by1: int,
+) -> int:
+    ix0 = max(ax0, bx0)
+    iy0 = max(ay0, by0)
+    ix1 = min(ax1, bx1)
+    iy1 = min(ay1, by1)
+    if ix1 <= ix0 or iy1 <= iy0:
+        return 0
+    return int((ix1 - ix0) * (iy1 - iy0))
+
+
+def _supertile_dark_box_overlap_fraction(
+    *,
+    x0: int,
+    y0: int,
+    size: int,
+    dark_region_boxes_level0: list[dict[str, int]] | None,
+) -> float:
+    if size <= 0 or not dark_region_boxes_level0:
+        return 0.0
+    x1 = x0 + size
+    y1 = y0 + size
+    overlap_area = 0
+    for box in dark_region_boxes_level0:
+        try:
+            bx0 = int(box["x0"])
+            by0 = int(box["y0"])
+            bx1 = bx0 + max(0, int(box["w"]))
+            by1 = by0 + max(0, int(box["h"]))
+        except Exception:
+            continue
+        overlap_area += _bbox_intersection_area(x0, y0, x1, y1, bx0, by0, bx1, by1)
+    return float(np.clip(overlap_area / max(float(size * size), 1.0), 0.0, 1.0))
+
+
+def _dark_supertile_priority_score(
+    rgb: npt.NDArray[np.uint8],
+    *,
+    overlap_fraction: float,
+) -> float:
+    proxy_image = Image.fromarray(rgb, mode="RGB")
+    dark_score = float(score_dark_informative_roi(proxy_image))
+    screen_score = float(screening_roi_score(screening_tile_metrics(rgb)))
+    overlap_score = float(np.clip(overlap_fraction / 0.10, 0.0, 1.0))
+    return float(
+        np.clip(
+            (_AML_SUPERTILE_DARK_WEIGHT * dark_score)
+            + (_AML_SUPERTILE_SCREEN_WEIGHT * screen_score)
+            + (_AML_SUPERTILE_BOX_PRIOR_WEIGHT * overlap_score),
+            0.0,
+            1.0,
+        )
+    )
+
+
 def _foreground_grid(
     slide: openslide.AbstractSlide,
     tile_size_slide_px: SlidePixels,
@@ -490,6 +536,7 @@ def _select_supertile_coords(
     coarse_keep_ratio: float | None,
     coarse_min_keep_supertile_count: int,
     coarse_max_keep_supertile_count: int | None,
+    dark_region_boxes_level0: list[dict[str, int]] | None,
     progress_cb: Callable[[dict[str, Any]], None] | None,
 ) -> list[_XYCoords[SlidePixels]]:
     is_foreground, thumb_grayscale = _foreground_grid(
@@ -517,14 +564,12 @@ def _select_supertile_coords(
     ratio = float(coarse_keep_ratio) if coarse_keep_ratio is not None else 1.0
     min_keep = max(1, int(coarse_min_keep_supertile_count))
     max_keep = None if coarse_max_keep_supertile_count is None or coarse_max_keep_supertile_count <= 0 else int(coarse_max_keep_supertile_count)
+    use_dark_guidance = dark_region_boxes_level0 is not None and len(dark_region_boxes_level0) > 0
 
     use_prefilter = trigger > 0 and total >= trigger and (ratio < 1.0 or (max_keep is not None and total > max_keep))
+    use_prefilter = bool(use_prefilter or use_dark_guidance)
     keep_count = total
     if use_prefilter:
-        keep_count = max(min_keep, int(np.ceil(total * max(0.0, min(1.0, ratio)))))
-        if max_keep is not None:
-            keep_count = min(keep_count, max_keep)
-        keep_count = max(1, min(total, keep_count))
         screen_slide = cast(openslide.OpenSlide, slide)
         screening_level = choose_screening_level(
             screen_slide,
@@ -539,6 +584,7 @@ def _select_supertile_coords(
 
         screen_scores = np.full((total,), -np.inf, dtype=np.float32)
         valid_mask = np.zeros((total,), dtype=bool)
+        box_overlap_scores = np.zeros((total,), dtype=np.float32)
         for idx, (yy, xx) in enumerate(zip(ys, xs, strict=False)):
             x0 = int(xx * int(supertile_size_slide_px))
             y0 = int(yy * int(supertile_size_slide_px))
@@ -550,16 +596,41 @@ def _select_supertile_coords(
                 ).convert("RGB"),
                 dtype=np.uint8,
             )
+            overlap_fraction = _supertile_dark_box_overlap_fraction(
+                x0=x0,
+                y0=y0,
+                size=int(supertile_size_slide_px),
+                dark_region_boxes_level0=dark_region_boxes_level0,
+            )
+            box_overlap_scores[idx] = overlap_fraction
+
             metrics = screening_tile_metrics(rgb)
-            if metrics.tissue_fraction < 0.03:
+            if use_dark_guidance:
+                score = _dark_supertile_priority_score(rgb, overlap_fraction=overlap_fraction)
+            else:
+                if metrics.tissue_fraction < 0.03:
+                    continue
+                score = float(screening_roi_score(metrics))
+            if metrics.tissue_fraction < 0.03 and overlap_fraction < _AML_SUPERTILE_MIN_BOX_OVERLAP:
                 continue
-            screen_scores[idx] = screening_roi_score(metrics)
+            screen_scores[idx] = score
             valid_mask[idx] = True
 
         if np.any(valid_mask):
             candidate_ys = ys[valid_mask]
             candidate_xs = xs[valid_mask]
             candidate_scores = screen_scores[valid_mask]
+            overlap_valid = box_overlap_scores[valid_mask]
+            if use_dark_guidance:
+                dark_floor = float(np.percentile(candidate_scores, 62)) if candidate_scores.size > 1 else candidate_scores[0]
+                keep_mask = (
+                    (overlap_valid >= _AML_SUPERTILE_MIN_BOX_OVERLAP)
+                    | (candidate_scores >= max(_AML_SUPERTILE_MIN_DARK_SCORE, dark_floor))
+                )
+                if int(np.count_nonzero(keep_mask)) >= 1:
+                    candidate_ys = candidate_ys[keep_mask]
+                    candidate_xs = candidate_xs[keep_mask]
+                    candidate_scores = candidate_scores[keep_mask]
             order = np.argsort(candidate_scores)[::-1]
         else:
             gray = thumb_grayscale.astype(np.float32, copy=False)
@@ -578,6 +649,27 @@ def _select_supertile_coords(
             candidate_xs = xs
             candidate_scores = score_map[ys, xs]
             order = np.argsort(candidate_scores)[::-1]
+
+        if use_dark_guidance:
+            overlap_count = int(np.count_nonzero(box_overlap_scores >= _AML_SUPERTILE_MIN_BOX_OVERLAP))
+            keep_count = max(
+                1,
+                min(
+                    total,
+                    max(
+                        12,
+                        int(np.ceil(total * 0.18)) if total > 48 else 0,
+                        int(np.ceil(max(overlap_count, 1) * 1.5)),
+                    ),
+                ),
+            )
+            if max_keep is not None:
+                keep_count = min(keep_count, max_keep)
+        else:
+            keep_count = max(min_keep, int(np.ceil(total * max(0.0, min(1.0, ratio)))))
+            if max_keep is not None:
+                keep_count = min(keep_count, max_keep)
+            keep_count = max(1, min(total, keep_count))
 
         min_sep = 2 if total > keep_count * 2 else 1
         selected: list[tuple[int, int]] = []
@@ -656,6 +748,7 @@ def _supertiles(
     coarse_keep_ratio: float | None,
     coarse_min_keep_supertile_count: int,
     coarse_max_keep_supertile_count: int | None,
+    dark_region_boxes_level0: list[dict[str, int]] | None,
     progress_cb: Callable[[dict[str, Any]], None] | None,
 ) -> Iterator[_Tile[Microns]]:
     slide_mpp = cast(SlideMPP, get_slide_mpp_(slide, default_mpp=default_slide_mpp))
@@ -692,6 +785,7 @@ def _supertiles(
         coarse_keep_ratio=coarse_keep_ratio,
         coarse_min_keep_supertile_count=coarse_min_keep_supertile_count,
         coarse_max_keep_supertile_count=coarse_max_keep_supertile_count,
+        dark_region_boxes_level0=dark_region_boxes_level0,
         progress_cb=progress_cb,
     )
 

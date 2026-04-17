@@ -86,6 +86,12 @@ fi
 if [[ -z "$OUTPUT_DIR" ]]; then
     case "$EXTRACTOR" in
         uni2) EXTRACTOR_TAG="UNI2" ;;
+        h_optimus_1) EXTRACTOR_TAG="H-optimus-1" ;;
+        virchow2) EXTRACTOR_TAG="Virchow2" ;;
+        dinobloom) EXTRACTOR_TAG="DinoBloom-S" ;;
+        dinobloom_base) EXTRACTOR_TAG="DinoBloom-B" ;;
+        dinobloom_large) EXTRACTOR_TAG="DinoBloom-L" ;;
+        dinobloom_giant) EXTRACTOR_TAG="DinoBloom-G" ;;
         reddino) EXTRACTOR_TAG="RedDino-Small" ;;
         reddino_base) EXTRACTOR_TAG="RedDino-base" ;;
         reddino_large) EXTRACTOR_TAG="RedDino-large" ;;

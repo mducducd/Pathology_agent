@@ -20,9 +20,17 @@ class Extractor(Generic[ExtractorModel]):
     """
 
 
-from .extractors.dinobloom import dinobloom
+from .extractors.dinobloom import (
+    dino_bloom,
+    dinobloom,
+    dinobloom_base,
+    dinobloom_giant,
+    dinobloom_large,
+)
+from .extractors.h_optimus_1 import h_optimus_1
 from .extractors.reddino import red_dino, reddino, reddino_base, reddino_large
 from .extractors.uni2 import uni2
+from .extractors.virchow2 import virchow2
 from .index_tiles_hnsw import embed_tiles_to_hnsw
 from .tiling import TileFeatureMatrix, extract_wsi_features_by_tiles, save_tile_features_npz
 
@@ -30,6 +38,11 @@ DEFAULT_EMBEDDING_EXTRACTOR = "uni2"
 _EMBEDDING_EXTRACTOR_BUILDERS = {
     "uni2": uni2,
     "dinobloom": dinobloom,
+    "dinobloom_base": dinobloom_base,
+    "dinobloom_large": dinobloom_large,
+    "dinobloom_giant": dinobloom_giant,
+    "virchow2": virchow2,
+    "h_optimus_1": h_optimus_1,
     "reddino": reddino,
     "reddino_base": reddino_base,
     "reddino_large": reddino_large,
@@ -37,6 +50,11 @@ _EMBEDDING_EXTRACTOR_BUILDERS = {
 _EMBEDDING_EXTRACTOR_DISPLAY_NAMES = {
     "uni2": "UNI2-h",
     "dinobloom": "DinoBloom-S",
+    "dinobloom_base": "DinoBloom-B",
+    "dinobloom_large": "DinoBloom-L",
+    "dinobloom_giant": "DinoBloom-G",
+    "virchow2": "Virchow2",
+    "h_optimus_1": "H-optimus-1",
     "reddino": "RedDino-Small",
     "reddino_base": "RedDino-base",
     "reddino_large": "RedDino-large",
@@ -108,7 +126,13 @@ __all__ = [
     "get_embedding_extractor",
     "embedding_extractor_display_name",
     # PyTorch extractors
+    "dino_bloom",
     "dinobloom",
+    "dinobloom_base",
+    "dinobloom_large",
+    "dinobloom_giant",
+    "virchow2",
+    "h_optimus_1",
     "reddino",
     "reddino_base",
     "reddino_large",
