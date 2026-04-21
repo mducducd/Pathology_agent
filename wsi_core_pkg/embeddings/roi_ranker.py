@@ -11,8 +11,15 @@ import numpy.typing as npt
 import torch
 from PIL import Image
 
-from .extractors.uni2 import uni2
-from .tiling import SlideMPP, extract_wsi_features_by_tiles, get_slide_mpp_
+from .tiling import (
+    SlideMPP,
+    TileFeatureMatrix,
+    extract_wsi_features_by_tiles,
+    get_slide_mpp_,
+    load_tile_features_npz,
+    resolve_feature_cache_file_path,
+    save_tile_features_npz,
+)
 from ..tuning_config import tuning_section
 
 try:
@@ -116,49 +123,173 @@ ROI_ADAPTIVE_MIN_SEPARATION_TILE_RATIO = float(ROI_RANKER_QUALITY_CFG["ROI_ADAPT
 AML_DARK_REGION_BOX_PRIOR_WEIGHT = 0.08
 
 
+def _discover_blast_cell_paths(blast_cells_root: str | Path) -> tuple[str, ...]:
+    blast_path = Path(blast_cells_root)
+    if not blast_path.exists():
+        return ()
+
+    blast_images: list[Path] = []
+    seen: set[Path] = set()
+    for ext in sorted(IMAGE_EXTS):
+        for path in sorted(blast_path.rglob(f"*{ext}")):
+            resolved = path.resolve()
+            if resolved in seen:
+                continue
+            seen.add(resolved)
+            blast_images.append(resolved)
+    return tuple(str(path) for path in blast_images)
+
+
+def _find_matching_blast_embedding_cache(
+    cache_dir: Path,
+    *,
+    blast_paths: tuple[str, ...],
+    extractor_id: str,
+) -> tuple[Path, Path] | None:
+    expected_paths = list(blast_paths)
+    for meta_path in sorted(cache_dir.glob(f"{extractor_id}_blast_*_meta.json")):
+        try:
+            import json
+
+            meta = json.loads(meta_path.read_text())
+        except Exception:
+            continue
+        if str(meta.get("extractor_id") or "") != str(extractor_id):
+            continue
+        if list(meta.get("paths") or []) != expected_paths:
+            continue
+
+        stem = meta_path.name.removesuffix("_meta.json")
+        features_path = cache_dir / f"{stem}_features.npy"
+        if features_path.exists():
+            return features_path, meta_path
+    return None
+
+
+def _load_blast_embeddings_from_cache(
+    blast_paths: tuple[str, ...],
+    extractor_id: str,
+) -> tuple[npt.NDArray[np.float32], tuple[str, ...]] | None:
+    global _blast_features, _blast_paths, _blast_extractor_id
+
+    if (
+        _blast_features is not None
+        and _blast_extractor_id == extractor_id
+        and _blast_paths == blast_paths
+    ):
+        return _blast_features, blast_paths
+
+    if not blast_paths:
+        return None
+
+    try:
+        cache_dir = _get_persistent_cache_dir()
+        fingerprint = _compute_reference_fingerprint(blast_paths)
+        cache_name = f"{extractor_id}_blast_{fingerprint}"
+
+        features_path = cache_dir / f"{cache_name}_features.npy"
+        meta_path = cache_dir / f"{cache_name}_meta.json"
+
+        if not (features_path.exists() and meta_path.exists()):
+            matched = _find_matching_blast_embedding_cache(
+                cache_dir,
+                blast_paths=blast_paths,
+                extractor_id=extractor_id,
+            )
+            if matched is None:
+                return None
+            features_path, meta_path = matched
+
+        import json
+
+        meta = json.loads(meta_path.read_text())
+        meta_paths = tuple(str(path) for path in meta.get("paths") or ())
+        if meta_paths != blast_paths:
+            return None
+        if str(meta.get("extractor_id") or "") != str(extractor_id):
+            return None
+
+        features_l2 = np.load(str(features_path), allow_pickle=False)
+        if features_l2.ndim != 2 or features_l2.shape[0] != len(blast_paths):
+            return None
+
+        _blast_features = features_l2
+        _blast_paths = blast_paths
+        _blast_extractor_id = str(extractor_id)
+        return features_l2, blast_paths
+    except Exception:
+        return None
+
+
+def _save_blast_embeddings_to_cache(
+    blast_features_l2: npt.NDArray[np.float32],
+    blast_paths: tuple[str, ...],
+    extractor_id: str,
+) -> Path | None:
+    global _blast_features, _blast_paths, _blast_extractor_id
+
+    try:
+        cache_dir = _get_persistent_cache_dir()
+        fingerprint = _compute_reference_fingerprint(blast_paths)
+        cache_name = f"{extractor_id}_blast_{fingerprint}"
+
+        features_path = cache_dir / f"{cache_name}_features.npy"
+        meta_path = cache_dir / f"{cache_name}_meta.json"
+
+        np.save(str(features_path), blast_features_l2, allow_pickle=False)
+
+        import json
+
+        meta = {
+            "extractor_id": extractor_id,
+            "count": len(blast_paths),
+            "dim": int(blast_features_l2.shape[1]) if blast_features_l2.ndim == 2 else 0,
+            "fingerprint": fingerprint,
+            "paths": blast_paths,
+            "created_at": __import__("datetime").datetime.now().isoformat(),
+        }
+        meta_path.write_text(json.dumps(meta, indent=2))
+
+        _blast_features = blast_features_l2
+        _blast_paths = blast_paths
+        _blast_extractor_id = str(extractor_id)
+        return cache_dir
+    except Exception:
+        return None
+
+
 def _load_blast_cell_embeddings(
     blast_cells_root: str | Path,
-    extractor: Any,
-    device: torch.device,
+    *,
+    extractor_id: str,
+    extractor_loader: Callable[[], Any] | None = None,
+    device: torch.device | None = None,
     batch_size: int = 32,
 ) -> tuple[npt.NDArray[np.float32], tuple[str, ...]] | None:
     """Load and embed blast cell images for similarity scoring.
 
     Args:
         blast_cells_root: Path to directory containing blast cell images
-        extractor: Feature extractor model
+        extractor_id: Feature extractor identifier
+        extractor_loader: Lazy loader for the feature extractor
         device: Torch device
         batch_size: Batch size for embedding
 
     Returns:
         Tuple of (features_l2, paths) or None if no blast cells found
     """
-    global _blast_features, _blast_paths, _blast_extractor_id
-
-    # Return cached embeddings if available
-    extractor_id = getattr(extractor, "identifier", None)
-    if _blast_features is not None and _blast_extractor_id == extractor_id:
-        return _blast_features, _blast_paths
-
-    blast_path = Path(blast_cells_root)
-    if not blast_path.exists():
+    blast_paths = _discover_blast_cell_paths(blast_cells_root)
+    if not blast_paths:
         return None
 
-    # Discover blast cell images
-    blast_images: list[Path] = []
-    seen: set[Path] = set()
-    for ext in IMAGE_EXTS:
-        for path in blast_path.rglob(f"*{ext}"):
-            resolved = path.resolve()
-            if resolved in seen:
-                continue
-            seen.add(resolved)
-            blast_images.append(resolved)
+    cached = _load_blast_embeddings_from_cache(blast_paths, extractor_id)
+    if cached is not None:
+        return cached
 
-    if not blast_images:
+    if extractor_loader is None or device is None:
         return None
 
-    # Embed blast cells
+    extractor = extractor_loader()
     model = extractor.model.to(device)
     model.eval()
 
@@ -166,7 +297,8 @@ def _load_blast_cell_embeddings(
     feature_chunks: list[torch.Tensor] = []
     paths: list[str] = []
 
-    for img_path in blast_images:
+    for raw_path in blast_paths:
+        img_path = Path(raw_path)
         try:
             with Image.open(img_path) as im:
                 rgb = im.convert("RGB")
@@ -194,10 +326,7 @@ def _load_blast_cell_embeddings(
     features = torch.cat(feature_chunks, dim=0).numpy().astype(np.float32, copy=False)
     features_l2 = _l2_normalize_rows(features)
 
-    # Cache for future use
-    _blast_features = features_l2
-    _blast_paths = tuple(paths)
-    _blast_extractor_id = extractor_id
+    _save_blast_embeddings_to_cache(features_l2, tuple(paths), extractor_id)
 
     return features_l2, tuple(paths)
 
@@ -1277,6 +1406,7 @@ def build_unsupervised_roi_index(
     batch_size: int = 32,
     device: str | None = None,
     cache_dir: Path | None = None,
+    feature_cache_dir: Path | None = None,
     max_supertile_size_slide_px: int = 4096,
     max_workers: int = 4,
     brightness_cutoff: int | None = 240,
@@ -1299,49 +1429,136 @@ def build_unsupervised_roi_index(
     progress_cb: Callable[[dict[str, Any]], None] | None = None,
 ) -> UnsupervisedROIIndex:
     slide_path = Path(slide_path).resolve()
-    if progress_cb is not None:
-        progress_cb({"phase": "load_extractor", "status": "running"})
+    from wsi_core_pkg.embeddings import embedding_extractor_identifier, get_embedding_extractor
 
-    # Load the specified extractor
-    from wsi_core_pkg.embeddings import get_embedding_extractor
-    extractor = get_embedding_extractor(extractor_name)
-    if progress_cb is not None:
-        progress_cb(
-            {
-                "phase": "load_extractor",
-                "status": "done",
-                "extractor_id": extractor.identifier,
-            }
+    extractor: Any | None = None
+    extractor_id = embedding_extractor_identifier(extractor_name)
+
+    def _resolve_feature_cache_path(current_extractor_id: str) -> Path | None:
+        return resolve_feature_cache_file_path(
+            slide_path=slide_path,
+            feature_cache_dir=feature_cache_dir,
+            extractor_id=current_extractor_id,
+            use_amp=True,
+            cache_tiles_ext="jpg",
+            tile_size_um=SlideMPP(tile_size_um),
+            tile_size_px=int(tile_size_px),
+            max_supertile_size_slide_px=int(max_supertile_size_slide_px),
+            brightness_cutoff=brightness_cutoff,
+            canny_cutoff=canny_cutoff,
+            tile_prefilter_method=tile_prefilter_method,
+            coarse_trigger_supertile_count=coarse_trigger_supertile_count,
+            coarse_keep_ratio=coarse_keep_ratio,
+            coarse_min_keep_supertile_count=coarse_min_keep_supertile_count,
+            coarse_max_keep_supertile_count=coarse_max_keep_supertile_count,
+            quality_keep_ratio=quality_keep_ratio,
+            quality_min_keep_tile_count=quality_min_keep_tile_count,
+            quality_trigger_tile_count=quality_trigger_tile_count,
+            quality_random_reserve_ratio=quality_random_reserve_ratio,
+            dark_region_boxes_level0=dark_region_boxes_level0,
         )
+
+    def _ensure_extractor() -> Any:
+        nonlocal extractor_id, extractor
+        if extractor is not None:
+            return extractor
+
+        if progress_cb is not None:
+            progress_cb({"phase": "load_extractor", "status": "running"})
+        extractor = get_embedding_extractor(extractor_name)
+        extractor_id = str(getattr(extractor, "identifier", extractor_id) or extractor_id)
+        if progress_cb is not None:
+            progress_cb(
+                {
+                    "phase": "load_extractor",
+                    "status": "done",
+                    "extractor_id": extractor_id,
+                }
+            )
+        return extractor
 
     if progress_cb is not None:
         progress_cb({"phase": "extract_embeddings", "status": "running"})
-    result = extract_wsi_features_by_tiles(
-        slide_path=slide_path,
-        extractor=extractor,
-        tile_size_um=tile_size_um,
-        tile_size_px=tile_size_px,
-        batch_size=batch_size,
-        device=device,
-        cache_dir=cache_dir,
-        max_supertile_size_slide_px=max_supertile_size_slide_px,
-        max_workers=max_workers,
-        brightness_cutoff=brightness_cutoff,
-        canny_cutoff=canny_cutoff,
-        default_slide_mpp=default_slide_mpp,
-        tile_prefilter_method=tile_prefilter_method,
-        coarse_trigger_supertile_count=coarse_trigger_supertile_count,
-        coarse_keep_ratio=coarse_keep_ratio,
-        coarse_min_keep_supertile_count=coarse_min_keep_supertile_count,
-        coarse_max_keep_supertile_count=coarse_max_keep_supertile_count,
-        quality_keep_ratio=quality_keep_ratio,
-        quality_min_keep_tile_count=quality_min_keep_tile_count,
-        quality_trigger_tile_count=quality_trigger_tile_count,
-        quality_random_reserve_ratio=quality_random_reserve_ratio,
-        dark_region_boxes_level0=dark_region_boxes_level0,
-        progress_cb=progress_cb,
-        use_amp=True,
-    )
+    feature_cache_path = _resolve_feature_cache_path(extractor_id)
+
+    result: TileFeatureMatrix
+    if feature_cache_path is not None and feature_cache_path.is_file():
+        try:
+            result = load_tile_features_npz(feature_cache_path)
+            extractor_id = str(result.extractor_id or extractor_id)
+            if progress_cb is not None:
+                progress_cb(
+                    {
+                        "phase": "extract_embeddings",
+                        "status": "cached",
+                        "processed_tiles": int(result.features.shape[0]) if result.features.ndim == 2 else 0,
+                        "processed_batches": 0,
+                        "feature_cache_path": str(feature_cache_path),
+                    }
+                )
+        except Exception:
+            feature_cache_path.unlink(missing_ok=True)
+            extractor = _ensure_extractor()
+            feature_cache_path = _resolve_feature_cache_path(extractor_id)
+            result = extract_wsi_features_by_tiles(
+                slide_path=slide_path,
+                extractor=extractor,
+                tile_size_um=tile_size_um,
+                tile_size_px=tile_size_px,
+                batch_size=batch_size,
+                device=device,
+                cache_dir=cache_dir,
+                max_supertile_size_slide_px=max_supertile_size_slide_px,
+                max_workers=max_workers,
+                brightness_cutoff=brightness_cutoff,
+                canny_cutoff=canny_cutoff,
+                default_slide_mpp=default_slide_mpp,
+                tile_prefilter_method=tile_prefilter_method,
+                coarse_trigger_supertile_count=coarse_trigger_supertile_count,
+                coarse_keep_ratio=coarse_keep_ratio,
+                coarse_min_keep_supertile_count=coarse_min_keep_supertile_count,
+                coarse_max_keep_supertile_count=coarse_max_keep_supertile_count,
+                quality_keep_ratio=quality_keep_ratio,
+                quality_min_keep_tile_count=quality_min_keep_tile_count,
+                quality_trigger_tile_count=quality_trigger_tile_count,
+                quality_random_reserve_ratio=quality_random_reserve_ratio,
+                dark_region_boxes_level0=dark_region_boxes_level0,
+                progress_cb=progress_cb,
+                use_amp=True,
+            )
+            if feature_cache_path is not None:
+                save_tile_features_npz(result, feature_cache_path)
+    else:
+        extractor = _ensure_extractor()
+        feature_cache_path = _resolve_feature_cache_path(extractor_id)
+        result = extract_wsi_features_by_tiles(
+            slide_path=slide_path,
+            extractor=extractor,
+            tile_size_um=tile_size_um,
+            tile_size_px=tile_size_px,
+            batch_size=batch_size,
+            device=device,
+            cache_dir=cache_dir,
+            max_supertile_size_slide_px=max_supertile_size_slide_px,
+            max_workers=max_workers,
+            brightness_cutoff=brightness_cutoff,
+            canny_cutoff=canny_cutoff,
+            default_slide_mpp=default_slide_mpp,
+            tile_prefilter_method=tile_prefilter_method,
+            coarse_trigger_supertile_count=coarse_trigger_supertile_count,
+            coarse_keep_ratio=coarse_keep_ratio,
+            coarse_min_keep_supertile_count=coarse_min_keep_supertile_count,
+            coarse_max_keep_supertile_count=coarse_max_keep_supertile_count,
+            quality_keep_ratio=quality_keep_ratio,
+            quality_min_keep_tile_count=quality_min_keep_tile_count,
+            quality_trigger_tile_count=quality_trigger_tile_count,
+            quality_random_reserve_ratio=quality_random_reserve_ratio,
+            dark_region_boxes_level0=dark_region_boxes_level0,
+            progress_cb=progress_cb,
+            use_amp=True,
+        )
+        if feature_cache_path is not None:
+            save_tile_features_npz(result, feature_cache_path)
 
     features = result.features.numpy().astype(np.float32, copy=False)
     num_tiles = int(features.shape[0]) if features.ndim == 2 else 0
@@ -1437,14 +1654,20 @@ def build_unsupervised_roi_index(
                     }
                 )
 
-            ref_feat_l2, ref_labels, ref_paths = _embed_reference_tiles(
-                records=ref_records,
-                extractor=extractor,
-                device=run_device,
-                batch_size=max(1, min(64, int(batch_size))),
-                extractor_id=extractor.identifier,
-                use_cache=True,
-            )
+            ref_paths = tuple(str(path) for path, _ in ref_records)
+            cached_reference = _load_reference_embeddings_from_cache(ref_paths, extractor_id)
+            if cached_reference is not None:
+                ref_feat_l2, ref_labels, ref_paths = cached_reference
+            else:
+                extractor = _ensure_extractor()
+                ref_feat_l2, ref_labels, ref_paths = _embed_reference_tiles(
+                    records=ref_records,
+                    extractor=extractor,
+                    device=run_device,
+                    batch_size=max(1, min(64, int(batch_size))),
+                    extractor_id=extractor_id,
+                    use_cache=True,
+                )
             retrieval = _compute_reference_knn_scores(
                 features_l2=features_l2,
                 ref_features_l2=ref_feat_l2,
@@ -1453,7 +1676,7 @@ def build_unsupervised_roi_index(
                 top_k=AML_REFERENCE_TOP_K,
                 row_block_size=AML_REFERENCE_QUERY_BLOCK_ROWS,
                 use_hnsw=AML_REFERENCE_USE_HNSW,
-                extractor_id=extractor.identifier,
+                extractor_id=extractor_id,
             )
             bad_margin = retrieval.margin
             bad_likelihood = retrieval.bad_likelihood
@@ -1493,7 +1716,8 @@ def build_unsupervised_roi_index(
         if AML_ENABLE_BLAST_REFERENCES:
             blast_loaded = _load_blast_cell_embeddings(
                 AML_BLAST_CELLS_ROOT,
-                extractor=extractor,
+                extractor_id=extractor_id,
+                extractor_loader=_ensure_extractor,
                 device=run_device,
                 batch_size=max(1, min(64, int(batch_size))),
             )

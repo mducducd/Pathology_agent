@@ -28,7 +28,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 RUN_SINGLE_SLIDE="${SCRIPT_DIR}/run_single_slide.py"
 
 # ── Defaults ─────────────────────────────────────────────────────────
-CSV="/mnt/bulk-neptune/nguyenmin/stamp-dev/experiments/Narmin/random_100_Normal_AML_Patients.csv"
+CSV="/mnt/bulk-neptune/nguyenmin/stamp-dev/experiments/Narmin/AML_HEALTHY_SLIDE_TEST.csv"
 SLIDES_ROOT="/mnt/copernicus3/PATHOLOGY/others/private/haemadata/ALL_WSIs"
 BASE_OUTPUT_ROOT="/mnt/bulk-neptune/nguyenmin/stamp-dev/experiments/Narmin/new_runs"
 OUTPUT_DIR=""
@@ -104,13 +104,17 @@ fi
 if [[ -z "$EXPERIMENT_ROOT" ]]; then
     EXPERIMENT_ROOT="$OUTPUT_DIR"
 fi
-if ! $USE_TILE_CACHE && $RESUME && [[ -d "${EXPERIMENT_ROOT}/_cache/tile_cache" ]]; then
-    USE_TILE_CACHE=true
-    echo "[CACHE] Resume detected existing cache at ${EXPERIMENT_ROOT}/_cache/tile_cache; enabling cache reuse."
-fi
 if [[ -n "$CUDA_DEVICE" ]]; then
     export CUDA_VISIBLE_DEVICES="$CUDA_DEVICE"
 fi
+
+format_elapsed() {
+    local total_seconds="${1:-0}"
+    local hours=$((total_seconds / 3600))
+    local minutes=$(((total_seconds % 3600) / 60))
+    local seconds=$((total_seconds % 60))
+    printf '%02dh:%02dm:%02ds' "$hours" "$minutes" "$seconds"
+}
 
 print_failure_reason() {
     local summary_path="$1"
@@ -244,6 +248,7 @@ PY
 
     # ── Run (suppress all python output) ───────────────────────────
     LOG="${LOG_DIR}/${PATIENT}.log"
+    SLIDE_STARTED_EPOCH="$(date +%s)"
 
     RUN_CMD=(
         "$PYTHON_BIN"
@@ -268,6 +273,8 @@ PY
     if "${RUN_CMD[@]}" \
         >"$LOG" 2>&1; then
         PASSED=$((PASSED + 1))
+        SLIDE_ELAPSED_SECONDS=$(( $(date +%s) - SLIDE_STARTED_EPOCH ))
+        echo "[$IDX/$TOTAL] OK    $PATIENT elapsed=$(format_elapsed "$SLIDE_ELAPSED_SECONDS")"
     else
         RETRY_LOG="${LOG_DIR}/${PATIENT}.retry.log"
         echo "[$IDX/$TOTAL] RETRY $PATIENT — previous attempt returned error"
@@ -275,10 +282,12 @@ PY
             >"$RETRY_LOG" 2>&1; then
             PASSED=$((PASSED + 1))
             RETRIED=$((RETRIED + 1))
-            echo "[$IDX/$TOTAL] OK    $PATIENT — retry succeeded"
+            SLIDE_ELAPSED_SECONDS=$(( $(date +%s) - SLIDE_STARTED_EPOCH ))
+            echo "[$IDX/$TOTAL] OK    $PATIENT retry_succeeded elapsed=$(format_elapsed "$SLIDE_ELAPSED_SECONDS")"
         else
             FAILED=$((FAILED + 1))
-            echo "[$IDX/$TOTAL] FAIL  $PATIENT — retry failed"
+            SLIDE_ELAPSED_SECONDS=$(( $(date +%s) - SLIDE_STARTED_EPOCH ))
+            echo "[$IDX/$TOTAL] FAIL  $PATIENT elapsed=$(format_elapsed "$SLIDE_ELAPSED_SECONDS")"
             print_failure_reason "$SUMMARY" "$RETRY_LOG"
         fi
     fi

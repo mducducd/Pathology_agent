@@ -6,6 +6,8 @@ outputs/
 wsi_debug/
 wsi_reports/
 Selected_Tiles/backup/
+Selected_Tiles/good_tile_with_white_blobs/
+Selected_Tiles/backup_full/
 temp_run_non_personal_150425_aml_suite.sh
 run_batch_aml.sh
 .codex

@@ -62,6 +62,21 @@ _EMBEDDING_EXTRACTOR_DISPLAY_NAMES = {
     "dinobloom_onnx": "DinoBloom-S (ONNX)",
     "reddino_onnx": "RedDino-Small (ONNX)",
 }
+_EMBEDDING_EXTRACTOR_DEFAULT_IDENTIFIERS = {
+    "uni2": "UNI2-h",
+    "dinobloom": "DinoBloom-S",
+    "dinobloom_base": "DinoBloom-B",
+    "dinobloom_large": "DinoBloom-L",
+    "dinobloom_giant": "DinoBloom-G",
+    "virchow2": "Virchow2",
+    "h_optimus_1": "H-optimus-1",
+    "reddino": "RedDino-Small",
+    "reddino_base": "RedDino-base",
+    "reddino_large": "RedDino-large",
+    "uni2_onnx": "ONNX-uni2",
+    "dinobloom_onnx": "ONNX-dinobloom",
+    "reddino_onnx": "ONNX-reddino",
+}
 
 # ONNX Runtime extractors (lazy loaded to avoid dependency if not used)
 def _get_onnx_extractors() -> dict[str, Callable[[], Any]]:
@@ -117,6 +132,14 @@ def embedding_extractor_display_name(name: str | None) -> str:
     return _EMBEDDING_EXTRACTOR_DISPLAY_NAMES.get(key, key)
 
 
+def embedding_extractor_identifier(name: str | None) -> str:
+    key = normalize_embedding_extractor_name(name)
+    return _EMBEDDING_EXTRACTOR_DEFAULT_IDENTIFIERS.get(
+        key,
+        _EMBEDDING_EXTRACTOR_DISPLAY_NAMES.get(key, key),
+    )
+
+
 __all__ = [
     "ExtractorModel",
     "Extractor",
@@ -125,6 +148,7 @@ __all__ = [
     "normalize_embedding_extractor_name",
     "get_embedding_extractor",
     "embedding_extractor_display_name",
+    "embedding_extractor_identifier",
     # PyTorch extractors
     "dino_bloom",
     "dinobloom",

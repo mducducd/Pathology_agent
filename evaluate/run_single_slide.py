@@ -84,6 +84,7 @@ def _configure_experiment_tile_cache(
     output_dir: Path,
     experiment_root: Path | None,
     extractor_name: str,
+    tile_filter: str,
     enable_tile_cache: bool,
 ) -> Path | None:
     if not enable_tile_cache:
@@ -93,10 +94,45 @@ def _configure_experiment_tile_cache(
 
     os.environ.pop("ROI_DISABLE_TILE_CACHE", None)
     cache_root = (experiment_root or output_dir).resolve()
-    tile_cache_dir = cache_root / "_cache" / "tile_cache" / _sanitize_stem(extractor_name)
+    tile_cache_dir = (
+        cache_root
+        / "_cache"
+        / "tile_cache"
+        / _sanitize_stem(extractor_name)
+        / _sanitize_stem(_normalize_tile_filter_name(tile_filter))
+    )
     tile_cache_dir.mkdir(parents=True, exist_ok=True)
     os.environ["ROI_TILE_CACHE_DIR"] = str(tile_cache_dir)
     return tile_cache_dir
+
+
+def _normalize_tile_filter_name(value: str | None) -> str:
+    raw = str(value or "hybrid").strip().lower().replace("-", "_").replace(" ", "_")
+    if raw in {"coarse_to_fine", "coarse2fine"}:
+        return "hybrid"
+    if raw not in {"none", "coarse", "quality", "hybrid"}:
+        return "hybrid"
+    return raw
+
+
+def _configure_experiment_feature_cache(
+    *,
+    output_dir: Path,
+    experiment_root: Path | None,
+    extractor_name: str,
+    tile_filter: str,
+) -> Path:
+    cache_root = (experiment_root or output_dir).resolve()
+    feature_cache_dir = (
+        cache_root
+        / "_cache"
+        / "feature_cache"
+        / _sanitize_stem(extractor_name)
+        / _sanitize_stem(_normalize_tile_filter_name(tile_filter))
+    )
+    feature_cache_dir.mkdir(parents=True, exist_ok=True)
+    os.environ["ROI_FEATURE_CACHE_DIR"] = str(feature_cache_dir)
+    return feature_cache_dir
 
 
 def _sanitize_stem(value: str) -> str:
@@ -439,6 +475,7 @@ def main() -> int:
         help="Allow on-disk ROI tile caching during evaluation. Disabled by default to save space.",
     )
     args = parser.parse_args()
+    args.tile_filter = _normalize_tile_filter_name(args.tile_filter)
 
     slide_path = os.path.abspath(args.slide)
     if not os.path.exists(slide_path):
@@ -458,7 +495,14 @@ def main() -> int:
         output_dir=out_dir,
         experiment_root=experiment_root,
         extractor_name=args.extractor,
+        tile_filter=args.tile_filter,
         enable_tile_cache=args.use_tile_cache,
+    )
+    feature_cache_dir = _configure_experiment_feature_cache(
+        output_dir=out_dir,
+        experiment_root=experiment_root,
+        extractor_name=args.extractor,
+        tile_filter=args.tile_filter,
     )
 
     fresh_cache_info = (
@@ -480,6 +524,7 @@ def main() -> int:
     print(f"[MODEL] {args.model}  [EXTRACTOR] {args.extractor}  [FILTER] {args.tile_filter}")
     if reference_cache_dir is not None:
         print(f"[REFCACHE] {reference_cache_dir}")
+    print(f"[FEATCACHE] {feature_cache_dir}")
     if os.getenv("CUDA_VISIBLE_DEVICES"):
         print(f"[CUDA]  CUDA_VISIBLE_DEVICES={os.getenv('CUDA_VISIBLE_DEVICES')}")
 
@@ -557,6 +602,7 @@ def main() -> int:
             fresh_embedding_cache=bool(args.fresh_embedding_cache),
             tile_cache_enabled=bool(args.use_tile_cache),
             tile_cache_dir=str(tile_cache_dir) if tile_cache_dir else "",
+            feature_cache_dir=str(feature_cache_dir),
         )
 
         print(f"[OK]    {patient_name}  ({elapsed:.0f}s)  -> {patient_out}")
@@ -586,6 +632,7 @@ def main() -> int:
             fresh_embedding_cache=bool(args.fresh_embedding_cache),
             tile_cache_enabled=bool(args.use_tile_cache),
             tile_cache_dir=str(tile_cache_dir) if tile_cache_dir else "",
+            feature_cache_dir=str(feature_cache_dir),
         )
         return 1
     finally:

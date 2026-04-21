@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RUN_BATCH_SCRIPT="${SCRIPT_DIR}/run_batch_aml.sh"
 
-CSV="/mnt/bulk-neptune/nguyenmin/stamp-dev/experiments/Narmin/random_100_Normal_AML_Patients.csv"
+CSV="/mnt/bulk-neptune/nguyenmin/stamp-dev/experiments/Narmin/AML_HEALTHY_SLIDE_TEST.csv"
 SLIDES_ROOT="/mnt/copernicus3/PATHOLOGY/others/private/haemadata/ALL_WSIs"
 OUTPUT_PARENT="/mnt/bulk-neptune/nguyenmin/stamp-dev/experiments/Narmin"
 EXPERIMENT_NAME="aml_gemma4_embedding_suite"
@@ -14,9 +14,17 @@ TILE_FILTER="hybrid"
 TILE_SIZE_PX="224"
 BATCH_SIZE="512"
 AGENT="aml"
-RESUME=false
-USE_TILE_CACHE=false
+RESUME=true
+USE_TILE_CACHE=true
 EXTRACTORS_FILTER=""
+
+format_elapsed() {
+    local total_seconds="${1:-0}"
+    local hours=$((total_seconds / 3600))
+    local minutes=$(((total_seconds % 3600) / 60))
+    local seconds=$((total_seconds % 60))
+    printf '%02dh:%02dm:%02ds' "$hours" "$minutes" "$seconds"
+}
 
 usage() {
     cat <<'EOF'
@@ -59,11 +67,6 @@ if [[ -z "$BASE_OUTPUT_ROOT" ]]; then
     BASE_OUTPUT_ROOT="${OUTPUT_PARENT}/${EXPERIMENT_NAME}"
 fi
 
-if ! $USE_TILE_CACHE && $RESUME && [[ -d "${BASE_OUTPUT_ROOT}/_cache/tile_cache" ]]; then
-    USE_TILE_CACHE=true
-    echo "[CACHE] Resume detected existing shared cache at ${BASE_OUTPUT_ROOT}/_cache/tile_cache; enabling cache reuse."
-fi
-
 if [[ -n "$CUDA_DEVICE" ]]; then
     export CUDA_VISIBLE_DEVICES="$CUDA_DEVICE"
 fi
@@ -71,12 +74,15 @@ fi
 mkdir -p "$BASE_OUTPUT_ROOT"
 
 RUNS=(
-    "gemma-4-31B-it|uni2|batch_result_gemma-4-31B-it_UNI2_224px"
-    "gemma-4-31B-it|h_optimus_1|batch_result_gemma-4-31B-it_H-optimus-1_224px"
-    "gemma-4-31B-it|virchow2|batch_result_gemma-4-31B-it_Virchow2_224px"
-    "gemma-4-31B-it|dinobloom_giant|batch_result_gemma-4-31B-it_DinoBloom-G_224px"
-    "gemma-4-31B-it|dinobloom|batch_result_gemma-4-31B-it_DinoBloom-S_224px"
-)
+    
+    
+    "GPT-OSS-120B|uni2|batch_result_GPT-OSS-120B_UNI2_224px"
+    "GPT-OSS-120B|dinobloom_giant|batch_result_GPT-OSS-120B_DinoBloom-G_224px"
+    "GPT-OSS-120B|virchow2|batch_result_GPT-OSS-120B_Virchow2_224px"
+    "GPT-OSS-120B|h_optimus_1|batch_result_GPT-OSS-120B_H-optimus-1_224px"
+    
+    "GPT-OSS-120B|dinobloom|batch_result_GPT-OSS-120B_DinoBloom-S_224px"
+)   
 
 FILTERED_RUNS=()
 if [[ -n "$EXTRACTORS_FILTER" ]]; then
@@ -123,6 +129,8 @@ if [[ -n "$BASE_OUTPUT_ROOT" && "$BASE_OUTPUT_ROOT" != /* ]]; then
     BASE_OUTPUT_ROOT="$(realpath "$BASE_OUTPUT_ROOT")"
 fi
 
+SUITE_STARTED_EPOCH="$(date +%s)"
+
 for spec in "${FILTERED_RUNS[@]}"; do
     IFS="|" read -r MODEL EXTRACTOR OUTPUT_NAME <<<"$spec"
     OUTPUT_DIR="${BASE_OUTPUT_ROOT}/${OUTPUT_NAME}"
@@ -161,10 +169,22 @@ for spec in "${FILTERED_RUNS[@]}"; do
         CMD+=(--resume)
     fi
 
-    "${CMD[@]}"
+    RUN_STARTED_EPOCH="$(date +%s)"
+    if "${CMD[@]}"; then
+        RUN_ELAPSED_SECONDS=$(( $(date +%s) - RUN_STARTED_EPOCH ))
+        echo " Elapsed: $(format_elapsed "$RUN_ELAPSED_SECONDS")"
+    else
+        STATUS=$?
+        RUN_ELAPSED_SECONDS=$(( $(date +%s) - RUN_STARTED_EPOCH ))
+        echo " Failed after: $(format_elapsed "$RUN_ELAPSED_SECONDS")"
+        exit "$STATUS"
+    fi
 done
+
+SUITE_ELAPSED_SECONDS=$(( $(date +%s) - SUITE_STARTED_EPOCH ))
 
 echo ""
 echo "═══════════════════════════════════════════════════════════════"
 echo " AML batch suite complete"
+echo " Suite elapsed:    $(format_elapsed "$SUITE_ELAPSED_SECONDS")"
 echo "═══════════════════════════════════════════════════════════════"

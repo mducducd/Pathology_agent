@@ -59,6 +59,7 @@ ROI_QUALITY_PREFILTER_MIN_KEEP_TILES = int(os.getenv("ROI_QUALITY_PREFILTER_MIN_
 ROI_QUALITY_PREFILTER_TRIGGER_TILES = int(os.getenv("ROI_QUALITY_PREFILTER_TRIGGER_TILES", "12"))
 ROI_QUALITY_PREFILTER_RANDOM_RESERVE_RATIO = float(os.getenv("ROI_QUALITY_PREFILTER_RANDOM_RESERVE_RATIO", "0.05"))
 ROI_TILE_CACHE_DIR = os.getenv("ROI_TILE_CACHE_DIR", "").strip()
+ROI_FEATURE_CACHE_DIR = os.getenv("ROI_FEATURE_CACHE_DIR", "").strip()
 DARK_REGION_THRESHOLD_PCT = int(os.getenv("DARK_REGION_THRESHOLD_PCT", "85"))
 DARK_REGION_MIN_AREA = int(os.getenv("DARK_REGION_MIN_AREA", "800"))
 DARK_REGION_MAX_REGIONS = int(os.getenv("DARK_REGION_MAX_REGIONS", "30"))
@@ -78,9 +79,47 @@ def _selected_extractor_label() -> str:
     return embedding_extractor_display_name(getattr(state, "EXTRACTOR_NAME", "uni2"))
 
 
+def _sanitize_cache_component(value: str | None, default: str = "item") -> str:
+    raw = str(value or "").strip()
+    safe = "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in raw)
+    safe = safe.strip("._-")
+    return safe or default
+
+
 def _selected_tile_prefilter_method() -> str:
     raw = str(getattr(state, "TILE_PREFILTER_METHOD", "quality") or "quality").strip().lower()
     return raw if raw in {"none", "coarse", "quality", "hybrid"} else "quality"
+
+
+def _selected_tile_cache_dir() -> Path | None:
+    if os.getenv("ROI_DISABLE_TILE_CACHE", "").strip().lower() in {"1", "true", "yes", "y"}:
+        return None
+
+    raw = os.getenv("ROI_TILE_CACHE_DIR", "").strip()
+    if raw:
+        cache_dir = Path(raw)
+    else:
+        cache_dir = Path(OUTPUTS_ROOT_DIR) / "_tile_cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    return cache_dir
+
+
+def _selected_feature_cache_dir() -> Path | None:
+    raw = os.getenv("ROI_FEATURE_CACHE_DIR", "").strip()
+    if raw:
+        feature_cache_dir = Path(raw)
+    else:
+        extractor_name = _sanitize_cache_component(getattr(state, "EXTRACTOR_NAME", "uni2"), default="uni2")
+        tile_prefilter_method = _sanitize_cache_component(_selected_tile_prefilter_method(), default="quality")
+        feature_cache_dir = (
+            Path(OUTPUTS_ROOT_DIR)
+            / "_cache"
+            / "feature_cache"
+            / extractor_name
+            / tile_prefilter_method
+        )
+    feature_cache_dir.mkdir(parents=True, exist_ok=True)
+    return feature_cache_dir
 
 
 def _use_coarse_prefilter(method: str | None = None) -> bool:
@@ -378,7 +417,8 @@ def _ensure_unsupervised_roi_index():
             pipeline_desc = f"Thumbnail coarse region filter -> {extractor_label} tile embeddings -> kNN novelty ranking -> top-K per view"
         else:
             pipeline_desc = f"{extractor_label} tile embeddings -> kNN novelty ranking -> top-K per view"
-    cache_dir = Path(ROI_TILE_CACHE_DIR) if ROI_TILE_CACHE_DIR else Path(OUTPUTS_ROOT_DIR) / "_tile_cache"
+    cache_dir = _selected_tile_cache_dir()
+    feature_cache_dir = _selected_feature_cache_dir()
     _set_roi_candidate_prep(
         phase="starting",
         status="starting",
@@ -442,7 +482,10 @@ def _ensure_unsupervised_roi_index():
             elif phase == "extract_embeddings":
                 pt = evt.get("processed_tiles")
                 pb = evt.get("processed_batches")
-                msg = f"Extracting {_selected_extractor_label()} tile embeddings..."
+                if status == "cached":
+                    msg = f"Loaded cached {_selected_extractor_label()} feature embeddings..."
+                else:
+                    msg = f"Extracting {_selected_extractor_label()} tile embeddings..."
                 if pt is not None:
                     msg += f" tiles={pt}"
                 if pb is not None:
@@ -479,6 +522,7 @@ def _ensure_unsupervised_roi_index():
             tile_size_px=state.TILE_SIZE_PX,
             batch_size=_selected_batch_size(),
             cache_dir=cache_dir,
+            feature_cache_dir=feature_cache_dir,
             max_workers=ROI_RANKER_MAX_WORKERS,
             brightness_cutoff=240,
             canny_cutoff=0.02,
@@ -513,6 +557,8 @@ def _ensure_unsupervised_roi_index():
             "agent_type": getattr(state, "AGENT_TYPE", None),
             "use_dark_region_gating": bool(use_dark_region_gating),
             "dark_region_boxes_hash": dark_region_boxes_hash,
+            "tile_cache_dir": str(cache_dir) if cache_dir is not None else None,
+            "feature_cache_dir": str(feature_cache_dir) if feature_cache_dir is not None else None,
             "reference_mode": getattr(index, "reference_mode", "none"),
             "reference_stats": dict(getattr(index, "reference_stats", {}) or {}),
         }

@@ -5,19 +5,19 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 PREEXTRACT_SCRIPT="${SCRIPT_DIR}/preextract_hybrid_cache.py"
 
-CSV="/mnt/bulk-neptune/nguyenmin/stamp-dev/experiments/Narmin/random_100_Normal_AML_Patients.csv"
+CSV="/mnt/bulk-neptune/nguyenmin/stamp-dev/experiments/Narmin/AML_HEALTHY_SLIDE_TEST.csv"
 SLIDES_ROOT="/mnt/copernicus3/PATHOLOGY/others/private/haemadata/ALL_WSIs"
 OUTPUT_PARENT="/mnt/bulk-neptune/nguyenmin/stamp-dev/experiments/Narmin"
-EXPERIMENT_NAME="aml_coarse_to_fine_tile_caches"
+EXPERIMENT_NAME="aml_gemma4_embedding_suite"
 EXPERIMENT_ROOT=""
 CUDA_DEVICE=""
-TILE_FILTER="coarse"
+TILE_FILTER="hybrid"
 TILE_SIZE_PX="224"
 TILE_SIZE_UM="256"
 BATCH_SIZE="512"
 AGENT="aml"
 LIMIT="0"
-SKIP_EXISTING_CACHE=false
+SKIP_EXISTING_CACHE=true
 EXTRACTORS_FILTER=""
 
 if [[ -x "${REPO_ROOT}/.venv/bin/python" ]]; then
@@ -35,9 +35,26 @@ normalize_extractor_name() {
         uni2|uni_2) echo "uni2" ;;
         virchow2|virchow_2) echo "virchow2" ;;
         h_optimus_1) echo "h_optimus_1" ;;
-        dinobloom|dino_bloom|dinobloom_s|dinobloom_small) echo "dinobloom" ;;
+        dinobloom|dino_bloom|dinobloom_s|dino_bloom_s|dinobloom_small|dino_bloom_small) echo "dinobloom" ;;
+        dinobloom_b|dino_bloom_b|dinobloom_base|dino_bloom_base) echo "dinobloom_base" ;;
+        dinobloom_l|dino_bloom_l|dinobloom_large|dino_bloom_large) echo "dinobloom_large" ;;
         dinobloom_g|dino_bloom_g|dinobloom_giant|dino_bloom_giant) echo "dinobloom_giant" ;;
+        reddino|red_dino|reddino_small|red_dino_small) echo "reddino" ;;
+        reddino_b|red_dino_b|reddino_base|red_dino_base) echo "reddino_base" ;;
+        reddino_l|red_dino_l|reddino_large|red_dino_large) echo "reddino_large" ;;
         *) echo "$raw" ;;
+    esac
+}
+
+normalize_tile_filter_name() {
+    local raw="${1:-hybrid}"
+    raw="$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]')"
+    raw="${raw//-/_}"
+    raw="${raw// /_}"
+    case "$raw" in
+        coarse_to_fine|coarse2fine) echo "hybrid" ;;
+        none|coarse|quality|hybrid) echo "$raw" ;;
+        *) echo "hybrid" ;;
     esac
 }
 
@@ -53,7 +70,7 @@ Options:
   --experiment-name NAME     Experiment folder name
   --experiment-root PATH     Explicit full experiment root; overrides parent/name
   --cuda-device ID           Set CUDA_VISIBLE_DEVICES, e.g. 1
-  --extractors LIST          Comma-separated extractors to keep, e.g. uni2,virchow2,h-optimus-1,dino-bloom-g,dino-bloom-s
+  --extractors LIST          Comma-separated extractors to keep, e.g. virchow2,dino-bloom-g,reddino
   --tile-filter NAME
   --tile-size-px INT
   --tile-size-um FLOAT
@@ -84,6 +101,8 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+TILE_FILTER="$(normalize_tile_filter_name "$TILE_FILTER")"
+
 if [[ -z "$EXPERIMENT_ROOT" ]]; then
     EXPERIMENT_ROOT="${OUTPUT_PARENT}/${EXPERIMENT_NAME}"
 fi
@@ -94,12 +113,23 @@ fi
 
 mkdir -p "$EXPERIMENT_ROOT"
 
+# Convenience multi-extractor wrapper over preextract_hybrid_cache.py.
+# Keep this list aligned with the canonical PyTorch extractors in wsi_core_pkg.embeddings.
 RUNS=(
-    "uni2|UNI2"
-    "h_optimus_1|H-optimus-1"
-    "virchow2|Virchow2"
     "dinobloom_giant|DinoBloom-G"
+
+    # "dinobloom_base|DinoBloom-B"
+    # "dinobloom_large|DinoBloom-L"
+   
+    # "virchow2|Virchow2"
+    # "h_optimus_1|H-optimus-1"
     "dinobloom|DinoBloom-S"
+    
+    # "uni2|UNI2-h"
+    
+    # "reddino|RedDino-Small"
+    # "reddino_base|RedDino-base"
+    # "reddino_large|RedDino-large"
 )
 
 FILTERED_RUNS=()
@@ -145,12 +175,17 @@ fi
 
 for spec in "${FILTERED_RUNS[@]}"; do
     IFS="|" read -r EXTRACTOR DISPLAY_NAME <<<"$spec"
-
+    CACHE_ROOT="${EXPERIMENT_ROOT}/_cache/feature_cache/${EXTRACTOR}/${TILE_FILTER}"
     echo ""
     echo "───────────────────────────────────────────────────────────────"
     echo " Preextracting: extractor=${EXTRACTOR} (${DISPLAY_NAME})"
-    echo " Cache root:     ${EXPERIMENT_ROOT}/_cache/tile_cache/${EXTRACTOR}"
+    echo " Feature cache:  ${CACHE_ROOT}"
     echo "───────────────────────────────────────────────────────────────"
+
+    if $SKIP_EXISTING_CACHE; then
+        echo " Exact skip:     enabled"
+        echo " Skip matching:  per-slide feature hash check in preextract_hybrid_cache.py"
+    fi
 
     CMD=(
         "$PYTHON_BIN"

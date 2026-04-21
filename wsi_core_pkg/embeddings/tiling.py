@@ -166,34 +166,28 @@ def tiles_with_cache(
             slide.close()
         return
 
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    dark_region_boxes_hash = None
-    if dark_region_boxes_level0:
-        dark_region_boxes_hash = hashlib.sha256(
-            json.dumps(dark_region_boxes_level0, sort_keys=True).encode()
-        ).hexdigest()
-    tiler_params: _TilerParams = {
-        "slide_path": str(slide_path),
-        "tile_size_um": tile_size_um,
-        "tile_size_px": tile_size_px,
-        "max_supertile_size_slide_px": max_supertile_size_slide_px,
-        "brightness_cutoff": brightness_cutoff,
-        "canny_cutoff": canny_cutoff,
-        "tile_prefilter_method": tile_prefilter_method,
-        "coarse_trigger_supertile_count": coarse_trigger_supertile_count,
-        "coarse_keep_ratio": coarse_keep_ratio,
-        "coarse_min_keep_supertile_count": coarse_min_keep_supertile_count,
-        "coarse_max_keep_supertile_count": coarse_max_keep_supertile_count,
-        "quality_keep_ratio": quality_keep_ratio,
-        "quality_min_keep_tile_count": quality_min_keep_tile_count,
-        "quality_trigger_tile_count": quality_trigger_tile_count,
-        "quality_random_reserve_ratio": quality_random_reserve_ratio,
-        "dark_region_boxes_hash": dark_region_boxes_hash,
-        "code_sha256": _CODE_HASH,
-        "tile_ext": cache_tiles_ext,
-    }
-    tiler_params_hash = hashlib.sha256(json.dumps(tiler_params, sort_keys=True).encode()).hexdigest()
-    cache_file_path = cache_dir / slide_path.with_suffix(f".{tiler_params_hash}.zip").name
+    cache_file_path, tiler_params = _resolve_tile_cache_file_path(
+        slide_path=slide_path,
+        cache_dir=cache_dir,
+        cache_tiles_ext=cache_tiles_ext,
+        tile_size_um=tile_size_um,
+        tile_size_px=tile_size_px,
+        max_supertile_size_slide_px=max_supertile_size_slide_px,
+        brightness_cutoff=brightness_cutoff,
+        canny_cutoff=canny_cutoff,
+        tile_prefilter_method=tile_prefilter_method,
+        coarse_trigger_supertile_count=coarse_trigger_supertile_count,
+        coarse_keep_ratio=coarse_keep_ratio,
+        coarse_min_keep_supertile_count=coarse_min_keep_supertile_count,
+        coarse_max_keep_supertile_count=coarse_max_keep_supertile_count,
+        quality_keep_ratio=quality_keep_ratio,
+        quality_min_keep_tile_count=quality_min_keep_tile_count,
+        quality_trigger_tile_count=quality_trigger_tile_count,
+        quality_random_reserve_ratio=quality_random_reserve_ratio,
+        dark_region_boxes_level0=dark_region_boxes_level0,
+    )
+    if cache_file_path is None or tiler_params is None:
+        raise RuntimeError("Tile cache path resolution failed despite cache_dir being set.")
 
     if cache_file_path.exists():
         yield from _tiles_from_cache_file(cache_file_path)
@@ -247,6 +241,171 @@ def tiles_with_cache(
             raise
 
         Path(tmp_cache_file.name).rename(cache_file_path)
+
+
+def _dark_region_boxes_hash(dark_region_boxes_level0: list[dict[str, int]] | None) -> str | None:
+    if dark_region_boxes_level0:
+        return hashlib.sha256(
+            json.dumps(dark_region_boxes_level0, sort_keys=True).encode()
+        ).hexdigest()
+    return None
+
+
+def _build_tiler_params(
+    *,
+    slide_path: Path,
+    cache_tiles_ext: ImageExtension,
+    tile_size_um: Microns,
+    tile_size_px: TilePixels,
+    max_supertile_size_slide_px: SlidePixels,
+    brightness_cutoff: int | None,
+    canny_cutoff: float | None,
+    tile_prefilter_method: str,
+    coarse_trigger_supertile_count: int | None,
+    coarse_keep_ratio: float | None,
+    coarse_min_keep_supertile_count: int,
+    coarse_max_keep_supertile_count: int | None,
+    quality_keep_ratio: float | None,
+    quality_min_keep_tile_count: int,
+    quality_trigger_tile_count: int | None,
+    quality_random_reserve_ratio: float | None,
+    dark_region_boxes_level0: list[dict[str, int]] | None,
+) -> _TilerParams:
+    return {
+        "slide_path": str(slide_path),
+        "tile_size_um": tile_size_um,
+        "tile_size_px": tile_size_px,
+        "max_supertile_size_slide_px": max_supertile_size_slide_px,
+        "brightness_cutoff": brightness_cutoff,
+        "canny_cutoff": canny_cutoff,
+        "tile_prefilter_method": tile_prefilter_method,
+        "coarse_trigger_supertile_count": coarse_trigger_supertile_count,
+        "coarse_keep_ratio": coarse_keep_ratio,
+        "coarse_min_keep_supertile_count": coarse_min_keep_supertile_count,
+        "coarse_max_keep_supertile_count": coarse_max_keep_supertile_count,
+        "quality_keep_ratio": quality_keep_ratio,
+        "quality_min_keep_tile_count": quality_min_keep_tile_count,
+        "quality_trigger_tile_count": quality_trigger_tile_count,
+        "quality_random_reserve_ratio": quality_random_reserve_ratio,
+        "dark_region_boxes_hash": _dark_region_boxes_hash(dark_region_boxes_level0),
+        "code_sha256": _CODE_HASH,
+        "tile_ext": cache_tiles_ext,
+    }
+
+
+def _hash_cache_payload(payload: dict[str, Any]) -> str:
+    return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+
+
+def _resolve_tile_cache_file_path(
+    *,
+    slide_path: Path | str,
+    cache_dir: Path | None,
+    cache_tiles_ext: ImageExtension,
+    tile_size_um: Microns,
+    tile_size_px: TilePixels,
+    max_supertile_size_slide_px: SlidePixels,
+    brightness_cutoff: int | None,
+    canny_cutoff: float | None,
+    tile_prefilter_method: str,
+    coarse_trigger_supertile_count: int | None,
+    coarse_keep_ratio: float | None,
+    coarse_min_keep_supertile_count: int,
+    coarse_max_keep_supertile_count: int | None,
+    quality_keep_ratio: float | None,
+    quality_min_keep_tile_count: int,
+    quality_trigger_tile_count: int | None,
+    quality_random_reserve_ratio: float | None,
+    dark_region_boxes_level0: list[dict[str, int]] | None,
+) -> tuple[Path | None, _TilerParams | None]:
+    if cache_dir is None:
+        return None, None
+
+    slide_path = Path(slide_path)
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    tiler_params = _build_tiler_params(
+        slide_path=slide_path,
+        cache_tiles_ext=cache_tiles_ext,
+        tile_size_um=tile_size_um,
+        tile_size_px=tile_size_px,
+        max_supertile_size_slide_px=max_supertile_size_slide_px,
+        brightness_cutoff=brightness_cutoff,
+        canny_cutoff=canny_cutoff,
+        tile_prefilter_method=tile_prefilter_method,
+        coarse_trigger_supertile_count=coarse_trigger_supertile_count,
+        coarse_keep_ratio=coarse_keep_ratio,
+        coarse_min_keep_supertile_count=coarse_min_keep_supertile_count,
+        coarse_max_keep_supertile_count=coarse_max_keep_supertile_count,
+        quality_keep_ratio=quality_keep_ratio,
+        quality_min_keep_tile_count=quality_min_keep_tile_count,
+        quality_trigger_tile_count=quality_trigger_tile_count,
+        quality_random_reserve_ratio=quality_random_reserve_ratio,
+        dark_region_boxes_level0=dark_region_boxes_level0,
+    )
+    tiler_params_hash = _hash_cache_payload(tiler_params)
+    return cache_dir / slide_path.with_suffix(f".{tiler_params_hash}.zip").name, tiler_params
+
+
+def resolve_feature_cache_file_path(
+    *,
+    slide_path: Path | str,
+    feature_cache_dir: Path | None,
+    extractor_id: str,
+    use_amp: bool,
+    cache_tiles_ext: ImageExtension,
+    tile_size_um: Microns,
+    tile_size_px: TilePixels,
+    max_supertile_size_slide_px: SlidePixels,
+    brightness_cutoff: int | None,
+    canny_cutoff: float | None,
+    tile_prefilter_method: str,
+    coarse_trigger_supertile_count: int | None,
+    coarse_keep_ratio: float | None,
+    coarse_min_keep_supertile_count: int,
+    coarse_max_keep_supertile_count: int | None,
+    quality_keep_ratio: float | None,
+    quality_min_keep_tile_count: int,
+    quality_trigger_tile_count: int | None,
+    quality_random_reserve_ratio: float | None,
+    dark_region_boxes_level0: list[dict[str, int]] | None,
+) -> Path | None:
+    if feature_cache_dir is None:
+        return None
+
+    slide_path = Path(slide_path)
+    feature_cache_dir.mkdir(parents=True, exist_ok=True)
+    _, tiler_params = _resolve_tile_cache_file_path(
+        slide_path=slide_path,
+        cache_dir=feature_cache_dir,
+        cache_tiles_ext=cache_tiles_ext,
+        tile_size_um=tile_size_um,
+        tile_size_px=tile_size_px,
+        max_supertile_size_slide_px=max_supertile_size_slide_px,
+        brightness_cutoff=brightness_cutoff,
+        canny_cutoff=canny_cutoff,
+        tile_prefilter_method=tile_prefilter_method,
+        coarse_trigger_supertile_count=coarse_trigger_supertile_count,
+        coarse_keep_ratio=coarse_keep_ratio,
+        coarse_min_keep_supertile_count=coarse_min_keep_supertile_count,
+        coarse_max_keep_supertile_count=coarse_max_keep_supertile_count,
+        quality_keep_ratio=quality_keep_ratio,
+        quality_min_keep_tile_count=quality_min_keep_tile_count,
+        quality_trigger_tile_count=quality_trigger_tile_count,
+        quality_random_reserve_ratio=quality_random_reserve_ratio,
+        dark_region_boxes_level0=dark_region_boxes_level0,
+    )
+    if tiler_params is None:
+        return None
+
+    feature_params = {
+        "tiler_params_hash": _hash_cache_payload(tiler_params),
+        "extractor_id": str(extractor_id),
+        "use_amp": bool(use_amp),
+        "feature_cache_format": 1,
+        "code_sha256": _CODE_HASH,
+    }
+    feature_hash = _hash_cache_payload(feature_params)
+    return feature_cache_dir / slide_path.with_suffix(f".{feature_hash}.npz").name
 
 
 def _tiles_with_tissue(
@@ -1106,6 +1265,28 @@ def save_tile_features_npz(result: TileFeatureMatrix, output_path: Path | str) -
     return output_path
 
 
+def load_tile_features_npz(input_path: Path | str) -> TileFeatureMatrix:
+    input_path = Path(input_path)
+    with np.load(input_path, allow_pickle=False) as data:
+        features = np.asarray(data["features"], dtype=np.float32)
+        coordinates_um = np.asarray(data["coordinates_um"], dtype=np.float32)
+        dark_roi_scores = np.asarray(data["dark_roi_scores"], dtype=np.float32)
+        tile_size_um = float(np.asarray(data["tile_size_um"]).item())
+        tile_size_px = int(np.asarray(data["tile_size_px"]).item())
+        slide_path = str(np.asarray(data["slide_path"]).tolist())
+        extractor_id = str(np.asarray(data["extractor_id"]).tolist())
+
+    return TileFeatureMatrix(
+        features=torch.from_numpy(features),
+        coordinates_um=coordinates_um,
+        dark_roi_scores=dark_roi_scores,
+        tile_size_um=tile_size_um,
+        tile_size_px=tile_size_px,
+        slide_path=slide_path,
+        extractor_id=extractor_id,
+    )
+
+
 __all__ = [
     "ImageExtension",
     "Microns",
@@ -1116,5 +1297,7 @@ __all__ = [
     "tiles_with_cache",
     "get_slide_mpp_",
     "extract_wsi_features_by_tiles",
+    "load_tile_features_npz",
+    "resolve_feature_cache_file_path",
     "save_tile_features_npz",
 ]

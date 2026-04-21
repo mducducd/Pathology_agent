@@ -1,18 +1,19 @@
 #!/usr/bin/env python3
-"""Prewarm the shared AML hybrid tile cache used by batch evaluation.
+"""Prewarm the shared AML feature cache used by batch evaluation.
 
-This script builds the same cache layout reused by:
+This script builds the same feature-cache layout reused by:
 
-    bash evaluate/run_batch_aml_suite.sh --use-tile-cache --resume ...
+    bash evaluate/run_batch_aml_suite.sh --resume ...
 
-The cache is written under:
+The caches are written under:
 
-    <experiment-root>/_cache/tile_cache/<extractor>/
+    <experiment-root>/_cache/feature_cache/<extractor>/<tile-filter>/
 """
 
 from __future__ import annotations
 
 import argparse
+import contextlib
 import csv
 import json
 import os
@@ -70,12 +71,27 @@ def _canonicalize_extractor_alias(name: str | None, default: str = "reddino") ->
     return _EXTRACTOR_ALIASES.get(raw, raw or default)
 
 
-def _shared_cache_dir(experiment_root: Path, extractor_name: str) -> Path:
-    return experiment_root / "_cache" / "tile_cache" / _sanitize_stem(extractor_name)
-
-
 def _shared_reference_cache_dir(experiment_root: Path, extractor_name: str) -> Path:
     return experiment_root / "_cache" / "reference_hnsw" / _sanitize_stem(extractor_name)
+
+
+def _normalize_tile_filter_name(value: str | None) -> str:
+    raw = str(value or "hybrid").strip().lower().replace("-", "_").replace(" ", "_")
+    if raw in {"coarse_to_fine", "coarse2fine"}:
+        return "hybrid"
+    if raw not in {"none", "coarse", "quality", "hybrid"}:
+        return "hybrid"
+    return raw
+
+
+def _shared_feature_cache_dir(experiment_root: Path, extractor_name: str, tile_filter: str) -> Path:
+    return (
+        experiment_root
+        / "_cache"
+        / "feature_cache"
+        / _sanitize_stem(extractor_name)
+        / _sanitize_stem(_normalize_tile_filter_name(tile_filter))
+    )
 
 
 _EARLY_CUDA_DEVICE = _extract_cuda_device_arg(sys.argv[1:])
@@ -84,10 +100,13 @@ if _EARLY_CUDA_DEVICE not in (None, ""):
 
 _EARLY_EXPERIMENT_ROOT = _extract_cli_value(sys.argv[1:], "--experiment-root")
 _EARLY_EXTRACTOR = _canonicalize_extractor_alias(_extract_cli_value(sys.argv[1:], "--extractor"))
+_EARLY_TILE_FILTER = _normalize_tile_filter_name(_extract_cli_value(sys.argv[1:], "--tile-filter"))
 if _EARLY_EXPERIMENT_ROOT not in (None, ""):
     early_experiment_root = Path(_EARLY_EXPERIMENT_ROOT).expanduser().resolve()
-    os.environ["ROI_TILE_CACHE_DIR"] = str(
-        _shared_cache_dir(early_experiment_root, _EARLY_EXTRACTOR)
+    os.environ["ROI_DISABLE_TILE_CACHE"] = "1"
+    os.environ.pop("ROI_TILE_CACHE_DIR", None)
+    os.environ["ROI_FEATURE_CACHE_DIR"] = str(
+        _shared_feature_cache_dir(early_experiment_root, _EARLY_EXTRACTOR, _EARLY_TILE_FILTER)
     )
     os.environ["AML_REFERENCE_CACHE_DIR"] = str(
         _shared_reference_cache_dir(early_experiment_root, _EARLY_EXTRACTOR)
@@ -99,9 +118,28 @@ if str(REPO_ROOT) not in sys.path:
 
 try:
     from wsi_core_pkg import state
-    from wsi_core_pkg.embeddings import available_embedding_extractors, normalize_embedding_extractor_name
+    from wsi_core_pkg.embeddings import (
+        available_embedding_extractors,
+        embedding_extractor_identifier,
+        normalize_embedding_extractor_name,
+    )
+    from wsi_core_pkg.embeddings.tiling import SlideMPP, resolve_feature_cache_file_path
     from wsi_core_pkg.state import reset_wsi_state, set_slide_path
-    from wsi_core_pkg.tools import _ensure_unsupervised_roi_index
+    from wsi_core_pkg.tools import (
+        ROI_COARSE_PREFILTER_KEEP_RATIO,
+        ROI_COARSE_PREFILTER_MAX_KEEP_SUPERTILES,
+        ROI_COARSE_PREFILTER_MIN_KEEP_SUPERTILES,
+        ROI_COARSE_PREFILTER_TRIGGER_SUPERTILES,
+        ROI_QUALITY_PREFILTER_KEEP_RATIO,
+        ROI_QUALITY_PREFILTER_MIN_KEEP_TILES,
+        ROI_QUALITY_PREFILTER_RANDOM_RESERVE_RATIO,
+        ROI_QUALITY_PREFILTER_TRIGGER_TILES,
+        _ensure_dark_region_boxes_level0,
+        _ensure_unsupervised_roi_index,
+        _use_coarse_prefilter,
+        _use_dark_region_gating,
+        _use_quality_prefilter,
+    )
 except ModuleNotFoundError as exc:
     hint_python = REPO_ROOT / ".venv" / "bin" / "python"
     missing = exc.name or "dependency"
@@ -111,7 +149,7 @@ except ModuleNotFoundError as exc:
     ) from exc
 
 
-DEFAULT_CSV = "/mnt/bulk-neptune/nguyenmin/stamp-dev/experiments/Narmin/random_100_Normal_AML_Patients.csv"
+DEFAULT_CSV = "/mnt/bulk-neptune/nguyenmin/stamp-dev/experiments/Narmin/AML_HEALTHY_SLIDE_TEST.csv"
 DEFAULT_SLIDES_ROOT = "/mnt/copernicus3/PATHOLOGY/others/private/haemadata/ALL_WSIs"
 MIRAX_EXTS = {".mrxs", ".mrsx"}
 
@@ -175,24 +213,16 @@ def _close_loaded_slide() -> None:
     state._slide = None
 
 
-def _count_cache_zips(cache_dir: Path) -> int:
-    try:
-        return sum(1 for _ in cache_dir.glob("*.zip"))
-    except Exception:
-        return 0
-
-
-def _has_existing_slide_cache(cache_dir: Path, slide_path: Path) -> bool:
-    slide_stem = slide_path.stem
-    try:
-        return any(cache_dir.glob(f"{slide_stem}.*.zip"))
-    except Exception:
-        return False
+@contextlib.contextmanager
+def _suppress_wsi_terminal_output():
+    with open(os.devnull, "w", encoding="utf-8") as sink:
+        with contextlib.redirect_stdout(sink), contextlib.redirect_stderr(sink):
+            yield
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Prewarm shared AML hybrid tile cache for batch runs.",
+        description="Prewarm shared AML feature cache for batch runs.",
     )
     parser.add_argument("--csv", default=DEFAULT_CSV, help="CSV listing patient ids / slide paths")
     parser.add_argument("--slides-root", default=DEFAULT_SLIDES_ROOT, help="Root containing slide files")
@@ -216,25 +246,27 @@ def main() -> int:
     parser.add_argument(
         "--skip-existing-cache",
         action="store_true",
-        help="Skip slides that already have at least one tile-cache zip in the target extractor cache dir",
+        help="Skip slides that already have a matching feature-cache npz in the target extractor/filter cache dir",
     )
     args = parser.parse_args()
+    args.tile_filter = _normalize_tile_filter_name(args.tile_filter)
 
     csv_path = Path(args.csv).resolve()
     slides_root = Path(args.slides_root).resolve()
     experiment_root = Path(args.experiment_root).resolve()
     extractor_key = _normalize_extractor_name(args.extractor)
-    cache_dir = _shared_cache_dir(experiment_root, extractor_key)
+    extractor_id = embedding_extractor_identifier(extractor_key)
+    feature_cache_dir = _shared_feature_cache_dir(experiment_root, extractor_key, args.tile_filter)
     reference_cache_dir = _shared_reference_cache_dir(experiment_root, extractor_key)
     manifest_path = (
         experiment_root
         / "_cache"
         / "preextract_manifests"
-        / f"{_sanitize_stem(extractor_key)}.json"
+        / f"{_sanitize_stem(extractor_key)}.{_sanitize_stem(args.tile_filter)}.json"
     )
 
     experiment_root.mkdir(parents=True, exist_ok=True)
-    cache_dir.mkdir(parents=True, exist_ok=True)
+    feature_cache_dir.mkdir(parents=True, exist_ok=True)
     reference_cache_dir.mkdir(parents=True, exist_ok=True)
 
     if not csv_path.is_file():
@@ -245,11 +277,11 @@ def main() -> int:
         entries = entries[: args.limit]
 
     print("═══════════════════════════════════════════════════════════════")
-    print(" Preextract Hybrid Cache")
+    print(" Preextract Feature Cache")
     print(f" CSV:             {csv_path}")
     print(f" Slides root:     {slides_root}")
     print(f" Experiment root: {experiment_root}")
-    print(f" Cache dir:       {cache_dir}")
+    print(f" Feature cache:   {feature_cache_dir}")
     print(f" Ref cache dir:   {reference_cache_dir}")
     print(f" Extractor:       {extractor_key}")
     print(f" Agent:           {args.agent}")
@@ -282,60 +314,121 @@ def main() -> int:
             )
             continue
 
-        if args.skip_existing_cache and _has_existing_slide_cache(cache_dir, slide_path):
-            print(f"  SKIP  cache already exists for {slide_path.stem}")
-            skipped += 1
-            results.append(
-                {
-                    "extractor": extractor_key,
-                    "patient": patient_name,
-                    "slide": str(slide_path),
-                    "status": "skip",
-                    "error": "cache already exists",
-                }
-            )
-            continue
-
         run_id = _make_run_id(patient_name)
         started = time.time()
-        os.environ.pop("ROI_DISABLE_TILE_CACHE", None)
-        os.environ["ROI_TILE_CACHE_DIR"] = str(cache_dir)
+        os.environ["ROI_DISABLE_TILE_CACHE"] = "1"
+        os.environ.pop("ROI_TILE_CACHE_DIR", None)
+        os.environ["ROI_FEATURE_CACHE_DIR"] = str(feature_cache_dir)
         os.environ["AML_REFERENCE_CACHE_DIR"] = str(reference_cache_dir)
 
         try:
-            set_slide_path(str(slide_path))
-            reset_wsi_state(
-                run_id=run_id,
-                extractor_name=extractor_key,
-                tile_size_um=args.tile_size_um,
-                tile_size_px=args.tile_size_px,
-                batch_size=args.batch_size,
-                tile_prefilter_method=args.tile_filter,
-            )
-            state.AGENT_TYPE = str(args.agent or "aml").strip().lower()
+            exact_feature_cache_path: Path | None = None
+            exact_skip = False
+            with _suppress_wsi_terminal_output():
+                set_slide_path(str(slide_path))
+                reset_wsi_state(
+                    run_id=run_id,
+                    extractor_name=extractor_key,
+                    tile_size_um=args.tile_size_um,
+                    tile_size_px=args.tile_size_px,
+                    batch_size=args.batch_size,
+                    tile_prefilter_method=args.tile_filter,
+                )
+                state.AGENT_TYPE = str(args.agent or "aml").strip().lower()
 
-            index = _ensure_unsupervised_roi_index()
+                if args.skip_existing_cache:
+                    use_coarse_prefilter = _use_coarse_prefilter(args.tile_filter)
+                    use_quality_prefilter = _use_quality_prefilter(args.tile_filter)
+                    use_dark_region_gating = _use_dark_region_gating(
+                        args.tile_filter,
+                        aml_mode=(state.AGENT_TYPE == "aml"),
+                    )
+                    dark_region_boxes = (
+                        _ensure_dark_region_boxes_level0()
+                        if use_dark_region_gating
+                        else None
+                    )
+                    exact_feature_cache_path = resolve_feature_cache_file_path(
+                        slide_path=slide_path,
+                        feature_cache_dir=feature_cache_dir,
+                        extractor_id=extractor_id,
+                        use_amp=True,
+                        cache_tiles_ext="jpg",
+                        tile_size_um=SlideMPP(args.tile_size_um),
+                        tile_size_px=int(args.tile_size_px),
+                        max_supertile_size_slide_px=4096,
+                        brightness_cutoff=240,
+                        canny_cutoff=0.02,
+                        tile_prefilter_method=args.tile_filter,
+                        coarse_trigger_supertile_count=(
+                            ROI_COARSE_PREFILTER_TRIGGER_SUPERTILES if use_coarse_prefilter else None
+                        ),
+                        coarse_keep_ratio=(
+                            ROI_COARSE_PREFILTER_KEEP_RATIO if use_coarse_prefilter else None
+                        ),
+                        coarse_min_keep_supertile_count=(
+                            ROI_COARSE_PREFILTER_MIN_KEEP_SUPERTILES if use_coarse_prefilter else 0
+                        ),
+                        coarse_max_keep_supertile_count=(
+                            ROI_COARSE_PREFILTER_MAX_KEEP_SUPERTILES if use_coarse_prefilter else None
+                        ),
+                        quality_keep_ratio=(
+                            ROI_QUALITY_PREFILTER_KEEP_RATIO if use_quality_prefilter else None
+                        ),
+                        quality_min_keep_tile_count=(
+                            ROI_QUALITY_PREFILTER_MIN_KEEP_TILES if use_quality_prefilter else 0
+                        ),
+                        quality_trigger_tile_count=(
+                            ROI_QUALITY_PREFILTER_TRIGGER_TILES if use_quality_prefilter else None
+                        ),
+                        quality_random_reserve_ratio=(
+                            ROI_QUALITY_PREFILTER_RANDOM_RESERVE_RATIO if use_quality_prefilter else None
+                        ),
+                        dark_region_boxes_level0=dark_region_boxes,
+                    )
+                    exact_skip = bool(
+                        exact_feature_cache_path is not None and exact_feature_cache_path.is_file()
+                    )
+
+                if not exact_skip:
+                    index = _ensure_unsupervised_roi_index()
             elapsed = round(time.time() - started, 1)
-            num_tiles = int(getattr(index, "num_tiles", 0) or 0)
-            feature_dim = int(getattr(index, "feature_dim", 0) or 0)
-            cache_zip_count = _count_cache_zips(cache_dir)
-            print(f"  OK    tiles={num_tiles} dim={feature_dim} elapsed={elapsed}s cache_zips={cache_zip_count}")
-            ok += 1
-            results.append(
-                {
-                    "extractor": extractor_key,
-                    "patient": patient_name,
-                    "slide": str(slide_path),
-                    "status": "ok",
-                    "elapsed_sec": elapsed,
-                    "num_tiles": num_tiles,
-                    "feature_dim": feature_dim,
-                }
-            )
+            if exact_skip:
+                print(
+                    "  SKIP  feature cache already exists"
+                    f"{f': {exact_feature_cache_path.name}' if exact_feature_cache_path else ''}"
+                )
+                skipped += 1
+                results.append(
+                    {
+                        "extractor": extractor_key,
+                        "patient": patient_name,
+                        "slide": str(slide_path),
+                        "status": "skip",
+                        "elapsed_sec": elapsed,
+                        "error": "feature cache already exists",
+                        "feature_cache_path": str(exact_feature_cache_path) if exact_feature_cache_path else None,
+                    }
+                )
+            else:
+                num_tiles = int(getattr(index, "num_tiles", 0) or 0)
+                feature_dim = int(getattr(index, "feature_dim", 0) or 0)
+                print(f"  OK    tiles={num_tiles} dim={feature_dim} elapsed={elapsed}s")
+                ok += 1
+                results.append(
+                    {
+                        "extractor": extractor_key,
+                        "patient": patient_name,
+                        "slide": str(slide_path),
+                        "status": "ok",
+                        "elapsed_sec": elapsed,
+                        "num_tiles": num_tiles,
+                        "feature_dim": feature_dim,
+                    }
+                )
         except Exception as exc:
             elapsed = round(time.time() - started, 1)
-            cache_zip_count = _count_cache_zips(cache_dir)
-            print(f"  FAIL  {type(exc).__name__}: {exc} cache_zips={cache_zip_count}")
+            print(f"  FAIL  {type(exc).__name__}: {exc}")
             failed += 1
             results.append(
                 {

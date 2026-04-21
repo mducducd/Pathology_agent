@@ -35,7 +35,7 @@ enable_verbose_stdout_logging()
 
 MAX_IMG_DIM = int(os.getenv("MAX_IMG_DIM", "1024"))
 MAX_NATIVE_VIEW_DIM = 4096
-MAX_TURNS = int(os.getenv("MAX_TURNS", "200"))
+MAX_TURNS = int(os.getenv("MAX_TURNS", "140"))
 
 ROI_TARGET_SIDE_PX = 1500
 
