@@ -48,7 +48,7 @@ def _strip_tile_cache(root: Path) -> None:
 
 def _configure_fresh_embedding_cache(run_id: str) -> dict[str, str]:
     cache_root = REPO_ROOT / "outputs" / "_fresh_embedding_cache" / run_id
-    reference_cache_dir = cache_root / "reference_hnsw"
+    reference_cache_dir = cache_root / "_cache" / "reference_hnsw"
     reference_cache_dir.mkdir(parents=True, exist_ok=True)
     os.environ["AML_REFERENCE_CACHE_DIR"] = str(reference_cache_dir)
     cache_info = {

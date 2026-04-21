@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import json
 import hashlib
+import os
 from pathlib import Path
 from typing import Any
 
@@ -192,8 +193,16 @@ def prebuild_embeddings(
     # Concatenate and normalize
     features = torch.cat(feature_chunks, dim=0).numpy().astype(np.float32, copy=False)
     features = _l2_normalize_rows(features)
+    labels_array = np.array(labels, dtype=np.str_)
 
     print(f"Extracted embeddings shape: {features.shape}")
+
+    # Save canonical reference caches used by the live AML agent.
+    os.environ["AML_REFERENCE_CACHE_DIR"] = str(output_dir)
+    from .roi_ranker import (
+        _save_reference_embeddings_to_cache,
+        _save_reference_hnsw_cache,
+    )
 
     # Compute fingerprint
     paths_tuple = tuple(paths)
@@ -209,7 +218,7 @@ def prebuild_embeddings(
     np.save(str(embeddings_path), features, allow_pickle=True)
 
     print(f"Saving labels to {labels_path}...")
-    np.save(str(labels_path), np.array(labels, dtype=np.str_), allow_pickle=True)
+    np.save(str(labels_path), labels_array, allow_pickle=True)
 
     print(f"Saving metadata to {meta_path}...")
     meta = {
@@ -232,6 +241,20 @@ def prebuild_embeddings(
     np.save(str(fixed_embeddings_path), features, allow_pickle=True)
     fixed_meta_path.write_text(json.dumps(meta, indent=2))
 
+    print("Saving canonical live-agent reference caches...")
+    canonical_embedding_cache_dir = _save_reference_embeddings_to_cache(
+        features,
+        labels_array,
+        paths_tuple,
+        extractor.identifier,
+    )
+    canonical_hnsw_cache_dir = _save_reference_hnsw_cache(
+        features,
+        labels_array,
+        paths_tuple,
+        extractor.identifier,
+    )
+
     return {
         "ok": True,
         "count": len(paths),
@@ -242,6 +265,8 @@ def prebuild_embeddings(
         "meta_path": str(meta_path),
         "fixed_embeddings_path": str(fixed_embeddings_path),
         "fixed_meta_path": str(fixed_meta_path),
+        "canonical_embedding_cache_dir": str(canonical_embedding_cache_dir) if canonical_embedding_cache_dir else None,
+        "canonical_hnsw_cache_dir": str(canonical_hnsw_cache_dir) if canonical_hnsw_cache_dir else None,
     }
 
 

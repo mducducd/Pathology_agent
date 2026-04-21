@@ -76,12 +76,12 @@ mkdir -p "$BASE_OUTPUT_ROOT"
 RUNS=(
     
     
-    "GPT-OSS-120B|uni2|batch_result_GPT-OSS-120B_UNI2_224px"
-    "GPT-OSS-120B|dinobloom_giant|batch_result_GPT-OSS-120B_DinoBloom-G_224px"
-    "GPT-OSS-120B|virchow2|batch_result_GPT-OSS-120B_Virchow2_224px"
-    "GPT-OSS-120B|h_optimus_1|batch_result_GPT-OSS-120B_H-optimus-1_224px"
+    "GLM-4.6V-FP8|uni2|GLM-4.6V-FP8_UNI2_224px"
+    "GLM-4.6V-FP8|dinobloom_giant|GLM-4.6V-FP8_DinoBloom-G_224px"
+    "GLM-4.6V-FP8|virchow2|GLM-4.6V-FP8_Virchow2_224px"
+    "GLM-4.6V-FP8|h_optimus_1|GLM-4.6V-FP8_H-optimus-1_224px"
     
-    "GPT-OSS-120B|dinobloom|batch_result_GPT-OSS-120B_DinoBloom-S_224px"
+    "GLM-4.6V-FP8|dinobloom|GLM-4.6V-FP8_DinoBloom-S_224px"
 )   
 
 FILTERED_RUNS=()

@@ -905,7 +905,16 @@ def _find_matching_reference_embedding_cache(
     cache-name fingerprint was stabilized for embedding reuse.
     """
     expected_paths = list(ref_paths)
-    for meta_path in sorted(cache_dir.glob(f"{extractor_id}_embed_*_meta.json")):
+    candidate_meta_paths: list[Path] = []
+    seen_meta_paths: set[Path] = set()
+    for pattern in (f"{extractor_id}_embed_*_meta.json", f"{extractor_id}_*_meta.json"):
+        for meta_path in sorted(cache_dir.glob(pattern)):
+            if meta_path in seen_meta_paths:
+                continue
+            seen_meta_paths.add(meta_path)
+            candidate_meta_paths.append(meta_path)
+
+    for meta_path in candidate_meta_paths:
         try:
             import json
 
@@ -918,10 +927,14 @@ def _find_matching_reference_embedding_cache(
             continue
 
         stem = meta_path.name.removesuffix("_meta.json")
-        features_path = cache_dir / f"{stem}_features.npy"
         labels_path = cache_dir / f"{stem}_labels.npy"
-        if features_path.exists() and labels_path.exists():
-            return features_path, labels_path, meta_path
+        feature_candidates = (
+            cache_dir / f"{stem}_features.npy",
+            cache_dir / f"{stem}_embeddings.npy",
+        )
+        for features_path in feature_candidates:
+            if features_path.exists() and labels_path.exists():
+                return features_path, labels_path, meta_path
     return None
 
 
@@ -1658,6 +1671,16 @@ def build_unsupervised_roi_index(
             cached_reference = _load_reference_embeddings_from_cache(ref_paths, extractor_id)
             if cached_reference is not None:
                 ref_feat_l2, ref_labels, ref_paths = cached_reference
+                if progress_cb is not None:
+                    progress_cb(
+                        {
+                            "phase": "embed_reference_tiles",
+                            "status": "cached",
+                            "reference_tiles_total": len(ref_paths),
+                            "reference_tiles_good": int(good_n),
+                            "reference_tiles_bad": int(bad_n),
+                        }
+                    )
             else:
                 extractor = _ensure_extractor()
                 ref_feat_l2, ref_labels, ref_paths = _embed_reference_tiles(

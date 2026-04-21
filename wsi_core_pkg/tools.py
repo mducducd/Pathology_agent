@@ -122,6 +122,22 @@ def _selected_feature_cache_dir() -> Path | None:
     return feature_cache_dir
 
 
+def _selected_reference_cache_dir() -> Path:
+    raw = os.getenv("AML_REFERENCE_CACHE_DIR", "").strip()
+    if raw:
+        reference_cache_dir = Path(raw)
+    else:
+        extractor_name = _sanitize_cache_component(getattr(state, "EXTRACTOR_NAME", "uni2"), default="uni2")
+        reference_cache_dir = (
+            Path(OUTPUTS_ROOT_DIR)
+            / "_cache"
+            / "reference_hnsw"
+            / extractor_name
+        )
+    reference_cache_dir.mkdir(parents=True, exist_ok=True)
+    return reference_cache_dir
+
+
 def _use_coarse_prefilter(method: str | None = None) -> bool:
     return (method or _selected_tile_prefilter_method()) in {"coarse", "hybrid"}
 
@@ -419,6 +435,8 @@ def _ensure_unsupervised_roi_index():
             pipeline_desc = f"{extractor_label} tile embeddings -> kNN novelty ranking -> top-K per view"
     cache_dir = _selected_tile_cache_dir()
     feature_cache_dir = _selected_feature_cache_dir()
+    reference_cache_dir = _selected_reference_cache_dir()
+    os.environ["AML_REFERENCE_CACHE_DIR"] = str(reference_cache_dir)
     _set_roi_candidate_prep(
         phase="starting",
         status="starting",
@@ -499,7 +517,10 @@ def _ensure_unsupervised_roi_index():
                 rt = evt.get("reference_tiles_total")
                 rg = evt.get("reference_tiles_good")
                 rb = evt.get("reference_tiles_bad")
-                msg = "Embedding AML reference tiles and running exact exemplar retrieval..."
+                if status == "cached":
+                    msg = "Loaded cached AML reference embeddings and retrieval index..."
+                else:
+                    msg = "Embedding AML reference tiles and running exact exemplar retrieval..."
                 if rt is not None:
                     msg += f" total={rt}"
                 if rg is not None and rb is not None:
@@ -559,6 +580,7 @@ def _ensure_unsupervised_roi_index():
             "dark_region_boxes_hash": dark_region_boxes_hash,
             "tile_cache_dir": str(cache_dir) if cache_dir is not None else None,
             "feature_cache_dir": str(feature_cache_dir) if feature_cache_dir is not None else None,
+            "reference_cache_dir": str(reference_cache_dir),
             "reference_mode": getattr(index, "reference_mode", "none"),
             "reference_stats": dict(getattr(index, "reference_stats", {}) or {}),
         }
@@ -1857,8 +1879,10 @@ def wsi_rebuild_reference_index(
         Dictionary with status and statistics about the rebuild operation.
     """
     from wsi_core_pkg.embeddings.roi_ranker import (
+        _clear_reference_embeddings_cache,
         _clear_reference_hnsw_cache,
         _save_reference_hnsw_cache,
+        _save_reference_embeddings_to_cache,
         _embed_reference_tiles,
     )
     import torch
@@ -1866,6 +1890,7 @@ def wsi_rebuild_reference_index(
     def _inner(include_saved_tiles: bool, progress_message: str) -> Dict[str, Any]:
         # Clear existing cache
         _clear_reference_hnsw_cache()
+        _clear_reference_embeddings_cache()
 
         if not include_saved_tiles:
             return {
@@ -1902,10 +1927,14 @@ def wsi_rebuild_reference_index(
                 extractor=extractor,
                 device=run_device,
                 batch_size=32,
+                extractor_id=extractor.identifier,
             )
 
-            # Save to cache
-            cache_dir = _save_reference_hnsw_cache(
+            # Save canonical reference embedding cache and HNSW cache
+            embedding_cache_dir = _save_reference_embeddings_to_cache(
+                ref_feat_l2, ref_labels, ref_paths, extractor.identifier
+            )
+            hnsw_cache_dir = _save_reference_hnsw_cache(
                 ref_feat_l2, ref_labels, ref_paths, extractor.identifier
             )
 
@@ -1915,7 +1944,8 @@ def wsi_rebuild_reference_index(
                 "message": f"Reference index rebuilt with {len(saved_records)} saved tiles.",
                 "saved_good_count": len(state._saved_good_tiles),
                 "saved_bad_count": len(state._saved_bad_tiles),
-                "cache_dir": str(cache_dir) if cache_dir else None,
+                "embedding_cache_dir": str(embedding_cache_dir) if embedding_cache_dir else None,
+                "hnsw_cache_dir": str(hnsw_cache_dir) if hnsw_cache_dir else None,
             }
 
         except Exception as e:
