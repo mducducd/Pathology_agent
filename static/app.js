@@ -20,10 +20,21 @@
   const agentSelect = document.getElementById("agent-select");
   const modelSelect = document.getElementById("model-select");
   const extractorSelect = document.getElementById("extractor-select");
+  const targetAcceptedRoisSelect = document.getElementById("target-accepted-rois-select");
+  const maxAcceptedRoisSelect = document.getElementById("max-accepted-rois-select");
   const tileSizeSelect = document.getElementById("tile-size-select");
   const batchSizeSelect = document.getElementById("batch-size-select");
   const tilePrefilterMethodSelect = document.getElementById("tile-prefilter-method-select");
+  const roiOutputSizeSelect = document.getElementById("roi-output-size-select");
+  const defaultMppInput = document.getElementById("default-mpp-input");
+  const roiSettingsGroup = document.getElementById("roi-settings-group");
   const tilePrefilterMethodStorageKey = "slide-agent.tile-prefilter-method";
+  const roiOutputSizeStorageKey = "slide-agent.roi-output-size";
+  const targetAcceptedRoisStorageKey = "slide-agent.target-accepted-rois";
+  const maxAcceptedRoisStorageKey = "slide-agent.max-accepted-rois";
+  const defaultMppStorageKey = "slide-agent.default-mpp-um";
+  const roiSettingsGroupStorageKey = "slide-agent.roi-settings-group-open";
+  const defaultMppAutoStorageValue = "__auto__";
 
   const statusPill = document.getElementById("status-pill");
   const btnActions = document.getElementById("btn-actions");
@@ -107,6 +118,77 @@
 
   function selectedTilePrefilterMethod() {
     return (tilePrefilterMethodSelect && tilePrefilterMethodSelect.value) ? tilePrefilterMethodSelect.value : "quality";
+  }
+
+  function selectedRoiOutputSizePx() {
+    const parsed = Number.parseInt(
+      (roiOutputSizeSelect && roiOutputSizeSelect.value) ? roiOutputSizeSelect.value : "1024",
+      10
+    );
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 1024;
+  }
+
+  function selectedMaxAcceptedRois() {
+    const parsed = Number.parseInt(
+      (maxAcceptedRoisSelect && maxAcceptedRoisSelect.value) ? maxAcceptedRoisSelect.value : "10",
+      10
+    );
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 10;
+  }
+
+  function selectedTargetAcceptedRois() {
+    const parsed = Number.parseInt(
+      (targetAcceptedRoisSelect && targetAcceptedRoisSelect.value) ? targetAcceptedRoisSelect.value : "5",
+      10
+    );
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : 5;
+  }
+
+  function selectedDefaultMppUm() {
+    const raw = (defaultMppInput && typeof defaultMppInput.value === "string")
+      ? defaultMppInput.value.trim()
+      : "";
+    if (!raw) return null;
+    const parsed = Number.parseFloat(raw);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+  }
+
+  function formatMppUm(value) {
+    const n = Number(value);
+    if (!Number.isFinite(n) || n <= 0) return "";
+    return n.toFixed(3).replace(/0+$/, "").replace(/\.$/, "");
+  }
+
+  function setSelectValueIfPresent(selectEl, value) {
+    if (!selectEl) return false;
+    const text = String(value);
+    const hasOption = Array.from(selectEl.options).some((opt) => opt.value === text);
+    if (!hasOption) return false;
+    selectEl.value = text;
+    return true;
+  }
+
+  function syncAcceptedRoiSelectors(changedBy = "") {
+    if (!maxAcceptedRoisSelect || !targetAcceptedRoisSelect) return;
+    let maxVal = selectedMaxAcceptedRois();
+    let targetVal = selectedTargetAcceptedRois();
+
+    if (changedBy === "target" && targetVal > maxVal) {
+      if (setSelectValueIfPresent(maxAcceptedRoisSelect, targetVal)) {
+        maxVal = selectedMaxAcceptedRois();
+      }
+    } else if (changedBy === "max" && maxVal < targetVal) {
+      if (setSelectValueIfPresent(targetAcceptedRoisSelect, maxVal)) {
+        targetVal = selectedTargetAcceptedRois();
+      }
+    } else if (targetVal > maxVal) {
+      if (setSelectValueIfPresent(targetAcceptedRoisSelect, maxVal)) {
+        targetVal = selectedTargetAcceptedRois();
+      }
+    }
+
+    saveStoredValue(maxAcceptedRoisStorageKey, String(maxVal));
+    saveStoredValue(targetAcceptedRoisStorageKey, String(targetVal));
   }
 
   function loadStoredValue(key) {
@@ -1956,6 +2038,16 @@
     return new Set(["created", "uploading", "pending", "running"]).has(activeRunStatus) && !!searchTargetBoxPx;
   }
 
+  function _currentViewIsMarkedRoi(currentView, incomingRois = []) {
+    if (!currentView || typeof currentView !== "object") return false;
+    if (String(currentView.view_tag || "") === "roi") return true;
+    const currentDebugPath = String(currentView.debug_path || "");
+    if (!currentDebugPath) return false;
+    return (Array.isArray(incomingRois) ? incomingRois : []).some((roi) => (
+      roi && String(roi.debug_path || "") === currentDebugPath
+    ));
+  }
+
   function _startOverlayLoop() {
     if (overlayRafId !== null) return;
     overlayRafId = requestAnimationFrame(_overlayFrame);
@@ -1987,7 +2079,7 @@
     if (keepRunning) _startOverlayLoop();
   }
 
-  function updateSearchingBox(currentView, runStatus) {
+  function updateSearchingBox(currentView, runStatus, incomingRois = []) {
     activeRunStatus = runStatus || "";
     lastCurrentViewState = currentView || null;
     const statusActive = new Set(["created", "uploading", "pending", "running"]).has(activeRunStatus);
@@ -2010,6 +2102,14 @@
 
     if (!currentView || !Number.isFinite(Number(currentView.x0)) || !Number.isFinite(Number(currentView.y0)) ||
         !Number.isFinite(Number(currentView.w)) || !Number.isFinite(Number(currentView.h))) {
+      searchTargetBoxPx = null;
+      searchDrawBoxPx = null;
+      searchTransition = null;
+      renderOverviewRoiOverlay();
+      return;
+    }
+
+    if (_currentViewIsMarkedRoi(currentView, incomingRois)) {
       searchTargetBoxPx = null;
       searchDrawBoxPx = null;
       searchTransition = null;
@@ -2184,7 +2284,7 @@
     renderOverviewRoiOverlay();
   }
 
-  function upsertLiveRoiItem(currentView, runStatus) {
+  function upsertLiveRoiItem(currentView, runStatus, incomingRois = []) {
     const existing = document.getElementById("roi-live-item");
     const runningStates = new Set(["created", "uploading", "pending", "running"]);
     const hasLive = currentView && currentView.image_url && runningStates.has(runStatus);
@@ -2194,8 +2294,17 @@
       return;
     }
 
+    const latestRoi = Array.isArray(incomingRois) && incomingRois.length ? incomingRois[incomingRois.length - 1] : null;
+    const currentDebugPath = String(currentView.debug_path || "");
+    const isMarkedRoiView = !!(
+      latestRoi &&
+      currentDebugPath &&
+      String(latestRoi.debug_path || "") === currentDebugPath
+    );
     const nextRoiId = lastRenderedRoi + 1;
-    const title = `ROI ${nextRoiId} (searching...)`;
+    const title = isMarkedRoiView
+      ? `ROI ${Number(latestRoi.roi_id)} (inspect/discard)`
+      : `ROI ${nextRoiId} (searching...)`;
     const parts = [];
     if (currentView.field_width_um && currentView.field_height_um) {
       parts.push(`Field ~${currentView.field_width_um.toFixed(0)}×${currentView.field_height_um.toFixed(0)} µm`);
@@ -2211,7 +2320,7 @@
       li.id = "roi-live-item";
       li.className = "logitem live-roi-item";
     }
-    li.classList.add("roi-searching");
+    li.classList.toggle("roi-searching", !isMarkedRoiView);
     // Keep the live preview as the active/latest ROI slot.
     roisEl.appendChild(li);
 
@@ -2428,9 +2537,58 @@
         (run && typeof run.tile_prefilter_method === "string" && run.tile_prefilter_method)
           ? String(run.tile_prefilter_method)
           : ((st && typeof st.tile_prefilter_method === "string" && st.tile_prefilter_method) ? String(st.tile_prefilter_method) : null);
+      const roiOutputSizePx =
+        (run && Number.isFinite(Number(run.roi_output_size_px)))
+          ? Number(run.roi_output_size_px)
+          : ((st && Number.isFinite(Number(st.roi_output_size_px))) ? Number(st.roi_output_size_px) : null);
+      const maxAcceptedRois =
+        (run && Number.isFinite(Number(run.max_accepted_rois)))
+          ? Number(run.max_accepted_rois)
+          : ((st && Number.isFinite(Number(st.max_accepted_rois))) ? Number(st.max_accepted_rois) : null);
+      const targetAcceptedRois =
+        (run && Number.isFinite(Number(run.target_accepted_rois)))
+          ? Number(run.target_accepted_rois)
+          : ((st && Number.isFinite(Number(st.target_accepted_rois))) ? Number(st.target_accepted_rois) : null);
+      const defaultMppUm =
+        (run && Number.isFinite(Number(run.default_mpp_um)))
+          ? Number(run.default_mpp_um)
+          : ((st && Number.isFinite(Number(st.default_mpp_um))) ? Number(st.default_mpp_um) : null);
+      const slideMppUm =
+        (st && Number.isFinite(Number(st.slide_mpp_um))) ? Number(st.slide_mpp_um) : null;
       if (tilePrefilterMethodSelect && tilePrefilterMethod) {
         tilePrefilterMethodSelect.value = tilePrefilterMethod;
         saveStoredValue(tilePrefilterMethodStorageKey, tilePrefilterMethod);
+      }
+      if (roiOutputSizeSelect && roiOutputSizePx) {
+        const nextRoiValue = String(Math.round(roiOutputSizePx));
+        if (Array.from(roiOutputSizeSelect.options).some((opt) => opt.value === nextRoiValue)) {
+          roiOutputSizeSelect.value = nextRoiValue;
+          saveStoredValue(roiOutputSizeStorageKey, nextRoiValue);
+        }
+      }
+      if (maxAcceptedRoisSelect && maxAcceptedRois) {
+        const nextMaxRoisValue = String(Math.round(maxAcceptedRois));
+        if (setSelectValueIfPresent(maxAcceptedRoisSelect, nextMaxRoisValue)) {
+          saveStoredValue(maxAcceptedRoisStorageKey, nextMaxRoisValue);
+        }
+      }
+      if (targetAcceptedRoisSelect && targetAcceptedRois) {
+        const nextTargetRoisValue = String(Math.round(targetAcceptedRois));
+        if (setSelectValueIfPresent(targetAcceptedRoisSelect, nextTargetRoisValue)) {
+          saveStoredValue(targetAcceptedRoisStorageKey, nextTargetRoisValue);
+        }
+      }
+      syncAcceptedRoiSelectors();
+      if (defaultMppInput && document.activeElement !== defaultMppInput) {
+        if (defaultMppUm) {
+          const nextMppValue = formatMppUm(defaultMppUm);
+          defaultMppInput.value = nextMppValue;
+          saveStoredValue(defaultMppStorageKey, nextMppValue);
+        } else if (slideMppUm) {
+          defaultMppInput.value = formatMppUm(slideMppUm);
+        } else {
+          defaultMppInput.value = "";
+        }
       }
       activeRunStatus = run.status || "";
       lastCurrentViewState = (st && st.current_view) ? st.current_view : null;
@@ -2487,8 +2645,6 @@
         darkRegionsLoaded = false;  // Reset to allow re-fetch
         fetchDarkRegions(currentRunId);
       }
-      updateSearchingBox(lastCurrentViewState, run.status);
-
       const hasReportPath = !!run.report_path;
       if (!hasReportPath) {
         if (run.final_output) {
@@ -2602,7 +2758,8 @@
         selectedOverviewRoiId = Number(incomingRois[incomingRois.length - 1].roi_id);
       }
 
-      upsertLiveRoiItem(st && st.current_view ? st.current_view : null, run.status);
+      updateSearchingBox(lastCurrentViewState, run.status, incomingRois);
+      upsertLiveRoiItem(st && st.current_view ? st.current_view : null, run.status, incomingRois);
       setSelectedRoiInList();
       renderOverviewRoiOverlay();
 
@@ -2730,6 +2887,11 @@
     fd.append("tile_size_px", tileSizeSelect ? tileSizeSelect.value : "224");
     fd.append("batch_size", String(selectedBatchSize()));
     fd.append("tile_prefilter_method", selectedTilePrefilterMethod());
+    fd.append("roi_output_size_px", String(selectedRoiOutputSizePx()));
+    fd.append("max_accepted_rois", String(selectedMaxAcceptedRois()));
+    fd.append("target_accepted_rois", String(selectedTargetAcceptedRois()));
+    const selectedDefaultMpp = selectedDefaultMppUm();
+    fd.append("default_mpp_um", selectedDefaultMpp == null ? "" : String(selectedDefaultMpp));
     const res = await fetch("/api/runs/create", { method: "POST", body: fd });
     if (!res.ok) throw new Error(await res.text());
     return await res.json();
@@ -2977,6 +3139,70 @@
       saveStoredValue(tilePrefilterMethodStorageKey, selectedTilePrefilterMethod());
     });
   }
+  if (roiOutputSizeSelect) {
+    const storedRoiOutputSize = loadStoredValue(roiOutputSizeStorageKey);
+    if (
+      storedRoiOutputSize &&
+      Array.from(roiOutputSizeSelect.options).some((opt) => opt.value === storedRoiOutputSize)
+    ) {
+      roiOutputSizeSelect.value = storedRoiOutputSize;
+    }
+    roiOutputSizeSelect.addEventListener("change", () => {
+      saveStoredValue(roiOutputSizeStorageKey, String(selectedRoiOutputSizePx()));
+    });
+  }
+  if (targetAcceptedRoisSelect) {
+    const storedTargetAcceptedRois = loadStoredValue(targetAcceptedRoisStorageKey);
+    if (
+      storedTargetAcceptedRois &&
+      Array.from(targetAcceptedRoisSelect.options).some((opt) => opt.value === storedTargetAcceptedRois)
+    ) {
+      targetAcceptedRoisSelect.value = storedTargetAcceptedRois;
+    }
+    targetAcceptedRoisSelect.addEventListener("change", () => {
+      syncAcceptedRoiSelectors("target");
+    });
+  }
+  if (maxAcceptedRoisSelect) {
+    const storedMaxAcceptedRois = loadStoredValue(maxAcceptedRoisStorageKey);
+    if (
+      storedMaxAcceptedRois &&
+      Array.from(maxAcceptedRoisSelect.options).some((opt) => opt.value === storedMaxAcceptedRois)
+    ) {
+      maxAcceptedRoisSelect.value = storedMaxAcceptedRois;
+    }
+    maxAcceptedRoisSelect.addEventListener("change", () => {
+      syncAcceptedRoiSelectors("max");
+    });
+  }
+  syncAcceptedRoiSelectors();
+  if (defaultMppInput) {
+    const storedDefaultMpp = loadStoredValue(defaultMppStorageKey);
+    if (storedDefaultMpp === defaultMppAutoStorageValue) {
+      defaultMppInput.value = "";
+    } else if (storedDefaultMpp) {
+      defaultMppInput.value = storedDefaultMpp;
+    }
+    defaultMppInput.addEventListener("change", () => {
+      const nextMpp = selectedDefaultMppUm();
+      defaultMppInput.value = nextMpp == null ? "" : formatMppUm(nextMpp);
+      saveStoredValue(
+        defaultMppStorageKey,
+        nextMpp == null ? defaultMppAutoStorageValue : defaultMppInput.value,
+      );
+    });
+  }
+  if (roiSettingsGroup) {
+    const storedGroupState = loadStoredValue(roiSettingsGroupStorageKey);
+    if (storedGroupState === "0") {
+      roiSettingsGroup.open = false;
+    } else if (storedGroupState === "1") {
+      roiSettingsGroup.open = true;
+    }
+    roiSettingsGroup.addEventListener("toggle", () => {
+      saveStoredValue(roiSettingsGroupStorageKey, roiSettingsGroup.open ? "1" : "0");
+    });
+  }
   if (btnActions && statusActionsMenu) {
     btnActions.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -3171,7 +3397,7 @@
 
   if (overviewImg) {
     overviewImg.addEventListener("load", () => {
-      updateSearchingBox(lastCurrentViewState, activeRunStatus);
+      updateSearchingBox(lastCurrentViewState, activeRunStatus, Array.from(roiById.values()));
       renderOverviewRoiOverlay();
     });
   }

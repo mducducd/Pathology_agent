@@ -9,7 +9,9 @@ from .tools import (
     wsi_discard_last_roi,
     wsi_get_overview_view,
     wsi_get_view_info,
+    wsi_mark_candidate,
     wsi_mark_roi_norm,
+    wsi_open_candidate,
     wsi_pan_current,
     wsi_rebuild_reference_index,
     wsi_save_tile_norm,
@@ -60,42 +62,33 @@ WSIPathologyAgent = Agent(
         "   - KNN NOVELTY (non-AML mode): Tile embeddings ranked by kNN novelty and centroid distance.\n"
         "   - OUTPUT: Top-K roi_candidates per CURRENT VIEW with coordinates for wsi_mark_roi_norm.\n"
         "   - In AML mode, dark-region boxes are a PRIOR, not a perfect boundary; strong deep purple fields near the box edges can still survive.\n"
-        "1) Start with wsi_get_overview_view to see the entire slide.\n"
-        "2) NAVIGATION CONSTRAINT (AML MODE): Prefer roi_candidates in or near the detected dark regions, but do NOT assume the dark overlay is perfect.\n"
-        "   - Use the roi_candidates provided in the tool output as your primary source for wsi_mark_roi_norm.\n"
-        "   - If current candidates are weak, use wsi_get_overview_view or wsi_zoom_full_norm to jump toward a DIFFERENT dark blue-purple tissue fragment.\n"
-        "   - Deep purple tissue just outside a coarse dark-region box can still be valid, so rely on morphology and candidate quality rather than the overlay alone.\n"
-        "3) Systematically explore multiple DARK REGIONS:\n"
-        "   - Use wsi_zoom_full_norm from the overview to zoom into deep blue-purple basophilic tissue fragments, not gray-black debris.\n"
-        "   - Use wsi_zoom_current_norm to step from overview -> intermediate -> high power on dark regions.\n"
-        "   - Use wsi_pan_current to move laterally within the SAME dark region to see adjacent fields.\n"
-        "4) Avoid getting stuck:\n"
-        "   - After exploring one dark region, use wsi_get_overview_view or wsi_zoom_full_norm to move to a DIFFERENT dark region.\n"
-        "   - Inspect at least a few distinct dark regions at high power before concluding.\n"
-        "   - Each tool response includes same_region_steps and marked_roi_count.\n"
-        "   - If you see region_loop_warning in the tool output, you MUST immediately call wsi_get_overview_view or wsi_zoom_full_norm - do NOT pan or zoom again in the same area.\n"
-        "   - If you see low_tissue_loop_warning in the tool output, you MUST immediately call wsi_get_overview_view - you are stuck in empty background glass and must reset to the full slide.\n"
-        "   - Identify where tissue fragments are and how they are distributed.\n"
-        "   - If the task involves tumor assessment, roughly locate suspected tumor regions at low power.\n"
-        "2) Systematically explore multiple regions:\n"
-        "   - Use wsi_zoom_full_norm from the overview to zoom into major tissue fragments or distant parts of a large fragment.\n"
-        "   - Use wsi_zoom_current_norm to step from overview → intermediate → high power on tissue areas.\n"
-        "   - Use wsi_pan_current to move laterally at the same magnification along interfaces or lesions.\n"
-        "3) Avoid getting stuck:\n"
-        "   - After exploring one region, use wsi_get_overview_view or wsi_zoom_full_norm to deliberately move to a distinct region.\n"
-        "   - Inspect at least a few distinct areas at high power before concluding.\n"
-        "   - Each tool response includes same_region_steps and marked_roi_count.\n"
-        "   - If you see region_loop_warning in the tool output, you MUST immediately call wsi_get_overview_view or wsi_zoom_full_norm — do NOT pan or zoom again in the same area.\n"
-        "   - If you see low_tissue_loop_warning in the tool output, you MUST immediately call wsi_get_overview_view — you are stuck in empty background glass and must reset to the full slide.\n"
+        "1) Start with wsi_get_overview_view ONCE to initialize the slide.\n"
+        "2) NAVIGATION LOOP (AML MODE): Use roi_candidates as the main navigation guide.\n"
+        "   - Pick the best unvisited candidate.\n"
+        "   - Prefer wsi_open_candidate(rank) for the first jump into an approximately 1500 um field around it.\n"
+        "   - Make at most one additional zoom/centering adjustment.\n"
+        "   - If it still looks plausible at ROI scale, choose the best ROI subregion yourself and use wsi_mark_roi_norm.\n"
+        "   - If it still looks weak after one quick check, skip it and jump to the next candidate.\n"
+        "   - After marking an ROI, inspect it only for keep/discard. If more evidence is still needed, jump directly to the next unvisited candidate instead of re-searching inside that ROI.\n"
+        "3) COVERAGE GOAL:\n"
+        "   - For AML, aim for the configured accepted-ROI soft goal from distinct regions.\n"
+        "   - The accepted-ROI cap is a hard stop.\n"
+        "   - Do not stop before the configured target unless no additional distinct informative ROI can be found after reasonable search; once the target is reached, extra ROIs are only worth taking if they could materially change the decision.\n"
+        "4) If you see region_loop_warning or low_tissue_loop_warning, jump directly to a different candidate region immediately; use overview reset only as a fallback.\n"
         "\n"
         "ROIs AND SELF-CHECK:\n"
         "- When you find diagnostically significant tissue (for ANY task), call wsi_mark_roi_norm on that area.\n"
         "- Navigation/view tools return top-K ROI candidates (roi_candidates). "
-        "For wsi_mark_roi_norm, choose coordinates from these candidates; arbitrary ROI centers are rejected.\n"
-        "- This will create a fixed-size high-power field (width reported in µm), centered on your selected region.\n"
-        "- After each wsi_mark_roi_norm, a NEW ROI image is shown as the CURRENT VIEW. Carefully inspect it:\n"
-        "  * If it is mostly background, out of focus, or uninformative, your very next step should be wsi_discard_last_roi.\n"
-        "  * If it is useful, keep it and continue exploring or mark additional ROIs.\n"
+        "Prefer wsi_open_candidate(rank) to reach a strong candidate quickly. "
+        "Each candidate also includes navigation_bbox_norm for a first inspection jump. "
+        "Use roi_candidates as guidance, but choose the best local ROI coordinates yourself with wsi_mark_roi_norm.\n"
+        "- This will create a fixed high-power ROI crop in pixel space, centered on your selected region.\n"
+        "- Treat this ROI crop as the final inspection view, not as another exploratory zoom.\n"
+        "- After each wsi_mark_roi_norm, the kept ROI is saved as evidence.\n"
+        "  * In AML mode, the backend may immediately move CURRENT VIEW to the next unvisited candidate to keep search moving.\n"
+        "  * If the just-kept ROI is mostly background, out of focus, or clearly uninformative on review, your very next step should be wsi_discard_last_roi.\n"
+        "  * If it is useful or borderline but still interpretable, keep it if appropriate. If you still need more ROIs, use a different unvisited candidate.\n"
+        "- Prefer efficient keep/discard decisions. Do not repeatedly refine the same ROI candidate when a discard plus jump would clearly be faster.\n"
         "- Keep only ROIs that truly help summarize the case (e.g., tumor, key inflammation, MSI-relevant areas, etc.).\n"
         "- If wsi_mark_roi_norm returns reason='duplicate_roi', that location is already marked — pick a DIFFERENT candidate or navigate to a new region. Do NOT retry the same coordinates.\n"
         "\n"
@@ -137,6 +130,8 @@ WSIPathologyAgent = Agent(
         wsi_zoom_full_norm,
         wsi_pan_current,
         wsi_get_view_info,
+        wsi_open_candidate,
+        wsi_mark_candidate,
         wsi_mark_roi_norm,
         wsi_save_tile_norm,
         wsi_discard_last_roi,
@@ -188,6 +183,8 @@ WSIAmlDetectorAgent = Agent(
         wsi_zoom_full_norm,
         wsi_pan_current,
         wsi_get_view_info,
+        wsi_open_candidate,
+        wsi_mark_candidate,
         wsi_mark_roi_norm,
         wsi_save_tile_norm,
         wsi_discard_last_roi,

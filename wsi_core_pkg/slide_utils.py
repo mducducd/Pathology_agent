@@ -8,6 +8,9 @@ from PIL import Image, ImageDraw
 
 from . import state
 from .config import MAX_IMG_DIM, MAX_NATIVE_VIEW_DIM
+from .tuning_config import tuning_value
+
+DEFAULT_MPP_FALLBACK_UM = float(tuning_value("tools.slide", "DEFAULT_MPP_UM"))
 
 
 # ---------------------------------------------------------------------
@@ -213,13 +216,26 @@ def _render_view_from_base_bbox(
     )
 
     region = _read_region_rgb(slide, x0, y0, level, (w_lvl, h_lvl))
-    region, out_w, out_h = _resize_to_max_dim(region, max_dim=min(max_dim, MAX_IMG_DIM))
+    effective_max_dim = max(1, int(max_dim or MAX_IMG_DIM))
+    region, out_w, out_h = _resize_to_max_dim(region, max_dim=effective_max_dim)
 
     tissue_fraction = _estimate_tissue_fraction(region)
 
     debug_path = _save_debug_image(region, tag=tag)
 
-    mpp = _get_mpp_um(slide)
+    state_override = getattr(state, "DEFAULT_MPP_UM_OVERRIDE", None)
+    if state_override is not None:
+        try:
+            mpp = float(state_override)
+        except Exception:
+            mpp = None
+    else:
+        mpp = None
+
+    if mpp is None or float(mpp) <= 0:
+        mpp = _get_mpp_um(slide)
+    if mpp is None or float(mpp) <= 0:
+        mpp = DEFAULT_MPP_FALLBACK_UM
     if mpp is not None:
         field_width_um = w * mpp
         field_height_um = h * mpp
@@ -234,6 +250,7 @@ def _render_view_from_base_bbox(
 
     info = {
         "debug_path": debug_path,
+        "view_tag": tag,
         "view_level": level,
         "view_bbox_level": [x_lvl, y_lvl, w_lvl_int, h_lvl_int],
         "view_bbox_level0": [x0, y0, w, h],
@@ -253,6 +270,7 @@ def _render_view_from_base_bbox(
         "shown_w": out_w,
         "shown_h": out_h,
         "debug_path": debug_path,
+        "view_tag": tag,
         "field_width_um": field_width_um,
         "field_height_um": field_height_um,
         "tissue_fraction": tissue_fraction,

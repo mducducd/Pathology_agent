@@ -61,6 +61,7 @@ WSI_W_CENTROID = float(ROI_RANKER_CORE_CFG["WSI_W_CENTROID"])
 ROI_NOVELTY_CLIP_PERCENTILE = float(ROI_RANKER_CORE_CFG["ROI_NOVELTY_CLIP_PERCENTILE"])
 
 AML_REFERENCE_TOP_K = int(ROI_RANKER_REFERENCE_SCORING_CFG["AML_REFERENCE_TOP_K"])
+AML_REFERENCE_TILES_PER_REF = int(ROI_RANKER_REFERENCE_SCORING_CFG["AML_REFERENCE_TILES_PER_REF"])
 AML_REFERENCE_QUERY_BLOCK_ROWS = int(ROI_RANKER_REFERENCE_SCORING_CFG["AML_REFERENCE_QUERY_BLOCK_ROWS"])
 AML_REFERENCE_LOGIT_SCALE = float(ROI_RANKER_REFERENCE_SCORING_CFG["AML_REFERENCE_LOGIT_SCALE"])
 AML_REFERENCE_EVIDENCE_PER_CLASS = int(ROI_RANKER_REFERENCE_SCORING_CFG["AML_REFERENCE_EVIDENCE_PER_CLASS"])
@@ -354,6 +355,7 @@ class UnsupervisedROIIndex:
     reference_tile_paths: tuple[str, ...] = field(default_factory=tuple)
     reference_tile_labels: tuple[str, ...] = field(default_factory=tuple)
     reference_neighbor_k: int = 0
+    reference_candidate_mask: npt.NDArray[np.bool_] = field(default_factory=lambda: np.empty((0,), dtype=np.bool_))
     blast_neighbor_indices: npt.NDArray[np.int32] = field(default_factory=lambda: np.empty((0, 0), dtype=np.int32))
     blast_neighbor_sims: npt.NDArray[np.float32] = field(default_factory=lambda: np.empty((0, 0), dtype=np.float32))
     blast_reference_paths: tuple[str, ...] = field(default_factory=tuple)
@@ -373,6 +375,7 @@ class ReferenceKNNScoring:
     bad_neighbor_sims: npt.NDArray[np.float32] = field(default_factory=lambda: np.empty((0, 0), dtype=np.float32))
     good_neighbor_indices: npt.NDArray[np.int32] = field(default_factory=lambda: np.empty((0, 0), dtype=np.int32))
     good_neighbor_sims: npt.NDArray[np.float32] = field(default_factory=lambda: np.empty((0, 0), dtype=np.float32))
+    candidate_mask: npt.NDArray[np.bool_] = field(default_factory=lambda: np.empty((0,), dtype=np.bool_))
 
 
 def _l2_normalize_rows(x: npt.NDArray[np.float32]) -> npt.NDArray[np.float32]:
@@ -734,6 +737,81 @@ def _aggregate_knn_similarities(
 
     # Default: mean aggregation
     return np.mean(sims, axis=1).astype(np.float32, copy=False)
+
+
+def _aggregate_masked_knn_similarities(
+    sims: npt.NDArray[np.float32],
+    *,
+    valid_mask: npt.NDArray[np.bool_],
+    method: str = "mean",
+) -> npt.NDArray[np.float32]:
+    rows = int(sims.shape[0]) if sims.ndim == 2 else 0
+    if rows == 0 or valid_mask.ndim != 2 or valid_mask.shape != sims.shape:
+        return np.zeros((rows,), dtype=np.float32)
+
+    out = np.zeros((rows,), dtype=np.float32)
+    for row_idx in range(rows):
+        vals = sims[row_idx][valid_mask[row_idx]]
+        if vals.size == 0:
+            continue
+        if method == "max":
+            out[row_idx] = float(np.max(vals))
+            continue
+        if method == "weighted":
+            weights = np.exp(-np.arange(vals.size) / 3.0).astype(np.float32)
+            weights = weights / np.maximum(weights.sum(), 1e-6)
+            out[row_idx] = float(np.sum(vals * weights))
+            continue
+        out[row_idx] = float(np.mean(vals))
+    return out.astype(np.float32, copy=False)
+
+
+def _invert_reference_nominations(
+    *,
+    num_tiles: int,
+    ref_indices: npt.NDArray[np.int32],
+    tile_indices_by_ref: npt.NDArray[np.int32],
+    tile_sims_by_ref: npt.NDArray[np.float32],
+    max_refs_per_tile: int,
+) -> tuple[npt.NDArray[np.int32], npt.NDArray[np.float32], npt.NDArray[np.bool_], npt.NDArray[np.int32]]:
+    if num_tiles <= 0 or ref_indices.size == 0 or tile_indices_by_ref.size == 0 or max_refs_per_tile <= 0:
+        empty_idx = np.empty((max(0, num_tiles), 0), dtype=np.int32)
+        empty_sims = np.empty((max(0, num_tiles), 0), dtype=np.float32)
+        return (
+            empty_idx,
+            empty_sims,
+            np.zeros((max(0, num_tiles),), dtype=np.bool_),
+            np.zeros((max(0, num_tiles),), dtype=np.int32),
+        )
+
+    per_tile_support: list[list[tuple[float, int]]] = [[] for _ in range(num_tiles)]
+    nomination_counts = np.zeros((num_tiles,), dtype=np.int32)
+
+    for ref_row, ref_idx in enumerate(ref_indices.tolist()):
+        if ref_row >= tile_indices_by_ref.shape[0] or ref_row >= tile_sims_by_ref.shape[0]:
+            break
+        for tile_idx_raw, sim_raw in zip(tile_indices_by_ref[ref_row], tile_sims_by_ref[ref_row]):
+            tile_idx = int(tile_idx_raw)
+            if tile_idx < 0 or tile_idx >= num_tiles:
+                continue
+            nomination_counts[tile_idx] += 1
+            per_tile_support[tile_idx].append((float(sim_raw), int(ref_idx)))
+
+    neighbor_indices = np.full((num_tiles, max_refs_per_tile), -1, dtype=np.int32)
+    neighbor_sims = np.zeros((num_tiles, max_refs_per_tile), dtype=np.float32)
+    candidate_mask = nomination_counts > 0
+
+    for tile_idx, supports in enumerate(per_tile_support):
+        if not supports:
+            continue
+        supports.sort(key=lambda item: item[0], reverse=True)
+        limit = min(max_refs_per_tile, len(supports))
+        for pos in range(limit):
+            sim, ref_idx = supports[pos]
+            neighbor_indices[tile_idx, pos] = ref_idx
+            neighbor_sims[tile_idx, pos] = sim
+
+    return neighbor_indices, neighbor_sims, candidate_mask, nomination_counts
 
 
 def _ensure_reference_hnsw_index(
@@ -1152,34 +1230,15 @@ def _compute_reference_knn_scores(
     row_block_size: int,
     use_hnsw: bool | None = None,
     extractor_id: str = "uni2",
+    tiles_per_ref: int | None = None,
 ) -> ReferenceKNNScoring:
-    """Compute reference-based KNN scoring for WSI tiles.
-
-    Scoring philosophy for AML detection:
-    - "good" tiles = HIGH QUALITY tiles (clear nuclei, high cellularity, low artifact)
-    - "bad" tiles = LOW QUALITY tiles (blurry, folded, RBC-heavy, overstained, background)
-
-    Good tiles provide reliable morphological evidence for AML assessment.
-    Bad tiles are non-diagnostic and may introduce misleading signals.
-
-    Scoring strategy:
-    - Prioritize tiles similar to "good" reference tiles (high quality, interpretable)
-    - Deprioritize tiles similar to "bad" reference tiles (artifact, noise, uninformative)
-    - Uses aggregate similarity over K neighbors (not just top-1) for robustness
-
-    Args:
-        features_l2: WSI tile features (L2-normalized)
-        ref_features_l2: Reference tile features (L2-normalized)
-        ref_labels: Reference tile labels ("good" or "bad")
-        top_k: Number of neighbors to retrieve from each class
-        row_block_size: Block size for exact search (ignored if HNSW enabled)
-        use_hnsw: Whether to use HNSW indexing. None = auto-detect based on ref size
-    """
+    """Compute reference-based KNN scoring for WSI tiles."""
     rows = int(features_l2.shape[0]) if features_l2.ndim == 2 else 0
     empty_margin = np.zeros((rows,), dtype=np.float32)
     empty_like = np.full((rows,), 0.5, dtype=np.float32)
     empty_idx = np.empty((rows, 0), dtype=np.int32)
     empty_sims = np.empty((rows, 0), dtype=np.float32)
+    empty_mask = np.zeros((rows,), dtype=np.bool_)
 
     if features_l2.size == 0 or ref_features_l2.size == 0 or ref_labels.size == 0:
         return ReferenceKNNScoring(
@@ -1193,6 +1252,7 @@ def _compute_reference_knn_scores(
             bad_neighbor_sims=empty_sims,
             good_neighbor_indices=empty_idx,
             good_neighbor_sims=empty_sims,
+            candidate_mask=empty_mask,
         )
 
     bad_ref_ids = np.flatnonzero(ref_labels == "bad").astype(np.int32, copy=False)
@@ -1204,36 +1264,38 @@ def _compute_reference_knn_scores(
     bad_neighbor_sims = empty_sims
     good_neighbor_indices = empty_idx
     good_neighbor_sims = empty_sims
+    candidate_mask = empty_mask
 
-    # Determine whether to use HNSW
     if use_hnsw is None:
-        # Auto-detect: use HNSW if more than 100 reference tiles and hnswlib is available
         use_hnsw = hnswlib is not None and len(ref_labels) > 100
 
     hnsw_idx = None
+    mode_prefix = "exact"
     if use_hnsw and hnswlib is not None:
-        # Build or retrieve cached HNSW index
-        hnsw_idx, _, _, _ = _ensure_reference_hnsw_index(ref_features_l2, ref_labels, ref_paths, extractor_id=extractor_id)
+        hnsw_idx, _, _, _ = _ensure_reference_hnsw_index(
+            ref_features_l2,
+            ref_labels,
+            ref_paths,
+            extractor_id=extractor_id,
+        )
 
     if use_hnsw and hnsw_idx is not None:
-        # HNSW mode: query the index for all neighbors at once
         all_indices, all_sims = _hnsw_knn_query(hnsw_idx, features_l2, k=top_k * 2)
 
-        # Separate by label and build results
         bad_indices_list = []
         bad_sims_list = []
         good_indices_list = []
         good_sims_list = []
 
         for i in range(rows):
-            bad_idx = []
-            bad_sim = []
-            good_idx = []
-            good_sim = []
+            bad_idx: list[int] = []
+            bad_sim: list[float] = []
+            good_idx: list[int] = []
+            good_sim: list[float] = []
 
             for j in range(all_indices.shape[1]):
-                ref_idx = all_indices[i, j]
-                sim = all_sims[i, j]
+                ref_idx = int(all_indices[i, j])
+                sim = float(all_sims[i, j])
                 if ref_labels[ref_idx] == "bad":
                     bad_idx.append(ref_idx)
                     bad_sim.append(sim)
@@ -1241,7 +1303,6 @@ def _compute_reference_knn_scores(
                     good_idx.append(ref_idx)
                     good_sim.append(sim)
 
-            # Pad or truncate to top_k
             bad_idx = (bad_idx + [-1] * top_k)[:top_k]
             bad_sim = (bad_sim + [0.0] * top_k)[:top_k]
             good_idx = (good_idx + [-1] * top_k)[:top_k]
@@ -1252,14 +1313,12 @@ def _compute_reference_knn_scores(
             good_indices_list.append(good_idx)
             good_sims_list.append(good_sim)
 
-        bad_neighbor_indices = np.array(bad_indices_list, dtype=np.int32)
-        bad_neighbor_sims = np.array(bad_sims_list, dtype=np.float32)
-        good_neighbor_indices = np.array(good_indices_list, dtype=np.int32)
-        good_neighbor_sims = np.array(good_sims_list, dtype=np.float32)
+        bad_neighbor_indices = np.asarray(bad_indices_list, dtype=np.int32)
+        bad_neighbor_sims = np.asarray(bad_sims_list, dtype=np.float32)
+        good_neighbor_indices = np.asarray(good_indices_list, dtype=np.int32)
+        good_neighbor_sims = np.asarray(good_sims_list, dtype=np.float32)
         mode_prefix = "hnsw"
     else:
-        # Exact search mode
-        mode_prefix = "exact"
         if bad_ref_ids.size:
             bad_local_idx, bad_neighbor_sims = _exact_topk_reference_matches(
                 features_l2=features_l2,
@@ -1278,29 +1337,22 @@ def _compute_reference_knn_scores(
             )
             good_neighbor_indices = good_ref_ids[good_local_idx] if good_local_idx.size else empty_idx
 
-    # Compute aggregate scores over K neighbors (more robust than top-1 alone)
     bad_top1 = _top1_sims(bad_neighbor_sims, rows=rows)
     good_top1 = _top1_sims(good_neighbor_sims, rows=rows)
     bad_score_agg = _aggregate_knn_similarities(bad_neighbor_sims, method=AML_REFERENCE_AGGREGATION)
     good_score_agg = _aggregate_knn_similarities(good_neighbor_sims, method=AML_REFERENCE_AGGREGATION)
 
-    # AML scoring: higher = more AML-like (similar to good tiles, dissimilar to bad)
-    # margin = good_similarity - bad_similarity (positive = more AML-like)
     if bad_ref_ids.size and good_ref_ids.size:
-        # Use aggregate scores for robustness
         margin = (good_score_agg - bad_score_agg).astype(np.float32, copy=False)
         bad_like = _sigmoid((AML_REFERENCE_LOGIT_SCALE * (-margin)).astype(np.float32, copy=False))
-        # Rank by AML-likeness: how similar to good (AML) tiles, adjusted by bad dissimilarity
         rank_scores = good_score_agg.astype(np.float32, copy=False)
         mode = f"good_bad_{mode_prefix}_knn"
     elif bad_ref_ids.size:
-        # Only bad references: rank by dissimilarity to bad (normal marrow)
         margin = (-bad_score_agg).astype(np.float32, copy=False)
         bad_like = _sigmoid((AML_REFERENCE_LOGIT_SCALE * (-margin)).astype(np.float32, copy=False))
         rank_scores = (-bad_score_agg).astype(np.float32, copy=False)
         mode = f"bad_only_{mode_prefix}_knn"
     elif good_ref_ids.size:
-        # Only good references: rank by similarity to good (AML) tiles
         margin = good_score_agg.astype(np.float32, copy=False)
         bad_like = _sigmoid((AML_REFERENCE_LOGIT_SCALE * (-margin)).astype(np.float32, copy=False))
         rank_scores = good_score_agg.astype(np.float32, copy=False)
@@ -1322,6 +1374,7 @@ def _compute_reference_knn_scores(
         bad_neighbor_sims=bad_neighbor_sims,
         good_neighbor_indices=good_neighbor_indices,
         good_neighbor_sims=good_neighbor_sims,
+        candidate_mask=candidate_mask,
     )
 
 
@@ -1601,6 +1654,7 @@ def build_unsupervised_roi_index(
             reference_tile_paths=(),
             reference_tile_labels=(),
             reference_neighbor_k=0,
+            reference_candidate_mask=np.empty((0,), dtype=np.bool_),
             blast_neighbor_indices=np.empty((0, 0), dtype=np.int32),
             blast_neighbor_sims=np.empty((0, 0), dtype=np.float32),
             blast_reference_paths=(),
@@ -1621,6 +1675,7 @@ def build_unsupervised_roi_index(
     reference_tile_paths: tuple[str, ...] = ()
     reference_tile_labels: tuple[str, ...] = ()
     reference_neighbor_k = 0
+    reference_candidate_mask = np.zeros((num_tiles,), dtype=np.bool_)
     blast_scores = np.zeros((num_tiles,), dtype=np.float32)
     blast_neighbor_indices = np.empty((num_tiles, 0), dtype=np.int32)
     blast_neighbor_sims = np.empty((num_tiles, 0), dtype=np.float32)
@@ -1647,7 +1702,12 @@ def build_unsupervised_roi_index(
             "reference_tiles_bad_raw": int(bad_n_raw),
             "bad_references_enabled": not AML_DISABLE_BAD_REFERENCES,
             "reference_neighbor_k": int(AML_REFERENCE_TOP_K),
-            "reference_similarity": "cosine_hnsw" if (hnswlib is not None and AML_REFERENCE_USE_HNSW) else "cosine_exact",
+            "reference_tiles_per_ref": int(AML_REFERENCE_TILES_PER_REF),
+            "reference_similarity": (
+                "cosine_hnsw"
+                if (hnswlib is not None and AML_REFERENCE_USE_HNSW)
+                else "cosine_exact"
+            ),
             "ranking_strategy": "aggregate_knn_retrieval",
             "hnsw_enabled": hnswlib is not None and AML_REFERENCE_USE_HNSW,
             "hnsw_m": AML_REFERENCE_HNSW_M,
@@ -1700,6 +1760,7 @@ def build_unsupervised_roi_index(
                 row_block_size=AML_REFERENCE_QUERY_BLOCK_ROWS,
                 use_hnsw=AML_REFERENCE_USE_HNSW,
                 extractor_id=extractor_id,
+                tiles_per_ref=AML_REFERENCE_TILES_PER_REF,
             )
             bad_margin = retrieval.margin
             bad_likelihood = retrieval.bad_likelihood
@@ -1843,6 +1904,7 @@ def build_unsupervised_roi_index(
         reference_tile_paths=reference_tile_paths,
         reference_tile_labels=reference_tile_labels,
         reference_neighbor_k=reference_neighbor_k,
+        reference_candidate_mask=reference_candidate_mask,
         blast_neighbor_indices=blast_neighbor_indices,
         blast_neighbor_sims=blast_neighbor_sims,
         blast_reference_paths=blast_reference_paths,
@@ -1994,7 +2056,46 @@ def select_topk_candidates_for_view(
     if idxs.size == 0:
         return []
 
-    ranking_scores = index.scores[idxs].astype(np.float32, copy=False)
+    if index.reference_candidate_mask.size == index.num_tiles and np.any(index.reference_candidate_mask):
+        idxs = idxs[index.reference_candidate_mask[idxs]]
+        if idxs.size == 0:
+            return []
+
+    aml_like_reference_mode = str(index.reference_mode or "").startswith(("good_", "bad_"))
+    if aml_like_reference_mode and index.dark_roi_scores.size == index.num_tiles:
+        dark_scores_view = index.dark_roi_scores[idxs]
+        dark_keep = dark_scores_view >= AML_ABSOLUTE_MIN_DARK_SCORE
+        if int(np.count_nonzero(dark_keep)) >= int(top_k):
+            idxs = idxs[dark_keep]
+            if idxs.size == 0:
+                return []
+
+    retrieval_scores_view = index.scores[idxs].astype(np.float32, copy=False)
+    dark_scores_view = (
+        index.dark_roi_scores[idxs].astype(np.float32, copy=False)
+        if index.dark_roi_scores.size == index.num_tiles
+        else np.zeros((idxs.size,), dtype=np.float32)
+    )
+    quality_margin_view = (
+        index.bad_margin[idxs].astype(np.float32, copy=False)
+        if index.bad_margin.size == index.num_tiles
+        else np.zeros((idxs.size,), dtype=np.float32)
+    )
+    bad_like_view = (
+        index.bad_likelihood[idxs].astype(np.float32, copy=False)
+        if index.bad_likelihood.size == index.num_tiles
+        else np.full((idxs.size,), 0.5, dtype=np.float32)
+    )
+    if index.bad_neighbor_sims.ndim == 2 and index.bad_neighbor_sims.shape[0] == index.num_tiles and index.bad_neighbor_sims.shape[1] > 0:
+        bad_top1_view = index.bad_neighbor_sims[idxs, 0].astype(np.float32, copy=False)
+    else:
+        bad_top1_view = np.zeros((idxs.size,), dtype=np.float32)
+    if index.good_neighbor_sims.ndim == 2 and index.good_neighbor_sims.shape[0] == index.num_tiles and index.good_neighbor_sims.shape[1] > 0:
+        good_top1_view = index.good_neighbor_sims[idxs, 0].astype(np.float32, copy=False)
+    else:
+        good_top1_view = np.zeros((idxs.size,), dtype=np.float32)
+
+    ranking_scores = retrieval_scores_view
     dark_region_mode = "none"
     inside_dark_region_all: npt.NDArray[np.bool_] | None = None
     dark_box_prior_view: npt.NDArray[np.float32] | None = None
@@ -2024,186 +2125,55 @@ def select_topk_candidates_for_view(
         dark_box_prior_view = inside_dark_view.astype(np.float32, copy=False)
         dark_region_mode = "prioritized" if np.any(inside_dark_view) else "outside"
 
-    quality_prior_view: npt.NDArray[np.float32] | None = None
-    quality_penalty_view: npt.NDArray[np.float32] | None = None
-    good_support_view: npt.NDArray[np.bool_] | None = None
-    if index.bad_likelihood.size == index.num_tiles:
-        bad_like_view = index.bad_likelihood[idxs].astype(np.float32, copy=False)
-        bad_margin_view = (
-            index.bad_margin[idxs].astype(np.float32, copy=False)
-            if index.bad_margin.size == index.num_tiles
-            else np.zeros_like(bad_like_view)
-        )
-        bad_top1_view = (
-            _top1_sims(index.bad_neighbor_sims[idxs], rows=int(idxs.shape[0]))
-            if index.bad_neighbor_sims.ndim == 2 and index.bad_neighbor_sims.shape[0] == index.num_tiles
-            else np.zeros_like(bad_like_view)
-        )
-        good_top1_view = (
-            _top1_sims(index.good_neighbor_sims[idxs], rows=int(idxs.shape[0]))
-            if index.good_neighbor_sims.ndim == 2 and index.good_neighbor_sims.shape[0] == index.num_tiles
-            else np.zeros_like(bad_like_view)
-        )
-        low_quality_mask = _bad_reference_reject_mask(
-            bad_top1=bad_top1_view,
-            good_top1=good_top1_view,
-            bad_like=bad_like_view,
-            bad_margin=bad_margin_view,
-        )
-        good_support_view = (
-            (good_top1_view >= AML_SUPPORT_GOOD_TOP1_FLOOR)
-            & (bad_top1_view <= AML_SUPPORT_BAD_TOP1_CEILING)
-            & (bad_like_view <= AML_SUPPORT_BAD_LIKE_CEILING)
-        )
-        quality_keep = ~low_quality_mask
-        if int(np.count_nonzero(quality_keep)) >= 2:
-            idxs = idxs[quality_keep]
-            ranking_scores = ranking_scores[quality_keep]
-            if dark_box_prior_view is not None and dark_box_prior_view.size == quality_keep.size:
-                dark_box_prior_view = dark_box_prior_view[quality_keep]
-            bad_like_view = bad_like_view[quality_keep]
-            bad_margin_view = bad_margin_view[quality_keep]
-            bad_top1_view = bad_top1_view[quality_keep]
-            good_top1_view = good_top1_view[quality_keep]
-            if good_support_view is not None and good_support_view.size == quality_keep.size:
-                good_support_view = good_support_view[quality_keep]
-
-        borderline_bad_mask = (
-            (bad_like_view >= AML_BORDERLINE_BAD_LIKELIHOOD)
-            & (bad_margin_view <= AML_BORDERLINE_BAD_MARGIN_MAX)
-            & (good_top1_view <= (bad_top1_view + AML_BORDERLINE_BAD_TOP1_GAP))
-        )
-        if good_support_view is not None and good_support_view.size == borderline_bad_mask.size:
-            borderline_bad_mask = borderline_bad_mask & ~good_support_view
-        borderline_keep = ~borderline_bad_mask
-        if int(np.count_nonzero(borderline_keep)) >= 2 and int(np.count_nonzero(borderline_bad_mask)) > 0:
-            idxs = idxs[borderline_keep]
-            ranking_scores = ranking_scores[borderline_keep]
-            if dark_box_prior_view is not None and dark_box_prior_view.size == borderline_keep.size:
-                dark_box_prior_view = dark_box_prior_view[borderline_keep]
-            bad_like_view = bad_like_view[borderline_keep]
-            bad_margin_view = bad_margin_view[borderline_keep]
-            bad_top1_view = bad_top1_view[borderline_keep]
-            good_top1_view = good_top1_view[borderline_keep]
-            if good_support_view is not None and good_support_view.size == borderline_keep.size:
-                good_support_view = good_support_view[borderline_keep]
-
+    if aml_like_reference_mode:
         similarity_gap_view = (good_top1_view - bad_top1_view).astype(np.float32, copy=False)
         quality_prior_view = (
-            AML_QUALITY_PRIOR_BAD_MARGIN_WEIGHT * bad_margin_view
+            AML_QUALITY_PRIOR_BAD_MARGIN_WEIGHT * quality_margin_view
             + AML_QUALITY_PRIOR_SIMILARITY_GAP_WEIGHT * similarity_gap_view
         ).astype(np.float32, copy=False)
         bad_like_soft_penalty = np.clip(
-            (
-                bad_like_view - AML_BAD_LIKE_SOFT_PENALTY_BASELINE
-            ) / max(AML_BAD_LIKE_REJECT_THRESHOLD - AML_BAD_LIKE_SOFT_PENALTY_BASELINE, 1e-6),
+            (bad_like_view - AML_BAD_LIKE_SOFT_PENALTY_BASELINE)
+            / max(1e-6, 1.0 - AML_BAD_LIKE_SOFT_PENALTY_BASELINE),
             0.0,
             1.0,
-        )
+        ).astype(np.float32, copy=False)
         bad_match_soft_penalty = np.clip(
-            (bad_top1_view - good_top1_view + AML_BAD_MATCH_SOFT_PENALTY_OFFSET) / AML_BAD_MATCH_SOFT_PENALTY_SCALE,
+            (bad_top1_view - good_top1_view + AML_BAD_MATCH_SOFT_PENALTY_OFFSET)
+            / max(1e-6, AML_BAD_MATCH_SOFT_PENALTY_SCALE),
             0.0,
             1.0,
-        )
+        ).astype(np.float32, copy=False)
         quality_penalty_view = (
             AML_QUALITY_PENALTY_BAD_LIKE_WEIGHT * bad_like_soft_penalty
             + AML_QUALITY_PENALTY_BAD_MATCH_WEIGHT * bad_match_soft_penalty
         ).astype(np.float32, copy=False)
-
-    dark_view_scores: npt.NDArray[np.float32] | None = None
-    # dark_roi_scores is the PRIMARY signal for AML tile selection.
-    # Novelty/centroid scores prefer unusual (often sparse) tiles; dark_roi_scores
-    # directly measure purple-basophilic cellularity which is what we want.
-    if index.dark_roi_scores.size == index.num_tiles:
-        dark_view_scores = index.dark_roi_scores[idxs].astype(np.float32, copy=False)
-
-        # ABSOLUTE MINIMUM THRESHOLD: Reject tiles with very low cellularity
-        # Score < 0.25 typically indicates acellular/light-stain material
-        # This is a HARD FILTER — light stain-only tiles must not be candidates
-        if dark_view_scores.size > 0:
-            cellular_mask = dark_view_scores >= AML_ABSOLUTE_MIN_DARK_SCORE
-            if good_support_view is not None and good_support_view.size == dark_view_scores.size:
-                cellular_mask = cellular_mask | good_support_view
-            if int(np.count_nonzero(cellular_mask)) >= 2:
-                idxs = idxs[cellular_mask]
-                ranking_scores = ranking_scores[cellular_mask]
-                if dark_box_prior_view is not None and dark_box_prior_view.size == cellular_mask.size:
-                    dark_box_prior_view = dark_box_prior_view[cellular_mask]
-                dark_view_scores = dark_view_scores[cellular_mask]
-                if quality_prior_view is not None and quality_prior_view.size == cellular_mask.size:
-                    quality_prior_view = quality_prior_view[cellular_mask]
-                if quality_penalty_view is not None and quality_penalty_view.size == cellular_mask.size:
-                    quality_penalty_view = quality_penalty_view[cellular_mask]
-                if good_support_view is not None and good_support_view.size == cellular_mask.size:
-                    good_support_view = good_support_view[cellular_mask]
-
-        # HARD MINIMUM THRESHOLD: Filter out tiles below minimum dark score percentile
-        # This prevents empty/background tiles from being returned as candidates
-        if dark_view_scores.size > 0:
-            dark_min_floor = float(np.percentile(dark_view_scores, AML_MIN_DARK_SCORE_PERCENTILE))
-            dark_min_keep = dark_view_scores >= dark_min_floor
-            if good_support_view is not None and good_support_view.size == dark_view_scores.size:
-                dark_min_keep = dark_min_keep | good_support_view
-            # Only apply if we still have enough candidates after filtering
-            if int(np.count_nonzero(dark_min_keep)) >= 2:
-                idxs = idxs[dark_min_keep]
-                ranking_scores = ranking_scores[dark_min_keep]
-                if dark_box_prior_view is not None and dark_box_prior_view.size == dark_min_keep.size:
-                    dark_box_prior_view = dark_box_prior_view[dark_min_keep]
-                dark_view_scores = dark_view_scores[dark_min_keep]
-                if quality_prior_view is not None and quality_prior_view.size == dark_min_keep.size:
-                    quality_prior_view = quality_prior_view[dark_min_keep]
-                if quality_penalty_view is not None and quality_penalty_view.size == dark_min_keep.size:
-                    quality_penalty_view = quality_penalty_view[dark_min_keep]
-                if good_support_view is not None and good_support_view.size == dark_min_keep.size:
-                    good_support_view = good_support_view[dark_min_keep]
-
-        # Percentile-based filtering for top candidates
-        if dark_view_scores.size >= max(int(AML_DARK_VIEW_MIN_TILES), int(top_k) * 2):
-            dark_floor = float(np.percentile(dark_view_scores, AML_DARK_VIEW_PERCENTILE))
-            dark_keep = dark_view_scores >= dark_floor
-            if good_support_view is not None and good_support_view.size == dark_view_scores.size:
-                dark_keep = dark_keep | good_support_view
-            if int(np.count_nonzero(dark_keep)) >= int(top_k):
-                idxs = idxs[dark_keep]
-                ranking_scores = ranking_scores[dark_keep]
-                if dark_box_prior_view is not None and dark_box_prior_view.size == dark_keep.size:
-                    dark_box_prior_view = dark_box_prior_view[dark_keep]
-                dark_view_scores = dark_view_scores[dark_keep]
-                if quality_prior_view is not None and quality_prior_view.size == dark_keep.size:
-                    quality_prior_view = quality_prior_view[dark_keep]
-                if quality_penalty_view is not None and quality_penalty_view.size == dark_keep.size:
-                    quality_penalty_view = quality_penalty_view[dark_keep]
-                if good_support_view is not None and good_support_view.size == dark_keep.size:
-                    good_support_view = good_support_view[dark_keep]
-
-        if dark_view_scores.size:
-            # Cellularity remains primary, but allow quality evidence to keep gray-black
-            # trash from dominating the candidate list.
-            combined_rank = (
-                AML_COMBINED_RANK_DARK_WEIGHT * _zscore(dark_view_scores)
-                + AML_COMBINED_RANK_BASE_SCORE_WEIGHT * _zscore(ranking_scores)
-            )
-            if quality_prior_view is not None and quality_prior_view.size == dark_view_scores.size:
-                combined_rank = combined_rank + (AML_COMBINED_RANK_QUALITY_PRIOR_WEIGHT * _zscore(quality_prior_view))
-            if quality_penalty_view is not None and quality_penalty_view.size == dark_view_scores.size:
-                combined_rank = combined_rank - (AML_COMBINED_RANK_QUALITY_PENALTY_WEIGHT * quality_penalty_view)
-            if good_support_view is not None and good_support_view.size == dark_view_scores.size:
-                combined_rank = combined_rank + (
-                    AML_COMBINED_RANK_GOOD_SUPPORT_BONUS * good_support_view.astype(np.float32, copy=False)
-                )
-            if dark_box_prior_view is not None and dark_box_prior_view.size == dark_view_scores.size:
-                combined_rank = combined_rank + (AML_DARK_REGION_BOX_PRIOR_WEIGHT * dark_box_prior_view)
-            ranking_scores = combined_rank.astype(np.float32, copy=False)
-    elif dark_box_prior_view is not None and dark_box_prior_view.size == ranking_scores.size:
-        ranking_scores = ranking_scores + (AML_DARK_REGION_BOX_PRIOR_WEIGHT * dark_box_prior_view)
+        ranking_scores = (
+            AML_COMBINED_RANK_DARK_WEIGHT * _zscore(dark_scores_view)
+            + AML_COMBINED_RANK_BASE_SCORE_WEIGHT * _zscore(retrieval_scores_view)
+            + AML_COMBINED_RANK_QUALITY_PRIOR_WEIGHT * _zscore(quality_prior_view)
+            - AML_COMBINED_RANK_QUALITY_PENALTY_WEIGHT * quality_penalty_view
+        ).astype(np.float32, copy=False)
+        strong_good_support_view = (
+            (good_top1_view >= AML_SUPPORT_GOOD_TOP1_FLOOR)
+            & (bad_top1_view <= AML_SUPPORT_BAD_TOP1_CEILING)
+            & (bad_like_view <= AML_SUPPORT_BAD_LIKE_CEILING)
+        )
+        if np.any(strong_good_support_view):
+            ranking_scores = (
+                ranking_scores
+                + AML_COMBINED_RANK_GOOD_SUPPORT_BONUS * strong_good_support_view.astype(np.float32, copy=False)
+            ).astype(np.float32, copy=False)
+        if dark_box_prior_view is not None:
+            ranking_scores = (
+                ranking_scores + AML_DARK_REGION_BOX_PRIOR_WEIGHT * dark_box_prior_view
+            ).astype(np.float32, copy=False)
 
     order_local = np.argsort(ranking_scores)[::-1]
     order = idxs[order_local]
     ordered_rank_scores = ranking_scores[order_local]
     ordered_dark_scores = (
-        dark_view_scores[order_local]
-        if isinstance(dark_view_scores, np.ndarray) and dark_view_scores.size == order_local.size
+        index.dark_roi_scores[order][:]
+        if index.dark_roi_scores.size == index.num_tiles
         else None
     )
     # Keep candidates spatially distinct: require near-tile-sized center spacing.
@@ -2315,6 +2285,11 @@ def select_topk_candidates_for_view(
         )
 
         good_only_reference_mode = str(index.reference_mode or "").startswith("good_only")
+        strong_good_support = (
+            good_top1 >= AML_SUPPORT_GOOD_TOP1_FLOOR
+            and bad_top1 <= AML_SUPPORT_BAD_TOP1_CEILING
+            and bad_like <= AML_SUPPORT_BAD_LIKE_CEILING
+        )
 
         if good_only_reference_mode:
             retrieval_good = quality_margin > AML_QUALITY_REJECT_MARGIN
@@ -2333,7 +2308,9 @@ def select_topk_candidates_for_view(
                     and good_top1 <= (bad_top1 + AML_BORDERLINE_BAD_TOP1_GAP)
                 )
             )
-        bad_reference_reject = False if good_only_reference_mode else _bad_reference_is_rejected(
+        if strong_good_support:
+            retrieval_bad = False
+        bad_reference_reject = False if (good_only_reference_mode or strong_good_support) else _bad_reference_is_rejected(
             bad_top1=bad_top1,
             good_top1=good_top1,
             bad_like=bad_like,

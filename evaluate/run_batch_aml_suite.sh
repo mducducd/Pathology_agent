@@ -13,6 +13,8 @@ CUDA_DEVICE=""
 TILE_FILTER="hybrid"
 TILE_SIZE_PX="224"
 BATCH_SIZE="512"
+ROI_SIZE_PX="2048"
+DEFAULT_MPP_UM="0.159"
 AGENT="aml"
 RESUME=true
 USE_TILE_CACHE=true
@@ -40,6 +42,8 @@ Options:
   --cuda-device ID           Set CUDA_VISIBLE_DEVICES, e.g. 1
   --extractors LIST          Comma-separated extractors to keep, e.g. reddino
   --tile-filter NAME         Tile prefilter method, e.g. hybrid or coarse
+  --roi-size-px N            AML ROI size in pixels, default 2048
+  --default-mpp-um FLOAT     Preferred MPP override, default 0.159
   --use-tile-cache
   --resume
   -h, --help
@@ -56,6 +60,8 @@ while [[ $# -gt 0 ]]; do
         --cuda-device) CUDA_DEVICE="$2"; shift 2 ;;
         --extractors) EXTRACTORS_FILTER="$2"; shift 2 ;;
         --tile-filter) TILE_FILTER="$2"; shift 2 ;;
+        --roi-size-px) ROI_SIZE_PX="$2"; shift 2 ;;
+        --default-mpp-um) DEFAULT_MPP_UM="$2"; shift 2 ;;
         --use-tile-cache) USE_TILE_CACHE=true; shift ;;
         --resume) RESUME=true; shift ;;
         -h|--help) usage; exit 0 ;;
@@ -76,12 +82,12 @@ mkdir -p "$BASE_OUTPUT_ROOT"
 RUNS=(
     
     
-    "GLM-4.6V-FP8|uni2|GLM-4.6V-FP8_UNI2_224px"
-    "GLM-4.6V-FP8|dinobloom_giant|GLM-4.6V-FP8_DinoBloom-G_224px"
-    "GLM-4.6V-FP8|virchow2|GLM-4.6V-FP8_Virchow2_224px"
-    "GLM-4.6V-FP8|h_optimus_1|GLM-4.6V-FP8_H-optimus-1_224px"
+    "GPT-OSS-120B|uni2|test_GPT-OSS-120B_UNI2_224px"
+    "GPT-OSS-120B|dinobloom_giant|test_GPT-OSS-120B_DinoBloom-G_224px"
+    # "GPT-OSS-120B|virchow2|GPT-OSS-120B_Virchow2_224px"
+    # "GPT-OSS-120B|h_optimus_1|GPT-OSS-120B_H-optimus-1_224px"
     
-    "GLM-4.6V-FP8|dinobloom|GLM-4.6V-FP8_DinoBloom-S_224px"
+    # "GPT-OSS-120B|dinobloom|GPT-OSS-120B_DinoBloom-S_224px"
 )   
 
 FILTERED_RUNS=()
@@ -115,6 +121,8 @@ echo " Agent:            $AGENT"
 echo " Tile filter:      $TILE_FILTER"
 echo " Tile size:        ${TILE_SIZE_PX}px"
 echo " Batch size:       $BATCH_SIZE"
+echo " ROI size:         ${ROI_SIZE_PX}px"
+echo " Default MPP:      ${DEFAULT_MPP_UM}"
 echo " Tile cache:       $USE_TILE_CACHE"
 echo " CUDA devices:     ${CUDA_VISIBLE_DEVICES:-all}"
 echo " Cache root:       $BASE_OUTPUT_ROOT"
@@ -156,6 +164,8 @@ for spec in "${FILTERED_RUNS[@]}"; do
         --tile-filter "$TILE_FILTER"
         --tile-size-px "$TILE_SIZE_PX"
         --batch-size "$BATCH_SIZE"
+        --roi-size-px "$ROI_SIZE_PX"
+        --default-mpp-um "$DEFAULT_MPP_UM"
         --agent "$AGENT"
     )
 

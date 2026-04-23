@@ -43,6 +43,7 @@ ALLOWED_MODEL_NAMES = {
     "GLM-4.6V-FP8",
     "GPT-OSS-120B",
     "qwen3.5-35b-a3b",
+    "qwen3-vl-32b-thinking-fp8",
     "Qwen3.5-397B-A17B-FP8",
     "gpt-oss-20b",
     "gemma-4-31B-it",
@@ -92,6 +93,10 @@ class RunStatus(BaseModel):
     tile_size_um: float = 256.0
     batch_size: int = 128
     tile_prefilter_method: str = "quality"
+    roi_output_size_px: int = 1024
+    max_accepted_rois: int = 10
+    target_accepted_rois: int = 5
+    default_mpp_um: Optional[float] = 0.159
     slide_filename: str       # filled after finalize
     slide_path: Optional[str] = None
     final_output: Optional[str] = None
@@ -683,6 +688,10 @@ def run_worker(
             tile_size_px=run.tile_size_px,
             batch_size=run.batch_size,
             tile_prefilter_method=run.tile_prefilter_method,
+            roi_output_size_px=run.roi_output_size_px,
+            max_accepted_rois=run.max_accepted_rois,
+            target_accepted_rois=run.target_accepted_rois,
+            default_mpp_um=run.default_mpp_um,
         )
         fatal_error: Optional[str] = None
         if isinstance(result, dict):
@@ -780,6 +789,10 @@ async def create_run(
     tile_size_um: float = Form(256.0),
     batch_size: int = Form(128),
     tile_prefilter_method: str = Form("quality"),
+    roi_output_size_px: int = Form(1024),
+    max_accepted_rois: int = Form(10),
+    target_accepted_rois: int = Form(5),
+    default_mpp_um: str = Form("0.159"),
 ):
     agent_type_lower = agent_type.lower()
     if agent_type_lower not in {"tile", "wsi", "aml"}:
@@ -806,6 +819,25 @@ async def create_run(
         raise HTTPException(status_code=400, detail="tile_size_um must be > 0.")
     if batch_size <= 0:
         raise HTTPException(status_code=400, detail="batch_size must be > 0.")
+    if roi_output_size_px < 640 or roi_output_size_px > 5000:
+        raise HTTPException(status_code=400, detail="roi_output_size_px must be between 640 and 5000.")
+    if max_accepted_rois < 1 or max_accepted_rois > 20:
+        raise HTTPException(status_code=400, detail="max_accepted_rois must be between 1 and 20.")
+    if target_accepted_rois < 1 or target_accepted_rois > 20:
+        raise HTTPException(status_code=400, detail="target_accepted_rois must be between 1 and 20.")
+    target_accepted_rois = min(max_accepted_rois, target_accepted_rois)
+
+    default_mpp_um = default_mpp_um.strip()
+    default_mpp_um_value: Optional[float]
+    if default_mpp_um:
+        try:
+            default_mpp_um_value = float(default_mpp_um)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="default_mpp_um must be a valid number.") from exc
+        if default_mpp_um_value <= 0:
+            raise HTTPException(status_code=400, detail="default_mpp_um must be > 0.")
+    else:
+        default_mpp_um_value = None
 
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S_") + uuid.uuid4().hex[:6]
     run_dir = BASE_RUN_DIR / run_id / "uploads"
@@ -823,6 +855,10 @@ async def create_run(
         tile_size_um=tile_size_um,
         batch_size=batch_size,
         tile_prefilter_method=tile_prefilter_method,
+        roi_output_size_px=roi_output_size_px,
+        max_accepted_rois=max_accepted_rois,
+        target_accepted_rois=target_accepted_rois,
+        default_mpp_um=default_mpp_um_value,
         slide_filename="(upload pending)",
         slide_path=None,
         upload_count=0,
@@ -1071,7 +1107,10 @@ def get_run(run_id: str):
             dp = roi.get("debug_path")
             roi["image_url"] = make_debug_image_url(dp)
 
-    if wsi_state and wsi_state.get("last_overview_with_box_path"):
+    if wsi_state and wsi_state.get("last_overview_debug_path"):
+        overview_path = wsi_state["last_overview_debug_path"]
+        wsi_state["overview_image_url"] = make_debug_image_url(overview_path)
+    elif wsi_state and wsi_state.get("last_overview_with_box_path"):
         overview_path = wsi_state["last_overview_with_box_path"]
         wsi_state["overview_image_url"] = make_debug_image_url(overview_path)
     elif wsi_state is not None:

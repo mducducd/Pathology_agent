@@ -35,7 +35,7 @@ _real_sync_chat_create = client_sync.chat.completions.create
 _patch_installed = False
 _data_url_cache: OrderedDict[tuple[str, int, int], Optional[str]] = OrderedDict()
 
-CONTEXT_IMAGE_MAX_DIM = int(os.getenv("CONTEXT_IMAGE_MAX_DIM", "512"))
+CONTEXT_IMAGE_MAX_DIM = int(os.getenv("CONTEXT_IMAGE_MAX_DIM", "256"))
 CONTEXT_IMAGE_JPEG_QUALITY = int(os.getenv("CONTEXT_IMAGE_JPEG_QUALITY", "55"))
 CONTEXT_MAX_INLINE_IMAGES = int(os.getenv("CONTEXT_MAX_INLINE_IMAGES", "6"))
 CONTEXT_MAX_INLINE_IMAGE_URL_CHARS = int(os.getenv("CONTEXT_MAX_INLINE_IMAGE_URL_CHARS", "90000"))
@@ -381,37 +381,57 @@ def _inject_wsi_images(
     new_messages = list(messages)
     insert_pos = last_tool_idx + 1
 
-    curr_path = state._current_view.get("debug_path") if state._current_view else None
-    current_view_part = _make_image_part(curr_path or "", budget) if curr_path else None
-    if current_view_part:
-        fw = state._current_view.get("field_width_um")
-        extra = _format_field_width_caption(fw)
-
-        if tool_name == "wsi_mark_roi_norm" and state._roi_marks:
-            last_roi = state._roi_marks[-1]
+    if tool_name in {"wsi_mark_roi_norm", "wsi_mark_candidate"} and state._roi_marks:
+        last_roi = state._roi_marks[-1]
+        marked_roi_path = last_roi.get("debug_path")
+        marked_roi_part = _make_image_part(marked_roi_path or "", budget) if marked_roi_path else None
+        if marked_roi_part:
             roi_id = last_roi.get("roi_id")
             label = last_roi.get("label", "")
+            roi_fw = last_roi.get("field_width_um")
+            roi_extra = _format_field_width_caption(roi_fw)
             ref_evidence = last_roi.get("aml_reference_evidence") if isinstance(last_roi.get("aml_reference_evidence"), dict) else None
             ref_extra = ""
             if _agent_type() == "aml" and ref_evidence:
                 summary = ref_evidence.get("summary")
                 if isinstance(summary, str) and summary:
                     ref_extra = f" Retrieval evidence for this ROI: {summary}."
+            next_rank_hint = last_roi.get("next_candidate_rank_hint")
+            next_jump_text = (
+                f" If you still need another ROI after that decision, continue with candidate #{int(next_rank_hint)} next."
+                if isinstance(next_rank_hint, int)
+                else " If you still need another ROI after that decision, jump directly to the next unvisited candidate."
+            )
             text = (
-                f"CURRENT VIEW = NEWLY MARKED ROI (ROI #{roi_id}: {label}{extra}). "
-                "Carefully inspect this high-power field. If it is mostly background or "
-                "not diagnostic, your very next action should be to call "
-                "wsi_discard_last_roi. All coordinates for any subsequent tool call must "
-                "be chosen relative to THIS image."
+                f"NEWLY MARKED ROI (ROI #{roi_id}: {label}{roi_extra}). "
+                "This ROI has been kept as evidence. If it is actually mostly background or not diagnostic on review, "
+                "your very next action should be to call wsi_discard_last_roi. "
+                + next_jump_text
+                + " The system may already have advanced CURRENT VIEW to the next candidate for navigation, "
+                "so do not use this ROI image for coordinate selection."
                 + ref_extra
             )
-        else:
-            text = (
-                f"CURRENT VIEW for navigation{extra}. "
-                "All coordinates for your NEXT tool call must be chosen relative to THIS "
-                "image. Do NOT select boxes centered on blank/white background; always "
-                "place boxes tightly around tissue."
-            )
+            marked_roi_msg = {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": text},
+                    marked_roi_part,
+                ],
+            }
+            new_messages.insert(insert_pos, _tag_context_message(marked_roi_msg, "latest_marked_roi"))
+            insert_pos += 1
+
+    curr_path = state._current_view.get("debug_path") if state._current_view else None
+    current_view_part = _make_image_part(curr_path or "", budget) if curr_path else None
+    if current_view_part:
+        fw = state._current_view.get("field_width_um")
+        extra = _format_field_width_caption(fw)
+        text = (
+            f"CURRENT VIEW for navigation{extra}. "
+            "All coordinates for your NEXT tool call must be chosen relative to THIS "
+            "image. Do NOT select boxes centered on blank/white background; always "
+            "place boxes tightly around tissue."
+        )
 
         current_view_msg = {
             "role": "user",
@@ -425,15 +445,27 @@ def _inject_wsi_images(
 
     if _agent_type() == "aml":
         kept_roi_count = len(state._roi_marks)
+        max_accepted_rois = max(1, int(getattr(state, "MAX_ACCEPTED_ROIS", 10) or 10))
+        target_roi_count = min(
+            max_accepted_rois,
+            max(1, int(getattr(state, "TARGET_ACCEPTED_ROIS", 5) or 5)),
+        )
         aml_stop_lines = [
             "AML efficiency reminder:",
-            "- If the evidence you already have is enough to make the final AML decision "
-            "(Normal marrow / Acute leukemia / Call for more diagnostics), stop calling tools now and give the final answer.",
-            "- Do NOT explore another ROI unless it could materially change the final category or blast estimate.",
+            f"- Soft goal: target {target_roi_count} kept ROIs from distinct regions for AML if feasible.",
+            f"- Hard stop: do not exceed {max_accepted_rois} kept ROIs.",
         ]
-        if kept_roi_count >= 2:
+        if kept_roi_count >= max_accepted_rois:
             aml_stop_lines.append(
-                f"- You already have {kept_roi_count} kept ROI(s); this is often enough for a final AML decision."
+                f"- Hard cap reached: {kept_roi_count}/{max_accepted_rois} kept ROI(s). Stop calling ROI tools and give the final AML decision."
+            )
+        elif kept_roi_count < target_roi_count:
+            aml_stop_lines.append(
+                f"- Current progress: {kept_roi_count}/{target_roi_count} toward the soft goal. Keep searching for additional distinct AML ROIs."
+            )
+        else:
+            aml_stop_lines.append(
+                f"- Soft goal reached: {kept_roi_count}/{target_roi_count} kept ROI(s). Final AML decision is now allowed if the evidence is stable; only add more ROIs if they could materially change the decision before the hard cap."
             )
         if kept_roi_count:
             aml_stop_lines.append("- Kept ROI reference evidence:")
@@ -448,7 +480,16 @@ def _inject_wsi_images(
         )
         insert_pos += 1
 
-    if state._last_roi_candidates:
+    latest_roi_debug_path = ""
+    if state._roi_marks:
+        latest_roi_debug_path = str(state._roi_marks[-1].get("debug_path") or "")
+    current_view_debug_path = str(state._current_view.get("debug_path") or "") if state._current_view else ""
+    mark_tool_names = {"wsi_mark_roi_norm", "wsi_mark_candidate"}
+    should_include_current_candidates = bool(state._last_roi_candidates) and (
+        tool_name not in mark_tool_names or current_view_debug_path != latest_roi_debug_path
+    )
+
+    if should_include_current_candidates:
         source = state._last_roi_candidate_source or "unknown"
         cand_lines = []
         for c in state._last_roi_candidates[:max(1, CONTEXT_ROI_CANDIDATE_LINES_MAX)]:
@@ -467,6 +508,7 @@ def _inject_wsi_images(
             bad_refs = c.get("retrieved_bad_refs")
             good_refs = c.get("retrieved_good_refs")
             blast_refs = c.get("retrieved_blast_refs")
+            nav_bbox = c.get("navigation_bbox_norm")
             extras = []
             if isinstance(quality_hint, str) and quality_hint:
                 extras.append(f"hint={quality_hint}")
@@ -480,6 +522,10 @@ def _inject_wsi_images(
                 extras.append(f"good_top1={float(good_top1):.2f}")
             if isinstance(blast_top1, (int, float)):
                 extras.append(f"blast_top1={float(blast_top1):.2f}")
+            if isinstance(nav_bbox, list) and len(nav_bbox) == 4:
+                extras.append(
+                    f"nav_box=({int(nav_bbox[0])},{int(nav_bbox[1])},{int(nav_bbox[2])},{int(nav_bbox[3])})"
+                )
             if bad_refs_active and isinstance(bad_refs, list) and bad_refs:
                 top_bad = bad_refs[0]
                 sim = top_bad.get("similarity")
@@ -537,9 +583,10 @@ def _inject_wsi_images(
             "Top ROI candidates for CURRENT VIEW (normalized 0-999 coordinates). "
             f"Candidate source: {source}. "
             f"Expected source is '{expected_source_name}' from {expected_source} "
+            "Prefer wsi_open_candidate(rank) for the first jump into an approximately 1500 um field around a candidate, then choose the best local ROI region yourself with wsi_mark_roi_norm or skip. navigation_bbox_norm is available as a coordinate fallback. "
             "Interpret quality_hint as support from good-quality ROI references only, not as a diagnosis and not as a guarantee of cellularity by itself. "
-            "Prefer good_like candidates, use uncertain only if still clearly cellular, and rely on morphology to reject trash. "
-            "Use blast_top1/blast_nn as separate blast-reference evidence, prioritize deep blue-purple cellular candidates first, treat dark red-pink as a rare fallback only when clearly cellular, prefer fields with many separate crisp round purple cells, and discard stringy, gray-black, acellular, or broad gray-clump ROIs even if they look dark or have a favorable quality_hint. "
+            "Prefer good_like candidates first, but uncertain candidates are still acceptable when they look interpretable, reasonably cellular, and morphologically informative. "
+            "Use blast_top1/blast_nn as separate blast-reference evidence, prioritize deep blue-purple cellular candidates first, treat dark red-pink as a fallback only when clearly cellular, prefer fields with many separate crisp round purple cells, and reject only clearly trash regions such as stringy, gray-black, acellular, or broad gray-clump ROIs. "
             "For wsi_mark_roi_norm, choose one of these candidate centers/bboxes; arbitrary ROI coords are rejected:\n"
             + "\n".join(cand_lines)
             + aml_meta_line

@@ -121,11 +121,11 @@ RUNS=(
     # "dinobloom_base|DinoBloom-B"
     # "dinobloom_large|DinoBloom-L"
    
-    # "virchow2|Virchow2"
-    # "h_optimus_1|H-optimus-1"
+    "virchow2|Virchow2"
+    "h_optimus_1|H-optimus-1"
     "dinobloom|DinoBloom-S"
     
-    # "uni2|UNI2-h"
+    "uni2|UNI2-h"
     
     # "reddino|RedDino-Small"
     # "reddino_base|RedDino-base"

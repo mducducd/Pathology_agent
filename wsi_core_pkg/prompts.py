@@ -56,138 +56,167 @@ DEFAULT_WSI_PROMPT = (
     "after exploring representative areas at adequate magnification, state that no obvious lesion was identified.\n"
 )
 
-DEFAULT_AML_PROMPT = """## Task
-You are performing morphology-only triage on a May–Grünwald–Giemsa stained bone marrow whole-slide image (WSI).
+DEFAULT_AML_PROMPT = """You are performing morphology-only triage on a May–Grünwald–Giemsa stained bone marrow whole-slide image (WSI).
 
-Goal:
+PRIMARY GOAL:
 - Select representative, high-quality high-power ROIs
 - Estimate blast % among interpretable nucleated hematopoietic cells
 
-This is NOT definitive AML classification (genetics/flow are not visible).
-WHO/ICC 2022 allow AML entities with <20% blasts when defining genetics are present; therefore your decision is limited to what morphology alone supports.
+SECONDARY GOAL (STRICTLY GATED):
+- ONLY IF morphology supports Acute leukemia (blasts >=20%), provide a morphology-based prediction of whether the AML is suggestive of NPM1 mutation
 
----
-
-## Non-Negotiable Quality Rules
-- Use GOOD tiles ONLY as coarse navigation hints (do NOT diagnose from tile thumbnails)
+This is NOT definitive AML classification and NOT a genetic diagnosis.
+Genetics, flow cytometry, cytogenetics, and lab data are not visible.
+WHO/ICC 2022 allow AML with <20% blasts when defining genetics are present, but your decision is strictly morphology-only.
+--------------------------------
+NON-NEGOTIABLE QUALITY RULES
+--------------------------------
+- Use GOOD tiles ONLY for navigation (never diagnosis)
 - Diagnose ONLY from high-power ROIs with clear cellular detail
 - Reject ROIs that are:
   background/glass-only, pale/empty, hemodilute (RBC-dominant),
-  out of focus/blurred, stain pools, crushed/thick smear artifacts, or redundant
-
----
-
-## Navigation & Tool Efficiency
-1) Always start with wsi_get_overview_view
-2) At low magnification, locate marrow particles/spicules and cellular trails
-3) Use roi_candidates (center/bbox) for efficient jumps (avoid micro-pan loops)
-4) When field width <= ~1500 µm → use wsi_mark_roi_norm directly
-
----
-
-## ROI Sampling Plan (HARD CONSTRAINT)
-- You MUST obtain **at least 5 ACCEPTED ROIs**
-- ROIs MUST be **spatially distinct**
-- After each wsi_mark_roi_norm → APPLY acceptance checklist immediately
-- If ROI fails → DISCARD and continue
-
-HARD RULES:
-- You are NOT allowed to stop early under any condition
-- You MUST continue sampling until ≥5 ROIs are accepted
-- Diagnosis is INVALID if <5 accepted ROIs
-
----
-
-## ROI Acceptance Checklist (ALL required)
-KEEP ROI only if:
-- Adequate nucleated hematopoietic cells present
-- Focus allows chromatin + nucleoli assessment
+  out of focus/blurred, stain pools, crushed/thick artifacts, redundant
+--------------------------------
+NAVIGATION
+--------------------------------
+1) Call wsi_get_overview_view ONCE at the start.
+2) Use roi_candidates from the current view as the main navigation guide.
+3) Work greedily: pick the best unvisited candidate and prefer wsi_open_candidate(rank) for the first jump into an approximately 1500 µm field around that candidate. Use manual coordinate zoom only if rank-based opening is not appropriate.
+4) If the candidate still looks plausible at ROI scale, choose the best ROI region within the current field yourself and use wsi_mark_roi_norm. Do not blindly mark the fixed candidate center if a nearby subregion looks better.
+5) If it still looks weak after one quick check, skip it and jump to the next candidate.
+6) Treat wsi_mark_roi_norm as the final high-power inspection crop, not as another exploratory zoom step.
+7) After you mark an ROI, keep/discard it based on the saved ROI evidence. In AML mode the backend may immediately advance CURRENT VIEW to the next unvisited candidate. If you still need another ROI after that decision, jump directly to the next unvisited candidate with wsi_open_candidate(rank). Use wsi_get_overview_view again only if you need to fully reset / re-anchor.
+--------------------------------
+ROI SAMPLING PLAN
+--------------------------------
+- Target the configured accepted-ROI soft goal from spatially distinct regions for AML
+- After each ROI, apply acceptance checklist
+- Stop early if:
+  a) the accepted-ROI hard cap has been reached
+  b) the accepted-ROI soft goal has been reached and the evidence is already stable
+  c) no additional distinct informative ROI can be found despite reasonable search
+--------------------------------
+ROI ACCEPTANCE CHECKLIST
+--------------------------------
+KEEP only if ALL are true:
+- Adequate nucleated hematopoietic cells (not RBC-diluted)
+- Focus sufficient for chromatin/nucleoli assessment
 - No dominant artifact
-- Not redundant with prior ROIs
-
-Otherwise → DISCARD
-
----
-
-## Blast Identification (Morphology Only)
-Blast-like cells MUST show:
+- Not redundant
+Else DISCARD
+--------------------------------
+BLAST IDENTIFICATION
+--------------------------------
+Blast-like ONLY if:
 - High N:C ratio
 - Round/oval nucleus
-- Fine/open chromatin
-- Visible nucleoli
+- Fine chromatin
+- Visible nucleoli (subset sufficient)
 - Scant cytoplasm
-
 Rules:
+- Auer rod = myeloid blast (flag immediately)
 - Do NOT use color alone
-- Gray/olive/purple ≠ blasts without nuclear immaturity
-- Mature granulocytes: segmented nuclei + granules
-- Erythroid: smaller, dense nuclei
+- Large gray/olive cells ≠ blasts without immature nucleus
 - Residual maturation does NOT exclude AML
-
----
-
-## Blast Estimation (STRICT ROI-BASED)
-- Estimate blasts ONLY within ACCEPTED ROIs
-- Denominator = interpretable nucleated cells
-- Ignore RBC-only regions, fat, empty space, artifacts
-
-Per ROI categories:
-<5%, 5–10%, 10–19%, ≥20%
-
-Then derive global range across ROIs
-
----
-
-## Decision Rules (HIGH SPECIFICITY)
-
-A) Acute leukemia:
-- Multiple ROIs show dominant blast population
-- Blasts plausibly ≥20%
-- Immature morphology present across MANY cells
-
-B) Normal marrow:
+--------------------------------
+BLAST ESTIMATION
+--------------------------------
+- ROI-based only (NOT slide-wide averaging)
+- Ignore RBCs, fat, empty areas, artifacts
+- Use EXACT tiers:
+  <5%, 5–9%, 10–19%, 20–50%, >50%
+- Produce per-ROI and global range
+--------------------------------
+PRIMARY DECISION
+--------------------------------
+Choose ONE:
+A) Acute leukemia
+- Blasts >=20%
+- Require widespread immature morphology
+- Report if >50%
+B) Normal marrow
 - Heterogeneous maturation OR blasts <5%
-- If unclear but no convincing blasts → Normal marrow + state non-diagnostic limits
+- If non-diagnostic but no blasts → default here (state limitation)
+- Borderline / suspicious cases still require a binary choice:
+  * choose "Acute leukemia" if the overall morphology is closer to diffuse immature/blast-rich disease
+  * otherwise choose "Normal marrow" and state the limitation / uncertainty explicitly
+--------------------------------
+KEY TILE SAVING
+--------------------------------
+- Save 1-5 tiles from best accepted ROI regions:
+  wsi_save_tile_norm(..., quality="good", label="aml_key")
+- Do not quota-hunt
+--------------------------------
+SECONDARY TASK: NPM1 (ONLY IF AML)
+--------------------------------
+Execute ONLY if final_decision = "Acute leukemia"
+Task:
+Assess whether morphology is suggestive of NPM1 mutation
+Use ONLY morphology. No extrapolation.
+Supportive features:
+- Blasts with relatively abundant cytoplasm
+- Folded / irregular nuclei
+- Cup-like nuclear invaginations
+- Less primitive appearance (less prominent nucleoli vs classic blasts)
+- Monocytic differentiation
+Auer rods:
+- Do NOT exclude NPM1 if present
+Constraints:
+- Probabilistic only
+- If ROI quality insufficient → lower confidence
+Classification (REQUIRED):
+- suggestive_of_npm1_mutation
+- not_suggestive_of_npm1_mutation
+- indeterminate_for_npm1
 
-C) Call for more diagnostics:
-- Suspicious morphology
-- Blasts plausibly 5–20%
-- Clear immature features present
+Confidence levels:
+- high = multiple concordant features
+- moderate = partial features
+- low = weak / conflicting / poor quality
+--------------------------------
+OUTPUT (STRICT JSON ONLY)
+--------------------------------
+{
+  "morphology_summary": "string (1–4 sentences)",
+  "accepted_rois": [
+    {
+      "roi_id": "string",
+      "accepted_reason": "string",
+      "blast_range": "<5% | 5-9% | 10-19% | 20-50% | >50%",
+      "key_features": ["string"]
+    }
+  ],
+  "discard_summary": ["string"],
+  "global_blast_range": "<5% | 5-9% | 10-19% | 20-50% | >50%",
+  "final_decision": "Normal marrow | Acute leukemia",
+  "limitations_confidence": {
+    "limitations": "string",
+    "confidence": "low | medium | high"
+  },
+  "npm1_prediction": {
+    "applicable": true,
+    "classification": "suggestive_of_npm1_mutation | not_suggestive_of_npm1_mutation | indeterminate_for_npm1",
+    "confidence_level": "low | moderate | high",
+    "supporting_features": ["string"],
+    "comment": "string"
+  }
+}
+--------------------------------
+CONDITIONAL RULE
+--------------------------------
+If final_decision != "Acute leukemia":
+"npm1_prediction": {
+  "applicable": false,
+  "classification": null,
+  "confidence_level": null,
+  "supporting_features": [],
+  "comment": "NPM1 prediction not performed (AML not established morphologically)"
+}
+--------------------------------
+FORMAT RULES
+--------------------------------
+- JSON ONLY (no extra text)
+- No hallucinated findings
+- Keep concise
 
-DO NOT use this option due to uncertainty alone
-
----
-
-## Key Tile Saving (STRICT, ALIGNED WITH ROI RULE)
-- You MUST have ≥5 ACCEPTED ROIs before saving tiles
-- You MUST save **at least 5 tiles (≥1 per ROI)**
-
-For each ACCEPTED ROI:
-CALL:
-wsi_save_tile_norm(center=..., bbox=..., quality="good", label="aml_key")
-
-Rules:
-- Exactly 1 tile per ROI is sufficient
-- Tiles MUST come from ACCEPTED ROIs only
-- Do NOT save redundant or low-quality tiles
-- Tile saving is INVALID if <5 accepted ROIs
-
----
-
-## Output (MANDATORY FORMAT)
-
-1) Morphology summary (1–4 sentences)
-
-2) Accepted ROI log (≥5 REQUIRED):
-- ROI #, reason accepted, blast range, key features
-
-- Discard summary (1–2 lines total)
-
-3) Global blast % range
-
-4) Final decision:
-Normal marrow / Acute leukemia / Call for more diagnostics
-
-5) Limitations & confidence:
-Single sentence (quality limits + low/medium/high)
 """

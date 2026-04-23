@@ -20,7 +20,6 @@ from .state import get_public_state_snapshot, reset_wsi_state, set_slide_path
 _FINAL_DIAGNOSIS_LABELS = (
     "Normal marrow",
     "Acute leukemia",
-    "Call for more diagnostics",
 )
 _FINAL_DIAGNOSIS_LOOKUP = {label.lower(): label for label in _FINAL_DIAGNOSIS_LABELS}
 
@@ -109,6 +108,10 @@ def run_wsi_agent_for_web(
     tile_size_px: int = 224,
     batch_size: int = 128,
     tile_prefilter_method: str = "quality",
+    roi_output_size_px: int = 1024,
+    max_accepted_rois: int = 10,
+    target_accepted_rois: int = 5,
+    default_mpp_um: float | None = None,
 ) -> Dict[str, Any]:
     agent_type_l = (agent_type or "wsi").lower()
 
@@ -129,6 +132,10 @@ def run_wsi_agent_for_web(
             tile_size_px=tile_size_px,
             batch_size=batch_size,
             tile_prefilter_method=tile_prefilter_method,
+            roi_output_size_px=roi_output_size_px,
+            max_accepted_rois=max_accepted_rois,
+            target_accepted_rois=target_accepted_rois,
+            default_mpp_um=default_mpp_um,
         )
         state.AGENT_TYPE = agent_type_l
 
