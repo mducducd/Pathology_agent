@@ -157,7 +157,7 @@ Notes:
 
 ### Batch suite
 
-`evaluate/run_batch_aml_suite.sh` is a wrapper for launching multiple model/extractor combinations defined in the `RUNS` array:
+`evaluate/run_batch_aml_suite.sh` is a wrapper for launching multiple model/extractor combinations defined in the script's `RUNS` array:
 
 ```bash
 bash evaluate/run_batch_aml_suite.sh \
@@ -174,11 +174,10 @@ Notes:
 - `--extractors` filters the run specs by extractor key.
 - The suite script forwards into `evaluate/run_batch_aml.sh` for each selected run.
 - Edit the `RUNS` array in [evaluate/run_batch_aml_suite.sh](/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/evaluate/run_batch_aml_suite.sh) to choose which model/extractor combinations are launched.
+- Edit `tools.slide` in [configs/config.yaml](/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/configs/config.yaml) to change the suite defaults for `TILE_FILTER`, `TILE_SIZE_PX`, `BATCH_SIZE`, `ROI_SIZE_PX`, and `AGENT`.
 - Each `RUNS` entry has the form `"MODEL|EXTRACTOR|OUTPUT_DIR_NAME"`.
-- Example: `"gemma-4-31B-it|virchow2|batch_result_gemma-4-31B-it_Virchow2_224px"`
 - `MODEL` is passed to `--model`, `EXTRACTOR` is passed to `--extractor`, and `OUTPUT_DIR_NAME` becomes the subdirectory created under `--output-parent/--experiment-name` or `--base-output-root`.
-- The current checked-in `RUNS` array launches:
-  `gemma-4-31B-it + uni2`, `gemma-4-31B-it + h_optimus_1`, `gemma-4-31B-it + virchow2`, `gemma-4-31B-it + dinobloom_giant`, and `gemma-4-31B-it + dinobloom`.
+- The current checked-in `RUNS` array launches `GPT-OSS-120B + uni2` and `GPT-OSS-120B + dinobloom_giant`.
 
 ## Workbench
 

@@ -111,8 +111,21 @@ ROI_QUALITY_PREFILTER_KEEP_RATIO = float(os.getenv("ROI_QUALITY_PREFILTER_KEEP_R
 ROI_QUALITY_PREFILTER_MIN_KEEP_TILES = int(os.getenv("ROI_QUALITY_PREFILTER_MIN_KEEP_TILES", "4"))
 ROI_QUALITY_PREFILTER_TRIGGER_TILES = int(os.getenv("ROI_QUALITY_PREFILTER_TRIGGER_TILES", "12"))
 ROI_QUALITY_PREFILTER_RANDOM_RESERVE_RATIO = float(os.getenv("ROI_QUALITY_PREFILTER_RANDOM_RESERVE_RATIO", "0.05"))
+CACHE_ROOT_DIR = os.getenv("CACHE_ROOT_DIR", "").strip()
+if not CACHE_ROOT_DIR:
+    CACHE_ROOT_DIR = os.path.abspath("./outputs/_cache")
+
 ROI_TILE_CACHE_DIR = os.getenv("ROI_TILE_CACHE_DIR", "").strip()
+if not ROI_TILE_CACHE_DIR:
+    ROI_TILE_CACHE_DIR = os.path.join(CACHE_ROOT_DIR, "feature_cache")
+
 ROI_FEATURE_CACHE_DIR = os.getenv("ROI_FEATURE_CACHE_DIR", "").strip()
+if not ROI_FEATURE_CACHE_DIR:
+    ROI_FEATURE_CACHE_DIR = os.path.join(CACHE_ROOT_DIR, "feature_cache")
+
+os.environ["CACHE_ROOT_DIR"] = CACHE_ROOT_DIR
+os.environ["AML_REFERENCE_CACHE_DIR"] = os.path.join(CACHE_ROOT_DIR, "reference_hnsw")
+
 DARK_REGION_THRESHOLD_PCT = int(os.getenv("DARK_REGION_THRESHOLD_PCT", "85"))
 DARK_REGION_MIN_AREA = int(os.getenv("DARK_REGION_MIN_AREA", "800"))
 DARK_REGION_MAX_REGIONS = int(os.getenv("DARK_REGION_MAX_REGIONS", "30"))
@@ -403,19 +416,6 @@ def _selected_tile_prefilter_method() -> str:
     return raw if raw in {"none", "coarse", "quality", "hybrid"} else "quality"
 
 
-def _selected_tile_cache_dir() -> Path | None:
-    if os.getenv("ROI_DISABLE_TILE_CACHE", "").strip().lower() in {"1", "true", "yes", "y"}:
-        return None
-
-    raw = os.getenv("ROI_TILE_CACHE_DIR", "").strip()
-    if raw:
-        cache_dir = Path(raw)
-    else:
-        cache_dir = Path(OUTPUTS_ROOT_DIR) / "_tile_cache"
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    return cache_dir
-
-
 def _selected_feature_cache_dir() -> Path | None:
     raw = os.getenv("ROI_FEATURE_CACHE_DIR", "").strip()
     if raw:
@@ -424,8 +424,7 @@ def _selected_feature_cache_dir() -> Path | None:
         extractor_name = _sanitize_cache_component(getattr(state, "EXTRACTOR_NAME", "uni2"), default="uni2")
         tile_prefilter_method = _sanitize_cache_component(_selected_tile_prefilter_method(), default="quality")
         feature_cache_dir = (
-            Path(OUTPUTS_ROOT_DIR)
-            / "_cache"
+            Path(CACHE_ROOT_DIR)
             / "feature_cache"
             / extractor_name
             / tile_prefilter_method
@@ -441,8 +440,7 @@ def _selected_reference_cache_dir() -> Path:
     else:
         extractor_name = _sanitize_cache_component(getattr(state, "EXTRACTOR_NAME", "uni2"), default="uni2")
         reference_cache_dir = (
-            Path(OUTPUTS_ROOT_DIR)
-            / "_cache"
+            Path(CACHE_ROOT_DIR)
             / "reference_hnsw"
             / extractor_name
         )
@@ -664,9 +662,54 @@ def _set_roi_candidate_prep(
     state._roi_candidate_prep = payload
 
 
+def _try_load_cached_roi_index(
+    slide_path: str,
+    extractor_name: str,
+    tile_prefilter_method: str,
+    tile_size_px: int,
+    aml_mode: bool,
+) -> Optional[Any]:
+    """Try to load cached ROI index from disk if foundation model + tile filter + tile size match."""
+    import pickle
+    from pathlib import Path
+
+    cache_root = CACHE_ROOT_DIR or os.path.abspath("./outputs/_cache")
+    cache_path = Path(cache_root) / "roi_index"
+
+    if not cache_path.exists():
+        return None
+
+    # Build fingerprint: foundation model (extractor) + tile filter + tile size
+    # Tile size is normally 224, but kept in fingerprint for flexibility
+    settings_str = json.dumps({
+        "slide_path": slide_path,
+        "extractor_name": extractor_name,
+        "tile_prefilter_method": tile_prefilter_method,
+        "tile_size_px": tile_size_px,
+        "aml_mode": aml_mode,
+    }, sort_keys=True)
+    settings_hash = hashlib.sha256(settings_str.encode()).hexdigest()
+
+    index_cache_file = cache_path / f"roi_index_{settings_hash}.pkl"
+
+    if index_cache_file.exists():
+        try:
+            with open(index_cache_file, "rb") as f:
+                cached_index = pickle.load(f)
+            print(f"[WSI][CACHE] Loaded cached ROI index from {index_cache_file}")
+            return cached_index
+        except Exception as e:
+            print(f"[WSI][CACHE] Failed to load cached index: {e}")
+            return None
+
+    return None
+
+
 def _ensure_unsupervised_roi_index():
     cached = state._roi_ranker_index
     meta = state._roi_ranker_meta or {}
+
+    state.CURRENT_AGENT_ACTION = "Preparing ROI candidates from slide..."
 
     aml_mode = str(getattr(state, "AGENT_TYPE", "") or "").lower() == "aml"
     candidate_source = _selected_candidate_source(aml_mode)
@@ -677,7 +720,29 @@ def _ensure_unsupervised_roi_index():
     use_coarse_prefilter = _use_coarse_prefilter(tile_prefilter_method)
     use_quality_prefilter = _use_quality_prefilter(tile_prefilter_method)
 
-    # Detect dark regions first and use them as a coarse supertile prior for AML.
+    # Try to load cached index FIRST (before any expensive operations)
+    cached_index = _try_load_cached_roi_index(
+        slide_path=state.SLIDE_PATH,
+        extractor_name=state.EXTRACTOR_NAME,
+        tile_prefilter_method=tile_prefilter_method,
+        tile_size_px=state.TILE_SIZE_PX,
+        aml_mode=aml_mode,
+    )
+    if cached_index is not None:
+        _set_roi_candidate_prep(
+            phase="ready",
+            status="done",
+            message="ROI index loaded from disk cache (skipping tile filtering)",
+            extra={"source": "disk_cache", "candidate_source": candidate_source},
+        )
+        state._roi_ranker_index = cached_index
+        state._roi_ranker_meta = {
+            "slide_path": state.SLIDE_PATH,
+            "cache_source": "disk",
+        }
+        return cached_index
+
+    # Only detect dark regions if we need to build the index
     dark_region_boxes = _ensure_dark_region_boxes_level0() if use_dark_region_gating else []
     dark_region_boxes_hash = (
         hashlib.sha256(json.dumps(dark_region_boxes, sort_keys=True).encode()).hexdigest()
@@ -738,7 +803,6 @@ def _ensure_unsupervised_roi_index():
             pipeline_desc = f"Thumbnail coarse region filter -> {extractor_label} tile embeddings -> kNN novelty ranking -> top-K per view"
         else:
             pipeline_desc = f"{extractor_label} tile embeddings -> kNN novelty ranking -> top-K per view"
-    cache_dir = _selected_tile_cache_dir()
     feature_cache_dir = _selected_feature_cache_dir()
     reference_cache_dir = _selected_reference_cache_dir()
     os.environ["AML_REFERENCE_CACHE_DIR"] = str(reference_cache_dir)
@@ -841,13 +905,14 @@ def _ensure_unsupervised_roi_index():
                 extra=evt,
             )
 
+        # Build the index (cache was already checked at function start)
         index = build_unsupervised_roi_index(
             slide_path=state.SLIDE_PATH,
             extractor_name=state.EXTRACTOR_NAME,
             tile_size_um=state.TILE_SIZE_UM,
             tile_size_px=state.TILE_SIZE_PX,
             batch_size=_selected_batch_size(),
-            cache_dir=cache_dir,
+            cache_dir=None,
             feature_cache_dir=feature_cache_dir,
             max_workers=ROI_RANKER_MAX_WORKERS,
             brightness_cutoff=240,
@@ -883,12 +948,38 @@ def _ensure_unsupervised_roi_index():
             "agent_type": getattr(state, "AGENT_TYPE", None),
             "use_dark_region_gating": bool(use_dark_region_gating),
             "dark_region_boxes_hash": dark_region_boxes_hash,
-            "tile_cache_dir": str(cache_dir) if cache_dir is not None else None,
             "feature_cache_dir": str(feature_cache_dir) if feature_cache_dir is not None else None,
             "reference_cache_dir": str(reference_cache_dir),
             "reference_mode": getattr(index, "reference_mode", "none"),
             "reference_stats": dict(getattr(index, "reference_stats", {}) or {}),
         }
+
+        # Save index to CACHE_ROOT_DIR for next time (fingerprint: foundation model + tile filter)
+        try:
+            import pickle
+            from pathlib import Path
+
+            cache_root = CACHE_ROOT_DIR or os.path.abspath("./outputs/_cache")
+            cache_path = Path(cache_root) / "roi_index"
+            cache_path.mkdir(parents=True, exist_ok=True)
+
+            # Fingerprint: foundation model (extractor) + tile filter + tile size
+            # Tile size is normally 224, but kept for flexibility
+            settings_str = json.dumps({
+                "slide_path": state.SLIDE_PATH,
+                "extractor_name": extractor_name,
+                "tile_prefilter_method": tile_prefilter_method,
+                "tile_size_px": state.TILE_SIZE_PX,
+                "aml_mode": aml_mode,
+            }, sort_keys=True)
+            settings_hash = hashlib.sha256(settings_str.encode()).hexdigest()
+            index_cache_file = cache_path / f"roi_index_{settings_hash}.pkl"
+
+            with open(index_cache_file, "wb") as f:
+                pickle.dump(index, f)
+            print(f"[WSI][CACHE] Saved ROI index to {index_cache_file}")
+        except Exception as e:
+            print(f"[WSI][CACHE] Failed to save index to CACHE_ROOT_DIR: {e}")
         _set_roi_candidate_prep(
             phase="ready",
             status="done",
@@ -1794,6 +1885,7 @@ def _mark_roi_from_candidate(
     }
 
     state._roi_marks.append(roi)
+    state.CURRENT_AGENT_ACTION = f"Marked ROI #{roi_id}: {label}"
     _record_attempted_roi_bbox(roi.get("view_bbox_level0"))
 
     if _agent_is_aml() and len(state._saved_good_tiles) < 5:
@@ -1917,6 +2009,7 @@ def _open_candidate_by_rank(
         state._current_view["candidate_navigation_mode"] = "free_local_search"
     info = _attach_roi_candidates(info)
     info = _strip_candidate_payload_for_free_local_search(info)
+    state.CURRENT_AGENT_ACTION = f"Opened candidate #{rank}: {nav_reason}" if nav_reason else f"Opened candidate #{rank}"
     _log_step("wsi_open_candidate", nav_reason, info)
     return info
 
@@ -1961,6 +2054,7 @@ def wsi_get_overview_view(
         _make_overview_with_current_box(draw_current_box=False)
         info = _attach_roi_candidates(info)
         _remember_overview_candidate_bank()
+        state.CURRENT_AGENT_ACTION = f"Overview: {nav_reason}" if nav_reason else "Viewing overview"
         _log_step("wsi_get_overview_view", nav_reason, info)
         return info
 
@@ -2049,6 +2143,7 @@ def wsi_zoom_current_norm(
 
         info = _attach_roi_candidates(info, skip_refresh=True)
         info = _strip_candidate_payload_for_free_local_search(info)
+        state.CURRENT_AGENT_ACTION = f"Zooming in: {nav_reason}" if nav_reason else "Zooming in"
         _log_step("wsi_zoom_current_norm", nav_reason, info)
         return info
 
@@ -2133,6 +2228,7 @@ def wsi_zoom_full_norm(
 
         info = _attach_roi_candidates(info, skip_refresh=True)
         info = _strip_candidate_payload_for_free_local_search(info)
+        state.CURRENT_AGENT_ACTION = f"Zooming overview: {nav_reason}" if nav_reason else "Zooming overview"
         _log_step("wsi_zoom_full_norm", nav_reason, info)
         return info
 
@@ -2195,6 +2291,7 @@ def wsi_pan_current(
         )
         info = _attach_roi_candidates(info, skip_refresh=True)
         info = _strip_candidate_payload_for_free_local_search(info)
+        state.CURRENT_AGENT_ACTION = f"Panning: {nav_reason}" if nav_reason else "Panning"
         _log_step("wsi_pan_current", nav_reason, info)
         return info
 
@@ -2553,6 +2650,7 @@ def wsi_discard_last_roi(
             except Exception:
                 pass
         next_rank_hint = _next_unattempted_candidate_rank()
+        state.CURRENT_AGENT_ACTION = f"Discarded ROI #{roi['roi_id']}: {roi['label']}"
         print(f"[WSI][ROI] Discarded ROI {roi['roi_id']}: {roi['label']}")
         _log_step(
             "wsi_discard_last_roi",

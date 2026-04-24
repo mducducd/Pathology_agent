@@ -36,8 +36,13 @@ FINAL_DECISION_LOOKUP = {label.lower(): label for label in FINAL_DECISIONS}
 try:
     from wsi_core_pkg.tuning_config import tuning_value
     DEFAULT_MPP_UM_FALLBACK = float(tuning_value("tools.slide", "DEFAULT_MPP_UM"))
+    try:
+        CONFIG_CACHE_ROOT_DIR = str(tuning_value("tools.cache", "CACHE_ROOT_DIR") or "").strip()
+    except Exception:
+        CONFIG_CACHE_ROOT_DIR = ""
 except Exception:
     DEFAULT_MPP_UM_FALLBACK = 0.159
+    CONFIG_CACHE_ROOT_DIR = ""
 
 
 def _make_run_id(patient_name: str) -> str:
@@ -171,16 +176,24 @@ def _cleanup_fresh_embedding_cache(cache_info: dict[str, str] | None) -> None:
         shutil.rmtree(cache_root, ignore_errors=True)
 
 
+def _resolve_cache_root(*, output_dir: Path, experiment_root: Path | None) -> Path:
+    configured = CONFIG_CACHE_ROOT_DIR.strip()
+    if configured:
+        return Path(configured).expanduser().resolve()
+    return (experiment_root or output_dir).resolve() / "_cache"
+
+
 def _configure_persistent_reference_cache(
     *,
     output_dir: Path,
     experiment_root: Path | None,
     extractor_name: str,
 ) -> Path:
-    cache_root = (experiment_root or output_dir).resolve()
-    reference_cache_dir = cache_root / "_cache" / "reference_hnsw" / _sanitize_stem(extractor_name)
+    cache_root = _resolve_cache_root(output_dir=output_dir, experiment_root=experiment_root)
+    reference_cache_dir = cache_root / "reference_hnsw" / _sanitize_stem(extractor_name)
     reference_cache_dir.mkdir(parents=True, exist_ok=True)
     os.environ["AML_REFERENCE_CACHE_DIR"] = str(reference_cache_dir)
+    os.environ["CACHE_ROOT_DIR"] = str(cache_root)
     return reference_cache_dir
 
 
@@ -198,16 +211,16 @@ def _configure_experiment_tile_cache(
         return None
 
     os.environ.pop("ROI_DISABLE_TILE_CACHE", None)
-    cache_root = (experiment_root or output_dir).resolve()
+    cache_root = _resolve_cache_root(output_dir=output_dir, experiment_root=experiment_root)
     tile_cache_dir = (
         cache_root
-        / "_cache"
         / "tile_cache"
         / _sanitize_stem(extractor_name)
         / _sanitize_stem(_normalize_tile_filter_name(tile_filter))
     )
     tile_cache_dir.mkdir(parents=True, exist_ok=True)
     os.environ["ROI_TILE_CACHE_DIR"] = str(tile_cache_dir)
+    os.environ["CACHE_ROOT_DIR"] = str(cache_root)
     return tile_cache_dir
 
 
@@ -227,16 +240,16 @@ def _configure_experiment_feature_cache(
     extractor_name: str,
     tile_filter: str,
 ) -> Path:
-    cache_root = (experiment_root or output_dir).resolve()
+    cache_root = _resolve_cache_root(output_dir=output_dir, experiment_root=experiment_root)
     feature_cache_dir = (
         cache_root
-        / "_cache"
         / "feature_cache"
         / _sanitize_stem(extractor_name)
         / _sanitize_stem(_normalize_tile_filter_name(tile_filter))
     )
     feature_cache_dir.mkdir(parents=True, exist_ok=True)
     os.environ["ROI_FEATURE_CACHE_DIR"] = str(feature_cache_dir)
+    os.environ["CACHE_ROOT_DIR"] = str(cache_root)
     return feature_cache_dir
 
 
@@ -623,6 +636,7 @@ def main() -> int:
     out_dir = Path(args.output_dir).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
     experiment_root = Path(args.experiment_root).resolve() if args.experiment_root else None
+    cache_root = _resolve_cache_root(output_dir=out_dir, experiment_root=experiment_root)
 
     if args.cuda_device not in (None, ""):
         os.environ["CUDA_VISIBLE_DEVICES"] = str(args.cuda_device)
@@ -689,6 +703,11 @@ def main() -> int:
                 args.mpp_source,
             )
         )
+        print(f"[CACHEROOT] {cache_root}")
+        if tile_cache_dir is not None:
+            print(f"[TILECACHE] {tile_cache_dir}")
+        else:
+            print("[TILECACHE] disabled")
         if reference_cache_dir is not None:
             print(f"[REFCACHE] {reference_cache_dir}")
         print(f"[FEATCACHE] {feature_cache_dir}")

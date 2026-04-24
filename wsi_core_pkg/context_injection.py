@@ -415,10 +415,10 @@ def _inject_wsi_images(
             f"CURRENT VIEW for navigation{extra}. "
             "All coordinates for NEXT tool call must be chosen relative to THIS image."
             "PRIORITY: Look for regions with high cellularity (dense packed nucleated cells) and clear blast visibility. "
-            "For high-cellularity subregions, ZOOM INTO IT to capture the best single-cell morphology. "
+            "Once you find high-cellularity tissue with readable morphology, mark it with wsi_mark_roi_norm. "
             "Do NOT select boxes centered on blank/white background; always place boxes tightly around tissue and high-cellularity areas. "
-            "In AML local search, stay within high-cellularity regions and zoom to find the clearest detail; avoid panning to empty areas. "
-            "Do not default to the image center unless it shows the best cellularity."
+            "Do not search indefinitely for marginal improvements. Mark if tissue is readable and diagnostic, even if not the single densest field. "
+            "Avoid panning to empty areas."
         )
 
         current_view_msg = {
@@ -443,14 +443,17 @@ def _inject_wsi_images(
                 f"- Current progress: {kept_roi_count}/{target_roi_count} ROIs marked.",
                 f"Keep searching for additional distinct AML ROIs to reach the {target_roi_count} ROI target.",
             ]
+            state.CURRENT_AGENT_ACTION = "\n".join(aml_stop_lines)
         elif kept_roi_count >= max_accepted_rois:
             aml_stop_lines = [
                 f"- Hard cap reached: {kept_roi_count}/{max_accepted_rois} kept ROI(s). Provide final AML diagnosis.",
             ]
+            state.CURRENT_AGENT_ACTION = "\n".join(aml_stop_lines)
         else:
             aml_stop_lines = [
                 f"- ROI target reached: {kept_roi_count}/{target_roi_count} kept ROI(s). Provide AML blast estimate and diagnosis.",
             ]
+            state.CURRENT_AGENT_ACTION = "\n".join(aml_stop_lines)
         new_messages.insert(
             insert_pos,
             _tag_context_message({"role": "user", "content": [{"type": "text", "text": "\n".join(aml_stop_lines)}]}, "aml_guidance"),

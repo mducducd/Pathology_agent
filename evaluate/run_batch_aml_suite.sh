@@ -2,35 +2,65 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 RUN_BATCH_SCRIPT="${SCRIPT_DIR}/run_batch_aml.sh"
 
 CSV="/mnt/bulk-neptune/nguyenmin/stamp-dev/experiments/Narmin/AML_HEALTHY_SLIDE_TEST.csv"
 SLIDES_ROOT="/mnt/copernicus3/PATHOLOGY/others/private/haemadata/ALL_WSIs"
 OUTPUT_PARENT="/mnt/bulk-neptune/nguyenmin/stamp-dev/experiments/Narmin"
-EXPERIMENT_NAME="aml_gemma4_embedding_suite"
+EXPERIMENT_NAME="exp_240425_aml_suite"
 BASE_OUTPUT_ROOT=""
 CUDA_DEVICE=""
-TILE_FILTER="hybrid"
-TILE_SIZE_PX="224"
-BATCH_SIZE="512"
-ROI_SIZE_PX="2048"
-DEFAULT_MPP_UM="$(cd "${SCRIPT_DIR}/.." && python3 - <<'PY'
+eval "$(
+    cd "${REPO_ROOT}" && python3 - <<'PY'
 from pathlib import Path
+import shlex
 import yaml
-cfg = Path('configs/config.yaml')
-default = '0.159'
+
+CONFIG_PATH = Path("configs/config.yaml")
+
 try:
-    data = yaml.safe_load(cfg.read_text()) or {}
-    value = data.get('tools', {}).get('slide', {}).get('DEFAULT_MPP_UM', default)
-    print(value)
+    data = yaml.safe_load(CONFIG_PATH.read_text()) or {}
+    if not isinstance(data, dict):
+        data = {}
 except Exception:
-    print(default)
+    data = {}
+
+slide_cfg = data.get("tools", {}).get("slide", {})
+if not isinstance(slide_cfg, dict):
+    slide_cfg = {}
+
+values = {
+    "TILE_FILTER": str(slide_cfg.get("TILE_FILTER", "hybrid")),
+    "TILE_SIZE_PX": str(slide_cfg.get("TILE_SIZE_PX", "224")),
+    "BATCH_SIZE": str(slide_cfg.get("BATCH_SIZE", "512")),
+    "ROI_SIZE_PX": str(slide_cfg.get("ROI_SIZE_PX", "2048")),
+    "AGENT": str(slide_cfg.get("AGENT", "aml")),
+    "DEFAULT_MPP_UM": str(slide_cfg.get("DEFAULT_MPP_UM", "0.159")),
+    "CONFIG_CACHE_ROOT": str(data.get("tools", {}).get("cache", {}).get("CACHE_ROOT_DIR", "") or "").strip(),
+    "RESUME": "true",
+    "USE_TILE_CACHE": "true",
+}
+
+for key, value in values.items():
+    print(f"{key}={shlex.quote(value)}")
 PY
 )"
-AGENT="aml"
-RESUME=true
-USE_TILE_CACHE=true
 EXTRACTORS_FILTER=""
+RUNS=(
+    # "GLM-4.6V-FP8|uni2|GLM-4.6V-FP8_UNI2_224px"
+    # "GLM-4.6V-FP8|virchow2|GLM-4.6V-FP8_Virchow2_224px"
+    # "GLM-4.6V-FP8|h_optimus_1|GLM-4.6V-FP8_H-optimus-1_224px"
+    # "GLM-4.6V-FP8|dinobloom_giant|GLM-4.6V-FP8_DinoBloom-G_224px"
+    # "GPT-OSS-120B|uni2|GPT-OSS-120B_UNI2_224px"
+    # "GPT-OSS-120B|virchow2|GPT-OSS-120B_Virchow2_224px"
+    # "GPT-OSS-120B|h_optimus_1|GPT-OSS-120B_H-optimus-1_224px"
+    # "GPT-OSS-120B|dinobloom_giant|GPT-OSS-120B_DinoBloom-G_224px"
+    "gemma-4-31B-it|uni2|gemma-4-31B-it_UNI2_224px"
+    "gemma-4-31B-it|virchow2|gemma-4-31B-it_Virchow2_224px"
+    "gemma-4-31B-it|h_optimus_1|gemma-4-31B-it_H-optimus-1_224px"
+    "gemma-4-31B-it|dinobloom_giant|gemma-4-31B-it_DinoBloom-G_224px"
+)
 
 format_elapsed() {
     local total_seconds="${1:-0}"
@@ -53,8 +83,8 @@ Options:
   --base-output-root PATH    Explicit full output directory; overrides parent/name
   --cuda-device ID           Set CUDA_VISIBLE_DEVICES, e.g. 1
   --extractors LIST          Comma-separated extractors to keep, e.g. reddino
-  --tile-filter NAME         Tile prefilter method, e.g. hybrid or coarse
-  --roi-size-px N            AML ROI size in pixels, default 2048
+  --tile-filter NAME         Default from configs/config.yaml
+  --roi-size-px N            AML ROI size in pixels, default from configs/config.yaml
   --default-mpp-um FLOAT     Preferred MPP override, default from configs/config.yaml
   --use-tile-cache
   --resume
@@ -91,17 +121,6 @@ fi
 
 mkdir -p "$BASE_OUTPUT_ROOT"
 
-RUNS=(
-    
-    
-    "GPT-OSS-120B|uni2|test_GPT-OSS-120B_UNI2_224px"
-    "GPT-OSS-120B|dinobloom_giant|test_GPT-OSS-120B_DinoBloom-G_224px"
-    # "GPT-OSS-120B|virchow2|GPT-OSS-120B_Virchow2_224px"
-    # "GPT-OSS-120B|h_optimus_1|GPT-OSS-120B_H-optimus-1_224px"
-    
-    # "GPT-OSS-120B|dinobloom|GPT-OSS-120B_DinoBloom-S_224px"
-)   
-
 FILTERED_RUNS=()
 if [[ -n "$EXTRACTORS_FILTER" ]]; then
     IFS=',' read -r -a REQUESTED_EXTRACTORS <<<"$EXTRACTORS_FILTER"
@@ -137,7 +156,8 @@ echo " ROI size:         ${ROI_SIZE_PX}px"
 echo " Default MPP:      ${DEFAULT_MPP_UM}"
 echo " Tile cache:       $USE_TILE_CACHE"
 echo " CUDA devices:     ${CUDA_VISIBLE_DEVICES:-all}"
-echo " Cache root:       $BASE_OUTPUT_ROOT"
+echo " Experiment root:  $BASE_OUTPUT_ROOT"
+echo " Config cache dir: ${CONFIG_CACHE_ROOT:-<empty>}"
 echo " Resume:           $RESUME"
 echo " Extractors:       ${EXTRACTORS_FILTER:-all}"
 echo " Runs:             ${#FILTERED_RUNS[@]}"

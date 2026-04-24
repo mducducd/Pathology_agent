@@ -15,10 +15,22 @@ tools:
   slide:
     # Default MPP used when slide metadata does not expose microns-per-pixel.
     DEFAULT_MPP_UM: 0.159
+    # Default tile prefilter used by AML batch launchers.
+    TILE_FILTER: "hybrid"
+    # Default tile size passed to AML batch runs.
+    TILE_SIZE_PX: 224
+    # Default embedding batch size passed to AML batch runs.
+    BATCH_SIZE: 512
+    # Default AML ROI side length passed to AML batch runs.
+    ROI_SIZE_PX: 2048
+    # Default agent mode passed to AML batch runs.
+    AGENT: "aml"
 
   cache:
-    # Optional cache directory for ROI tile artifacts. Empty falls back to `./outputs/_tile_cache`.
-    ROI_TILE_CACHE_DIR: ""
+    # Unified cache directory for all embeddings, tiles, and reference indices.
+    # Will use subdirectories: feature_cache/ and reference_hnsw/
+    # Empty falls back to `./outputs/_cache`
+    CACHE_ROOT_DIR: "/mnt/bulk-neptune/nguyenmin/stamp-dev/experiments/Narmin/aml_gemma4_embedding_suite/_cache"
 
   candidates:
     # Raw ROI candidates kept per view before view-level post-processing.
@@ -88,8 +100,8 @@ tools:
   post_rank_vllm:
     # Maximum AML candidates passed from post-ranking into the VLM-facing prefilter.
     AML_POST_RANK_VLLM_MAX_CANDIDATES: 12
-    # Minimum dark score required by the post-ranking VLM prefilter.
-    AML_POST_RANK_VLLM_MIN_DARK_SCORE: 0.09
+    # Minimum dark score required by the post-ranking VLM prefilter. (0 = disabled)
+    AML_POST_RANK_VLLM_MIN_DARK_SCORE: 0
     # Reject `bad_like` candidates in the post-ranking VLM prefilter.
     AML_POST_RANK_VLLM_REJECT_BAD_LIKE: true
 
@@ -138,7 +150,8 @@ roi_ranker:
     # Cache AML reference embeddings / indices on disk.
     AML_REFERENCE_EMBEDDING_CACHE: true
     # Directory used for AML reference embedding and HNSW cache files.
-    AML_REFERENCE_CACHE_DIR: "./outputs/cache/reference_hnsw"
+    # If empty, uses CACHE_ROOT_DIR/reference_hnsw
+    AML_REFERENCE_CACHE_DIR: ""
 
   reference_scoring:
     # Number of nearest AML reference tiles considered per query tile.
@@ -184,7 +197,7 @@ roi_ranker:
     # Percentile floor used to drop the emptiest AML tiles in a view.
     AML_MIN_DARK_SCORE_PERCENTILE: 7.5
     # Margin below which tiles are hard-rejected by AML quality heuristics.
-    AML_QUALITY_REJECT_MARGIN: 0.075
+    AML_QUALITY_REJECT_MARGIN: 0.02
 
   blast_reference:
     # Directory containing blast-cell exemplar images.
@@ -201,8 +214,8 @@ roi_ranker:
     VLLM_PREFILTER_ENABLED: true
     # Maximum candidates sent to the VLM prefilter output.
     VLLM_MAX_CANDIDATES: 18
-    # Minimum dark score required to keep a candidate for the VLM.
-    VLLM_MIN_DARK_SCORE: 0.075
+    # Minimum dark score required to keep a candidate for the VLM. (0 = disabled)
+    VLLM_MIN_DARK_SCORE: 0
     # Drop candidates already labeled as `bad_like` before VLM inference.
     VLLM_BAD_LIKE_REJECT: false
     # Good-reference similarity needed to exempt a low-dark candidate from VLM rejection.
@@ -232,7 +245,7 @@ roi_ranker:
     # Weight for bad-match soft penalty in total AML quality penalty.
     AML_QUALITY_PENALTY_BAD_MATCH_WEIGHT: 0.28
     # Hard minimum dark score for AML candidates before percentile filtering.
-    AML_ABSOLUTE_MIN_DARK_SCORE: 0.09
+    AML_ABSOLUTE_MIN_DARK_SCORE: 0.04
     # Weight for dark-score evidence in final AML candidate ranking.
     AML_COMBINED_RANK_DARK_WEIGHT: 0.32
     # Weight for the base novelty/reference ranking in final AML candidate ranking.

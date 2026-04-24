@@ -66,6 +66,8 @@ _debug_img_counter = 0
 HAS_FATAL_ERROR = False
 LAST_FATAL_ERROR: Optional[str] = None
 
+CURRENT_AGENT_ACTION: str = ""
+
 
 def _loaded_slide_mpp_um() -> float | None:
     if _slide is None:
@@ -114,7 +116,7 @@ def reset_wsi_state(
     global _last_roi_candidate_view_key, _last_roi_candidate_top_k, _overview_roi_candidates
     global _dark_region_boxes_level0, _dark_region_slide_path, _dark_region_cache_signature
     global TRACE_DIR, TRACE_FILE_PATH
-    global HAS_FATAL_ERROR, LAST_FATAL_ERROR
+    global HAS_FATAL_ERROR, LAST_FATAL_ERROR, CURRENT_AGENT_ACTION
 
     RUN_ID = run_id
     AGENT_TYPE = "aml"
@@ -165,6 +167,7 @@ def reset_wsi_state(
     _dark_region_cache_signature = None
     HAS_FATAL_ERROR = False
     LAST_FATAL_ERROR = None
+    CURRENT_AGENT_ACTION = ""
 
     if _slide is not None:
         try:
@@ -255,4 +258,5 @@ def get_public_state_snapshot() -> Dict[str, Any]:
         "last_roi_candidate_overlay_path": _last_roi_candidate_overlay_path,
         "has_fatal_error": HAS_FATAL_ERROR,
         "last_fatal_error": LAST_FATAL_ERROR,
+        "current_agent_action": CURRENT_AGENT_ACTION,
     }

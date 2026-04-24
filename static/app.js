@@ -1853,7 +1853,7 @@
     renderFinalReportMarkdown("Waiting for model output…", true);
     setReasoningContent("");
     reportLink.textContent = "";
-    stepsEl.innerHTML = "";
+    // Don't clear stepsEl here - keep live status visible during initialization
     roisEl.innerHTML = "";
 
     lastRenderedStep = 0;
@@ -2775,7 +2775,17 @@
         }
       }
       syncLiveRunStatusStep(effectiveStatus);
+      const prep = (st && st.roi_candidate_prep && typeof st.roi_candidate_prep === "object") ? st.roi_candidate_prep : null;
+      const isPrepActive = prep && (prep.active || prep.status === "starting" || prep.status === "running");
       updateLivePrepProgress(run, st);
+      if (!isPrepActive && st && st.current_agent_action && run.status === "running") {
+        upsertLiveStatusStep("Agent action", st.current_agent_action);
+      } else if (!isPrepActive && (run.status === "done" || run.status === "error" || run.status === "terminated")) {
+        // Keep status bar visible when complete
+      } else if (!isPrepActive && run.status === "idle") {
+        // Only clear when truly idle, not during initial startup
+        upsertLiveStep("step-live-status", "", "");
+      }
       upsertLiveStep("step-live-prep", "", "");
       const incomingRois = (st && Array.isArray(st.roi_marks))
         ? st.roi_marks.filter((roi) => roi && Number.isFinite(Number(roi.roi_id)))

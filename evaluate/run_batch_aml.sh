@@ -55,6 +55,18 @@ except Exception:
     print(default)
 PY
 )"
+CONFIG_CACHE_ROOT_DIR="$(python3 - <<'PY'
+from pathlib import Path
+import yaml
+cfg = Path('configs/config.yaml')
+try:
+    data = yaml.safe_load(cfg.read_text()) or {}
+    value = str(data.get('tools', {}).get('cache', {}).get('CACHE_ROOT_DIR', '') or '').strip()
+    print(value)
+except Exception:
+    print('')
+PY
+)"
 AGENT="aml"
 RESUME=false
 USE_TILE_CACHE=false
@@ -195,7 +207,8 @@ echo " ROI size:    ${ROI_SIZE_PX}px"
 echo " Default MPP: ${DEFAULT_MPP_UM}"
 echo " Tile cache:  $USE_TILE_CACHE"
 echo " CUDA devices:${CUDA_VISIBLE_DEVICES:+ }${CUDA_VISIBLE_DEVICES:-all}"
-echo " Cache root:  $EXPERIMENT_ROOT"
+echo " Experiment root: $EXPERIMENT_ROOT"
+echo " Config cache dir:${CONFIG_CACHE_ROOT_DIR:+ }${CONFIG_CACHE_ROOT_DIR:-<empty>}"
 echo " Patients:    $TOTAL"
 echo " Resume:      $RESUME"
 echo "═══════════════════════════════════════════════════════════════"
