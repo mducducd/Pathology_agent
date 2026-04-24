@@ -23,6 +23,7 @@ from wsi_core_pkg.embeddings import (
     uni2,
 )
 from wsi_core_pkg.prompts import DEFAULT_AML_PROMPT, DEFAULT_TILE_PROMPT, DEFAULT_WSI_PROMPT
+from wsi_core_pkg.config import DEFAULT_MPP_UM
 from wsi_core import (
     run_wsi_agent_for_web,
     clear_wsi_outputs_state,
@@ -39,15 +40,17 @@ ALLOWED_SLIDE_EXTS = {".svs", ".tif", ".tiff", ".ndpi", ".mrxs", ".mrsx", ".zip"
 SUPPORTED_PRIMARY_EXTS = {".svs", ".tif", ".tiff", ".ndpi", ".mrxs", ".mrsx"}
 MIRAX_EXTS = {".mrxs", ".mrsx"}
 STD_EXTS = {".svs", ".tif", ".tiff", ".ndpi"}
-ALLOWED_MODEL_NAMES = {
-    "GLM-4.6V-FP8",
+MODEL_OPTIONS = [
     "GPT-OSS-120B",
+    "gpt-oss-20b",
+    "GLM-4.6V-FP8",
     "qwen3.5-35b-a3b",
     "qwen3-vl-32b-thinking-fp8",
     "Qwen3.5-397B-A17B-FP8",
-    "gpt-oss-20b",
     "gemma-4-31B-it",
-}
+]
+ALLOWED_MODEL_NAMES = set(MODEL_OPTIONS)
+DEFAULT_WEB_MODEL_NAME = MODEL_NAME if MODEL_NAME in ALLOWED_MODEL_NAMES else MODEL_OPTIONS[0]
 EMBEDDING_EXTRACTOR_OPTIONS = [
     {
         "name": name,
@@ -96,7 +99,8 @@ class RunStatus(BaseModel):
     roi_output_size_px: int = 1024
     max_accepted_rois: int = 10
     target_accepted_rois: int = 5
-    default_mpp_um: Optional[float] = 0.159
+    default_mpp_um: Optional[float] = DEFAULT_MPP_UM
+    candidate_nav_field_um: Optional[float] = None
     slide_filename: str       # filled after finalize
     slide_path: Optional[str] = None
     final_output: Optional[str] = None
@@ -692,6 +696,7 @@ def run_worker(
             max_accepted_rois=run.max_accepted_rois,
             target_accepted_rois=run.target_accepted_rois,
             default_mpp_um=run.default_mpp_um,
+            candidate_nav_field_um=run.candidate_nav_field_um,
         )
         fatal_error: Optional[str] = None
         if isinstance(result, dict):
@@ -779,11 +784,21 @@ def get_embedding_extractors():
         "extractors": EMBEDDING_EXTRACTOR_OPTIONS,
     }
 
+
+@app.get("/api/models")
+def get_models():
+    return {
+        "default_model_name": DEFAULT_WEB_MODEL_NAME,
+        "service_model_name": MODEL_NAME,
+        "models": MODEL_OPTIONS,
+    }
+
+
 @app.post("/api/runs/create")
 async def create_run(
     prompt: str = Form(""),
     agent_type: str = Form("wsi"),
-    model_name: str = Form(MODEL_NAME),
+    model_name: str = Form(DEFAULT_WEB_MODEL_NAME),
     extractor_name: str = Form(DEFAULT_EMBEDDING_EXTRACTOR),
     tile_size_px: int = Form(224),
     tile_size_um: float = Form(256.0),
@@ -792,7 +807,8 @@ async def create_run(
     roi_output_size_px: int = Form(1024),
     max_accepted_rois: int = Form(10),
     target_accepted_rois: int = Form(5),
-    default_mpp_um: str = Form("0.159"),
+    default_mpp_um: str = Form(str(DEFAULT_MPP_UM)),
+    candidate_nav_field_um: str = Form(""),
 ):
     agent_type_lower = agent_type.lower()
     if agent_type_lower not in {"tile", "wsi", "aml"}:
@@ -839,6 +855,18 @@ async def create_run(
     else:
         default_mpp_um_value = None
 
+    candidate_nav_field_um = candidate_nav_field_um.strip()
+    candidate_nav_field_um_value: Optional[float]
+    if candidate_nav_field_um:
+        try:
+            candidate_nav_field_um_value = float(candidate_nav_field_um)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="candidate_nav_field_um must be a valid number.") from exc
+        if candidate_nav_field_um_value < 100:
+            raise HTTPException(status_code=400, detail="candidate_nav_field_um must be >= 100.")
+    else:
+        candidate_nav_field_um_value = None
+
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S_") + uuid.uuid4().hex[:6]
     run_dir = BASE_RUN_DIR / run_id / "uploads"
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -859,6 +887,7 @@ async def create_run(
         max_accepted_rois=max_accepted_rois,
         target_accepted_rois=target_accepted_rois,
         default_mpp_um=default_mpp_um_value,
+        candidate_nav_field_um=candidate_nav_field_um_value,
         slide_filename="(upload pending)",
         slide_path=None,
         upload_count=0,
@@ -1258,12 +1287,6 @@ def embed_wsi(
     }
 
 
-# Static mounts
-app.mount("/debug", StaticFiles(directory=DEBUG_ROOT_DIR), name="debug")
-app.mount("/reports", StaticFiles(directory=REPORT_ROOT_DIR), name="reports")
-app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
-
-
 @app.get("/healthz")
 def healthz():
     return {"ok": True, "service": "wsi-agent-web", "model_name": MODEL_NAME}
@@ -1271,7 +1294,23 @@ def healthz():
 
 @app.get("/")
 def index():
-    return FileResponse(str(STATIC_DIR / "index.html"))
+    return FileResponse(str(STATIC_DIR / "index.html"), headers={"Cache-Control": "no-store"})
+
+
+@app.get("/static/app.js")
+def serve_app_js():
+    return FileResponse(str(STATIC_DIR / "app.js"), headers={"Cache-Control": "no-store"})
+
+
+@app.get("/static/styles.css")
+def serve_styles_css():
+    return FileResponse(str(STATIC_DIR / "styles.css"), headers={"Cache-Control": "no-store"})
+
+
+# Static mounts — must come after explicit routes so no-cache routes take priority
+app.mount("/debug", StaticFiles(directory=DEBUG_ROOT_DIR), name="debug")
+app.mount("/reports", StaticFiles(directory=REPORT_ROOT_DIR), name="reports")
+app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
 if __name__ == "__main__":

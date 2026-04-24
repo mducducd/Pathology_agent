@@ -27,12 +27,14 @@
   const tilePrefilterMethodSelect = document.getElementById("tile-prefilter-method-select");
   const roiOutputSizeSelect = document.getElementById("roi-output-size-select");
   const defaultMppInput = document.getElementById("default-mpp-input");
+  const candidateNavFieldUmInput = document.getElementById("candidate-nav-field-um-input");
   const roiSettingsGroup = document.getElementById("roi-settings-group");
   const tilePrefilterMethodStorageKey = "slide-agent.tile-prefilter-method";
   const roiOutputSizeStorageKey = "slide-agent.roi-output-size";
   const targetAcceptedRoisStorageKey = "slide-agent.target-accepted-rois";
   const maxAcceptedRoisStorageKey = "slide-agent.max-accepted-rois";
   const defaultMppStorageKey = "slide-agent.default-mpp-um";
+  const candidateNavFieldUmStorageKey = "slide-agent.candidate-nav-field-um";
   const roiSettingsGroupStorageKey = "slide-agent.roi-settings-group-open";
   const defaultMppAutoStorageValue = "__auto__";
 
@@ -151,6 +153,15 @@
     if (!raw) return null;
     const parsed = Number.parseFloat(raw);
     return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+  }
+
+  function selectedCandidateNavFieldUm() {
+    const raw = (candidateNavFieldUmInput && typeof candidateNavFieldUmInput.value === "string")
+      ? candidateNavFieldUmInput.value.trim()
+      : "";
+    if (!raw) return null;
+    const parsed = Number.parseFloat(raw);
+    return Number.isFinite(parsed) && parsed >= 100 ? parsed : null;
   }
 
   function formatMppUm(value) {
@@ -351,6 +362,47 @@
       extractorSelect.value = nextValue;
     } catch (err) {
       console.warn("Failed to load embedding extractor options from backend", err);
+    }
+  }
+
+  async function loadModelOptions() {
+    if (!modelSelect) return;
+    try {
+      const res = await fetch("/api/models", { cache: "no-store" });
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}`);
+      }
+      const payload = await res.json();
+      const rawModels = Array.isArray(payload && payload.models) ? payload.models : [];
+      const models = [];
+      for (const value of rawModels) {
+        const name = typeof value === "string" ? value.trim() : "";
+        if (!name || models.includes(name)) continue;
+        models.push(name);
+      }
+      if (!models.length) return;
+
+      const currentValue = modelSelect.value;
+      const defaultModel =
+        payload && typeof payload.default_model_name === "string" && payload.default_model_name.trim()
+          ? payload.default_model_name.trim()
+          : models[0];
+      const fallbackValue = models.includes(currentValue) ? currentValue : models[0];
+      const nextValue = (!modelSelectionTouched && models.includes(defaultModel)) ? defaultModel : fallbackValue;
+
+      modelSelect.innerHTML = "";
+      for (const name of models) {
+        const option = document.createElement("option");
+        option.value = name;
+        option.textContent = name;
+        modelSelect.appendChild(option);
+      }
+
+      modelSelect.value = nextValue;
+      currentModelName = modelSelect.value || defaultModel;
+      setModelStatus(activeRunStatus || "idle", currentModelName);
+    } catch (err) {
+      console.warn("Failed to load model options from backend", err);
     }
   }
 
@@ -2584,11 +2636,18 @@
           const nextMppValue = formatMppUm(defaultMppUm);
           defaultMppInput.value = nextMppValue;
           saveStoredValue(defaultMppStorageKey, nextMppValue);
-        } else if (slideMppUm) {
-          defaultMppInput.value = formatMppUm(slideMppUm);
         } else {
           defaultMppInput.value = "";
         }
+      }
+      const candidateNavFieldUm =
+        (run && Number.isFinite(Number(run.candidate_nav_field_um)))
+          ? Number(run.candidate_nav_field_um)
+          : null;
+      if (candidateNavFieldUmInput && document.activeElement !== candidateNavFieldUmInput && candidateNavFieldUm != null) {
+        const nextNavFieldValue = String(Math.round(candidateNavFieldUm));
+        candidateNavFieldUmInput.value = nextNavFieldValue;
+        saveStoredValue(candidateNavFieldUmStorageKey, nextNavFieldValue);
       }
       activeRunStatus = run.status || "";
       lastCurrentViewState = (st && st.current_view) ? st.current_view : null;
@@ -2892,6 +2951,8 @@
     fd.append("target_accepted_rois", String(selectedTargetAcceptedRois()));
     const selectedDefaultMpp = selectedDefaultMppUm();
     fd.append("default_mpp_um", selectedDefaultMpp == null ? "" : String(selectedDefaultMpp));
+    const selectedNavField = selectedCandidateNavFieldUm();
+    fd.append("candidate_nav_field_um", selectedNavField == null ? "" : String(selectedNavField));
     const res = await fetch("/api/runs/create", { method: "POST", body: fd });
     if (!res.ok) throw new Error(await res.text());
     return await res.json();
@@ -3192,6 +3253,17 @@
       );
     });
   }
+  if (candidateNavFieldUmInput) {
+    const storedNavField = loadStoredValue(candidateNavFieldUmStorageKey);
+    if (storedNavField) {
+      candidateNavFieldUmInput.value = storedNavField;
+    }
+    candidateNavFieldUmInput.addEventListener("change", () => {
+      const nextVal = selectedCandidateNavFieldUm();
+      candidateNavFieldUmInput.value = nextVal == null ? "1200" : String(Math.round(nextVal));
+      saveStoredValue(candidateNavFieldUmStorageKey, candidateNavFieldUmInput.value);
+    });
+  }
   if (roiSettingsGroup) {
     const storedGroupState = loadStoredValue(roiSettingsGroupStorageKey);
     if (storedGroupState === "0") {
@@ -3423,5 +3495,6 @@
   setExplorerBusyState(false);
   updateExplorerSelectionPreview();
   render();
+  loadModelOptions();
   fetchServiceModelName();
 })();

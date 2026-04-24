@@ -73,8 +73,8 @@
                 <label>Agent</label>
                 <select id="agent-select" class="picker-list agent-picker" aria-label="Agent selector">
                   <option value="tile">Tile Selector</option>
-                  <option value="aml">AML Detector</option>
-                  <option value="wsi" selected>General WSI Agent</option>
+                  <option value="aml" selected>AML Detector</option>
+                  <option value="wsi">General WSI Agent</option>
                 </select>
               </div>
             </div>
@@ -117,6 +117,42 @@
               <div class="settings-group-body">
                 <div class="field-row field-row-settings">
                   <div class="field compact-field">
+                    <label>Batch size</label>
+                    <input
+                      id="batch-size-select"
+                      class="picker-list batch-size-input"
+                      type="number"
+                      min="1"
+                      step="1"
+                      value="128"
+                      inputmode="numeric"
+                      aria-label="Batch size input"
+                    />
+                  </div>
+
+                  <div class="field compact-field">
+                    <label>Tile size (px)</label>
+                    <select id="tile-size-select" class="picker-list tile-size-picker" aria-label="Tile size selector">
+                      <option value="128">128</option>
+                      <option value="224" selected>224</option>
+                      <option value="256">256</option>
+                      <option value="512">512</option>
+                    </select>
+                  </div>
+
+                  <div class="field compact-field">
+                    <label>Tile filter</label>
+                    <select id="tile-prefilter-method-select" class="picker-list tile-filter-picker" aria-label="Tile filtering method selector">
+                      <option value="quality" selected>Quality score</option>
+                      <option value="coarse">Coarse to fine</option>
+                      <option value="hybrid">Hybrid</option>
+                      <option value="none">None</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div class="field-row field-row-settings">
+                  <div class="field compact-field">
                     <label>Target ROIs</label>
                     <select id="target-accepted-rois-select" class="picker-list max-rois-picker" aria-label="Target accepted ROIs selector">
                       <option value="1">1</option>
@@ -145,53 +181,20 @@
                   </div>
 
                   <div class="field compact-field">
-                    <label>Tile size (px)</label>
-                    <select id="tile-size-select" class="picker-list tile-size-picker" aria-label="Tile size selector">
-                      <option value="128">128</option>
-                      <option value="224" selected>224</option>
-                      <option value="256">256</option>
-                      <option value="512">512</option>
+                    <label>ROI size (px)</label>
+                    <select id="roi-output-size-select" class="picker-list roi-size-picker" aria-label="ROI output size selector">
+                      <option value="640">640</option>
+                      <option value="768">768</option>
+                      <option value="1024" selected>1024</option>
+                      <option value="1536">1536</option>
+                      <option value="2048">2048</option>
                     </select>
-                  </div>
-
-                  <div class="field compact-field">
-                    <label>Batch size</label>
-                    <input
-                      id="batch-size-select"
-                      class="picker-list batch-size-input"
-                      type="number"
-                      min="1"
-                      step="1"
-                      value="128"
-                      inputmode="numeric"
-                      aria-label="Batch size input"
-                    />
                   </div>
                 </div>
 
-                <div class="field-row field-row-settings">
+                <div class="field-row field-row-settings-2">
                   <div class="field compact-field">
-                    <label>ROI size (px, square)</label>
-                    <select id="roi-output-size-select" class="picker-list roi-size-picker" aria-label="ROI output size selector">
-                      <option value="1024" selected>1024 × 1024</option>
-                      <option value="2048">2048 × 2048</option>
-                      <option value="3072">3072 × 3072</option>
-                      <option value="4096">4096 × 4096</option>
-                    </select>
-                  </div>
-
-                  <div class="field compact-field">
-                    <label>Tile filter</label>
-                    <select id="tile-prefilter-method-select" class="picker-list tile-filter-picker" aria-label="Tile filtering method selector">
-                      <option value="quality" selected>Quality score</option>
-                      <option value="coarse">Coarse to fine</option>
-                      <option value="hybrid">Hybrid</option>
-                      <option value="none">None</option>
-                    </select>
-                  </div>
-
-                  <div class="field compact-field">
-                    <label>MPP (um/px, default 0.159)</label>
+                    <label>MPP (um/px)</label>
                     <input
                       id="default-mpp-input"
                       class="picker-list mpp-input"
@@ -202,6 +205,21 @@
                       placeholder="0.159"
                       inputmode="decimal"
                       aria-label="MPP fallback input"
+                    />
+                  </div>
+
+                  <div class="field compact-field">
+                    <label>Local field (µm)</label>
+                    <input
+                      id="candidate-nav-field-um-input"
+                      class="picker-list candidate-nav-field-input"
+                      type="number"
+                      min="100"
+                      step="100"
+                      value="1200"
+                      placeholder="1200"
+                      inputmode="numeric"
+                      aria-label="Candidate navigation field width input"
                     />
                   </div>
                 </div>
@@ -269,6 +287,7 @@
           <div class="card-head">
             <h2>Run Status</h2>
             <div class="status-head-right">
+              <div id="status-pill" class="pill pill-idle" hidden>Idle</div>
               <div id="run-loading" class="run-loading model-warn" hidden>
                 <span class="flag-dot" aria-hidden="true"></span>
                 <span id="run-state-text">Running</span>

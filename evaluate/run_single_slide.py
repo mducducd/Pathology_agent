@@ -33,7 +33,11 @@ FINAL_DECISIONS = (
     "Call for more diagnostics",
 )
 FINAL_DECISION_LOOKUP = {label.lower(): label for label in FINAL_DECISIONS}
-DEFAULT_MPP_UM_FALLBACK = 0.159
+try:
+    from wsi_core_pkg.tuning_config import tuning_value
+    DEFAULT_MPP_UM_FALLBACK = float(tuning_value("tools.slide", "DEFAULT_MPP_UM"))
+except Exception:
+    DEFAULT_MPP_UM_FALLBACK = 0.159
 
 
 def _make_run_id(patient_name: str) -> str:
@@ -581,7 +585,7 @@ def main() -> int:
         "--tile-size-um",
         type=float,
         default=None,
-        help="Tile size in microns. If omitted, auto-compute from preferred MPP override when set, otherwise slide MPP; fallback MPP is 0.159.",
+        help=f"Tile size in microns. If omitted, auto-compute from preferred MPP override when set, otherwise slide MPP; fallback MPP is {DEFAULT_MPP_UM_FALLBACK}.",
     )
     parser.add_argument("--tile-size-px", type=int, default=224)
     parser.add_argument("--batch-size", type=int, default=128)

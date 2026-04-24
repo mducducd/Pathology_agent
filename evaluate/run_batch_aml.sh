@@ -12,7 +12,7 @@
 #       [--tile-filter hybrid] \
 #       [--tile-size-px 224] \
 #       [--roi-size-px 2048] \
-#       [--default-mpp-um 0.159] \
+#       [--default-mpp-um <from config>] \
 #       [--batch-size 512] \
 #       [--experiment-root /path/to/experiment] \
 #       [--use-tile-cache] \
@@ -42,7 +42,19 @@ TILE_FILTER="hybrid"
 TILE_SIZE_PX="224"
 BATCH_SIZE="512"
 ROI_SIZE_PX="2048"
-DEFAULT_MPP_UM="0.159"
+DEFAULT_MPP_UM="$(python3 - <<'PY'
+from pathlib import Path
+import yaml
+cfg = Path('configs/config.yaml')
+default = '0.159'
+try:
+    data = yaml.safe_load(cfg.read_text()) or {}
+    value = data.get('tools', {}).get('slide', {}).get('DEFAULT_MPP_UM', default)
+    print(value)
+except Exception:
+    print(default)
+PY
+)"
 AGENT="aml"
 RESUME=false
 USE_TILE_CACHE=false

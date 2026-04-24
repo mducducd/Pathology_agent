@@ -14,7 +14,19 @@ TILE_FILTER="hybrid"
 TILE_SIZE_PX="224"
 BATCH_SIZE="512"
 ROI_SIZE_PX="2048"
-DEFAULT_MPP_UM="0.159"
+DEFAULT_MPP_UM="$(cd "${SCRIPT_DIR}/.." && python3 - <<'PY'
+from pathlib import Path
+import yaml
+cfg = Path('configs/config.yaml')
+default = '0.159'
+try:
+    data = yaml.safe_load(cfg.read_text()) or {}
+    value = data.get('tools', {}).get('slide', {}).get('DEFAULT_MPP_UM', default)
+    print(value)
+except Exception:
+    print(default)
+PY
+)"
 AGENT="aml"
 RESUME=true
 USE_TILE_CACHE=true
@@ -43,7 +55,7 @@ Options:
   --extractors LIST          Comma-separated extractors to keep, e.g. reddino
   --tile-filter NAME         Tile prefilter method, e.g. hybrid or coarse
   --roi-size-px N            AML ROI size in pixels, default 2048
-  --default-mpp-um FLOAT     Preferred MPP override, default 0.159
+  --default-mpp-um FLOAT     Preferred MPP override, default from configs/config.yaml
   --use-tile-cache
   --resume
   -h, --help

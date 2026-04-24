@@ -1676,11 +1676,6 @@ def build_unsupervised_roi_index(
     reference_tile_labels: tuple[str, ...] = ()
     reference_neighbor_k = 0
     reference_candidate_mask = np.zeros((num_tiles,), dtype=np.bool_)
-    blast_scores = np.zeros((num_tiles,), dtype=np.float32)
-    blast_neighbor_indices = np.empty((num_tiles, 0), dtype=np.int32)
-    blast_neighbor_sims = np.empty((num_tiles, 0), dtype=np.float32)
-    blast_reference_paths: tuple[str, ...] = ()
-    blast_neighbor_k = 0
     ref_root = Path(reference_tiles_root).resolve() if (use_reference_labels and reference_tiles_root) else None
     ref_records_all = _discover_reference_tiles(ref_root) if ref_root else []
     ref_records = _active_reference_records(ref_records_all)
@@ -1796,39 +1791,6 @@ def build_unsupervised_roi_index(
             reference_mode = "no_reference_tiles"
             reference_stats["reference_mode"] = reference_mode
 
-        blast_loaded = None
-        if AML_ENABLE_BLAST_REFERENCES:
-            blast_loaded = _load_blast_cell_embeddings(
-                AML_BLAST_CELLS_ROOT,
-                extractor_id=extractor_id,
-                extractor_loader=_ensure_extractor,
-                device=run_device,
-                batch_size=max(1, min(64, int(batch_size))),
-            )
-        if blast_loaded is not None:
-            blast_feat_l2, blast_paths = blast_loaded
-            blast_scores, blast_neighbor_indices, blast_neighbor_sims, blast_top1 = _compute_blast_reference_scores(
-                features_l2=features_l2,
-                blast_features_l2=blast_feat_l2,
-                top_k=AML_BLAST_TOP_K,
-                row_block_size=AML_REFERENCE_QUERY_BLOCK_ROWS,
-            )
-            blast_reference_paths = blast_paths
-            blast_neighbor_k = int(min(AML_BLAST_TOP_K, blast_neighbor_sims.shape[1])) if blast_neighbor_sims.ndim == 2 else 0
-            reference_stats.update(
-                {
-                    "blast_reference_tiles_root": str(Path(AML_BLAST_CELLS_ROOT).resolve()),
-                    "blast_reference_tiles_total": len(blast_paths),
-                    "blast_reference_neighbor_k": int(blast_neighbor_k),
-                }
-            )
-            blast_rank_signal = _zscore(blast_scores)
-            if use_retrieval_ranking:
-                scores = (scores + (AML_BLAST_SIMILARITY_WEIGHT * blast_rank_signal)).astype(np.float32, copy=False)
-            else:
-                scores = blast_rank_signal.astype(np.float32, copy=False)
-                use_retrieval_ranking = True
-
     if not use_retrieval_ranking:
         if progress_cb is not None:
             progress_cb(
@@ -1890,7 +1852,6 @@ def build_unsupervised_roi_index(
         coordinates_level0_xy=coordinates_level0_xy,
         scores=scores,
         dark_roi_scores=dark_roi_scores,
-        blast_scores=blast_scores,
         num_tiles=num_tiles,
         feature_dim=feature_dim,
         bad_margin=bad_margin,
@@ -1905,10 +1866,6 @@ def build_unsupervised_roi_index(
         reference_tile_labels=reference_tile_labels,
         reference_neighbor_k=reference_neighbor_k,
         reference_candidate_mask=reference_candidate_mask,
-        blast_neighbor_indices=blast_neighbor_indices,
-        blast_neighbor_sims=blast_neighbor_sims,
-        blast_reference_paths=blast_reference_paths,
-        blast_neighbor_k=blast_neighbor_k,
         quality_method=quality_method,
     )
 
@@ -1918,7 +1875,7 @@ def _reference_matches_for_tile(
     index: UnsupervisedROIIndex,
     tile_idx: int,
     max_items: int = AML_REFERENCE_EVIDENCE_PER_CLASS,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]], float, float, float]:
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], float, float]:
     def _collect(
         *,
         paths: tuple[str, ...],
@@ -1947,10 +1904,8 @@ def _reference_matches_for_tile(
 
     bad_refs: list[dict[str, Any]] = []
     good_refs: list[dict[str, Any]] = []
-    blast_refs: list[dict[str, Any]] = []
     bad_top1 = 0.0
     good_top1 = 0.0
-    blast_top1 = 0.0
 
     if index.bad_neighbor_sims.ndim == 2 and index.bad_neighbor_sims.shape[0] > tile_idx:
         bad_top1 = float(index.bad_neighbor_sims[tile_idx, 0]) if index.bad_neighbor_sims.shape[1] else 0.0
@@ -1968,16 +1923,8 @@ def _reference_matches_for_tile(
             neighbor_indices=index.good_neighbor_indices[tile_idx],
             neighbor_sims=index.good_neighbor_sims[tile_idx],
         )
-    if index.blast_neighbor_sims.ndim == 2 and index.blast_neighbor_sims.shape[0] > tile_idx:
-        blast_top1 = float(index.blast_neighbor_sims[tile_idx, 0]) if index.blast_neighbor_sims.shape[1] else 0.0
-        blast_refs = _collect(
-            paths=index.blast_reference_paths,
-            labels=None,
-            neighbor_indices=index.blast_neighbor_indices[tile_idx],
-            neighbor_sims=index.blast_neighbor_sims[tile_idx],
-        )
 
-    return bad_refs, good_refs, blast_refs, bad_top1, good_top1, blast_top1
+    return bad_refs, good_refs, bad_top1, good_top1
 
 
 def _prefilter_candidates_for_vllm(
@@ -2176,14 +2123,16 @@ def select_topk_candidates_for_view(
         if index.dark_roi_scores.size == index.num_tiles
         else None
     )
-    # Keep candidates spatially distinct: require near-tile-sized center spacing.
-    # This reduces heavy overlap even when tile_size_level0_px is larger than the
-    # external min_center_separation_px setting.
-    adaptive_min_sep_px = max(
-        int(max(1, min_center_separation_px)),
-        int(round(index.tile_size_level0_px * ROI_ADAPTIVE_MIN_SEPARATION_TILE_RATIO)),
-    )
-    min_sep_sq = float(adaptive_min_sep_px ** 2)
+    # When disabled, allow nearby top-k candidates to coexist and rely on the
+    # overlap guard below instead of center-distance suppression.
+    if min_center_separation_px > 0:
+        adaptive_min_sep_px = max(
+            int(max(1, min_center_separation_px)),
+            int(round(index.tile_size_level0_px * ROI_ADAPTIVE_MIN_SEPARATION_TILE_RATIO)),
+        )
+        min_sep_sq = float(adaptive_min_sep_px ** 2)
+    else:
+        min_sep_sq = 0.0
 
     def _bbox_iou(
         ax0: float,
@@ -2223,21 +2172,14 @@ def select_topk_candidates_for_view(
         ty1 = cyi + half_tile
         if selected:
             too_close = False
-            too_overlapped = False
             for prev_idx, prev_bbox in zip(selected, selected_bboxes):
                 prev_tile_idx = prev_idx[0]
                 dx = cxi - float(cx[prev_tile_idx])
                 dy = cyi - float(cy[prev_tile_idx])
-                if (dx * dx + dy * dy) < min_sep_sq:
+                if min_sep_sq > 0.0 and (dx * dx + dy * dy) < min_sep_sq:
                     too_close = True
                     break
-                iou = _bbox_iou(tx0, ty0, tx1, ty1, prev_bbox[0], prev_bbox[1], prev_bbox[2], prev_bbox[3])
-                if iou > ROI_CANDIDATE_MAX_IOU:
-                    too_overlapped = True
-                    break
             if too_close:
-                continue
-            if too_overlapped:
                 continue
         dark_score = float(ordered_dark_scores[pos]) if ordered_dark_scores is not None else None
         selected.append((int(tile_idx), float(ordered_rank_scores[pos]), dark_score))
@@ -2266,7 +2208,7 @@ def select_topk_candidates_for_view(
         bx1n = max(0, min(999, cx_norm + half_x_norm))
         by1n = max(0, min(999, cy_norm + half_y_norm))
 
-        bad_refs, good_refs, blast_refs, bad_top1, good_top1, blast_top1 = _reference_matches_for_tile(
+        bad_refs, good_refs, bad_top1, good_top1 = _reference_matches_for_tile(
             index=index,
             tile_idx=tile_idx,
         )
@@ -2348,20 +2290,6 @@ def select_topk_candidates_for_view(
             "center_level0": [cxi, cyi],
             "tile_bbox_level0": [tile_x0, tile_y0, tile_x1, tile_y1],
         }
-        if AML_ENABLE_BLAST_REFERENCES:
-            candidate.update(
-                {
-                    "blast_similarity_score": (
-                        float(index.blast_scores[tile_idx])
-                        if index.blast_scores.size > tile_idx
-                        else 0.0
-                    ),
-                    "blast_top1_similarity": blast_top1,
-                    "blast_neighbor_k": index.blast_neighbor_k,
-                    "retrieved_blast_refs": blast_refs[:3] if blast_refs else [],
-                }
-            )
-
         out.append(candidate)
 
     return out

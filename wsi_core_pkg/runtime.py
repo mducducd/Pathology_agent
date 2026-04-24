@@ -112,6 +112,7 @@ def run_wsi_agent_for_web(
     max_accepted_rois: int = 10,
     target_accepted_rois: int = 5,
     default_mpp_um: float | None = None,
+    candidate_nav_field_um: float | None = None,
 ) -> Dict[str, Any]:
     agent_type_l = (agent_type or "wsi").lower()
 
@@ -136,6 +137,7 @@ def run_wsi_agent_for_web(
             max_accepted_rois=max_accepted_rois,
             target_accepted_rois=target_accepted_rois,
             default_mpp_um=default_mpp_um,
+            candidate_nav_field_um=candidate_nav_field_um,
         )
         state.AGENT_TYPE = agent_type_l
 

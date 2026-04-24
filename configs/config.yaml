@@ -24,9 +24,9 @@ tools:
     # Raw ROI candidates kept per view before view-level post-processing.
     ROI_CANDIDATE_TOP_K: 72
     # Minimum center spacing between final ROI candidates in level-0 pixels.
-    ROI_CANDIDATE_MIN_SEPARATION_PX: 120
+    ROI_CANDIDATE_MIN_SEPARATION_PX: 0
     # Safety floor for candidate spacing even if the main separation value is lower.
-    ROI_CANDIDATE_MIN_SEPARATION_FLOOR_PX: 64
+    ROI_CANDIDATE_MIN_SEPARATION_FLOOR_PX: 0
     # Normalized-distance tolerance used when checking proximity to already marked ROIs.
     ROI_MARK_CANDIDATE_TOLERANCE_NORM: 170
     # Fraction of `ROI_TARGET_SIDE_PX` used to suppress candidates too close to kept ROI marks.
@@ -245,3 +245,20 @@ roi_ranker:
     AML_COMBINED_RANK_GOOD_SUPPORT_BONUS: 0.06
     # Tile-size multiplier used to enforce adaptive center spacing between kept ROI candidates.
     ROI_ADAPTIVE_MIN_SEPARATION_TILE_RATIO: 0.38
+
+context_injection:
+  images:
+    # Maximum image dimension (px) when encoding context images as JPEG data URLs.
+    CONTEXT_IMAGE_MAX_DIM: 224
+    # JPEG quality used when encoding context images.
+    CONTEXT_IMAGE_JPEG_QUALITY: 55
+    # Maximum number of inline images included per LLM request.
+    CONTEXT_MAX_INLINE_IMAGES: 2
+    # Maximum total base64 chars for all inline images per LLM request.
+    CONTEXT_MAX_INLINE_IMAGE_URL_CHARS: 30000
+
+  candidates:
+    # Maximum previous-view images included in context per request.
+    CONTEXT_PREVIOUS_VIEWS_MAX: 0
+    # Maximum candidate lines shown to the model per view.
+    CONTEXT_ROI_CANDIDATE_LINES_MAX: 5

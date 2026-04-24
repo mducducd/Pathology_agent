@@ -813,17 +813,28 @@ button.primary:disabled{
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap:8px;
 }
+.field-row-settings-2{
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap:8px;
+  align-items:start;
+}
 .field-row .field{
   min-width:0;
 }
 .compact-field label{
   margin-bottom:6px;
 }
-.field-row-settings .compact-field label{
+.field-row-settings .compact-field label,
+.field-row-settings-2 .compact-field label{
   font-size: 10px;
   white-space: nowrap;
 }
+.field-row-settings-2 .compact-field label{
+  white-space: normal;
+  line-height: 1.25;
+}
 .settings-group{
+  flex: 0 0 auto;
   border:1px solid var(--border);
   border-radius: 14px;
   background: linear-gradient(180deg, rgba(255,255,255,.035), rgba(255,255,255,.015));
@@ -870,7 +881,8 @@ button.primary:disabled{
 .tile-size-picker,
 .tile-filter-picker,
 .roi-size-picker,
-.mpp-input{
+.mpp-input,
+.candidate-nav-field-input{
   width:100%;
   min-width:0;
   padding-left: 5px;
@@ -1483,6 +1495,9 @@ textarea:focus{
   }
   .sticky-card{
     height: calc(100vh - 58px);
+  }
+  .field-row-settings-2{
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 

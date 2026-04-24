@@ -29,16 +29,31 @@ from .config import (
     client_async,
     client_sync,
 )
+from .tuning_config import tuning_value
 
 _real_async_chat_create = client_async.chat.completions.create
 _real_sync_chat_create = client_sync.chat.completions.create
 _patch_installed = False
 _data_url_cache: OrderedDict[tuple[str, int, int], Optional[str]] = OrderedDict()
 
-CONTEXT_IMAGE_MAX_DIM = int(os.getenv("CONTEXT_IMAGE_MAX_DIM", "256"))
-CONTEXT_IMAGE_JPEG_QUALITY = int(os.getenv("CONTEXT_IMAGE_JPEG_QUALITY", "55"))
-CONTEXT_MAX_INLINE_IMAGES = int(os.getenv("CONTEXT_MAX_INLINE_IMAGES", "6"))
-CONTEXT_MAX_INLINE_IMAGE_URL_CHARS = int(os.getenv("CONTEXT_MAX_INLINE_IMAGE_URL_CHARS", "90000"))
+
+def _ci_int(key: str, default: int) -> int:
+    env = os.getenv(key)
+    if env is not None:
+        try:
+            return int(env)
+        except Exception:
+            pass
+    try:
+        return int(tuning_value("context_injection.images", key))
+    except Exception:
+        return default
+
+
+CONTEXT_IMAGE_MAX_DIM = _ci_int("CONTEXT_IMAGE_MAX_DIM", 1024)
+CONTEXT_IMAGE_JPEG_QUALITY = _ci_int("CONTEXT_IMAGE_JPEG_QUALITY", 55)
+CONTEXT_MAX_INLINE_IMAGES = _ci_int("CONTEXT_MAX_INLINE_IMAGES", 6)
+CONTEXT_MAX_INLINE_IMAGE_URL_CHARS = _ci_int("CONTEXT_MAX_INLINE_IMAGE_URL_CHARS", 90000)
 _INJECTED_CONTEXT_TAG = "_wsi_context_tag"
 _LEGACY_INJECTED_TEXT_PREFIXES = (
     "Example GOOD tiles",
@@ -81,6 +96,16 @@ def _agent_type() -> str:
 
 def _selected_extractor_name() -> str:
     return str(getattr(state, "EXTRACTOR_NAME", "uni2") or "uni2").strip().lower()
+
+
+def _selected_candidate_nav_field_um() -> float:
+    try:
+        override = getattr(state, "CANDIDATE_NAV_FIELD_UM_OVERRIDE", None)
+        if override is not None:
+            return max(100.0, float(override))
+        return max(100.0, float(tuning_value("tools.navigation", "CANDIDATE_NAV_FIELD_UM")))
+    except Exception:
+        return 1200.0
 
 
 def _encode_image_as_data_url(
@@ -323,7 +348,7 @@ def _inject_example_rois(
             "text": (
                 "Example ROI images (diagnostic regions to keep). "
                 "Good AML ROIs are hypercellular, deep blue-purple/basophilic, blast-suspected, in focus, low artifact, and representative. "
-                "These examples help you find visually informative ROIs, not prove AML by themselves."
+                "These examples help find visually informative ROIs, not prove AML by themselves."
             ),
         }]
         for p in roi_paths:
@@ -381,46 +406,6 @@ def _inject_wsi_images(
     new_messages = list(messages)
     insert_pos = last_tool_idx + 1
 
-    if tool_name in {"wsi_mark_roi_norm", "wsi_mark_candidate"} and state._roi_marks:
-        last_roi = state._roi_marks[-1]
-        marked_roi_path = last_roi.get("debug_path")
-        marked_roi_part = _make_image_part(marked_roi_path or "", budget) if marked_roi_path else None
-        if marked_roi_part:
-            roi_id = last_roi.get("roi_id")
-            label = last_roi.get("label", "")
-            roi_fw = last_roi.get("field_width_um")
-            roi_extra = _format_field_width_caption(roi_fw)
-            ref_evidence = last_roi.get("aml_reference_evidence") if isinstance(last_roi.get("aml_reference_evidence"), dict) else None
-            ref_extra = ""
-            if _agent_type() == "aml" and ref_evidence:
-                summary = ref_evidence.get("summary")
-                if isinstance(summary, str) and summary:
-                    ref_extra = f" Retrieval evidence for this ROI: {summary}."
-            next_rank_hint = last_roi.get("next_candidate_rank_hint")
-            next_jump_text = (
-                f" If you still need another ROI after that decision, continue with candidate #{int(next_rank_hint)} next."
-                if isinstance(next_rank_hint, int)
-                else " If you still need another ROI after that decision, jump directly to the next unvisited candidate."
-            )
-            text = (
-                f"NEWLY MARKED ROI (ROI #{roi_id}: {label}{roi_extra}). "
-                "This ROI has been kept as evidence. If it is actually mostly background or not diagnostic on review, "
-                "your very next action should be to call wsi_discard_last_roi. "
-                + next_jump_text
-                + " The system may already have advanced CURRENT VIEW to the next candidate for navigation, "
-                "so do not use this ROI image for coordinate selection."
-                + ref_extra
-            )
-            marked_roi_msg = {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": text},
-                    marked_roi_part,
-                ],
-            }
-            new_messages.insert(insert_pos, _tag_context_message(marked_roi_msg, "latest_marked_roi"))
-            insert_pos += 1
-
     curr_path = state._current_view.get("debug_path") if state._current_view else None
     current_view_part = _make_image_part(curr_path or "", budget) if curr_path else None
     if current_view_part:
@@ -428,9 +413,12 @@ def _inject_wsi_images(
         extra = _format_field_width_caption(fw)
         text = (
             f"CURRENT VIEW for navigation{extra}. "
-            "All coordinates for your NEXT tool call must be chosen relative to THIS "
-            "image. Do NOT select boxes centered on blank/white background; always "
-            "place boxes tightly around tissue."
+            "All coordinates for NEXT tool call must be chosen relative to THIS image."
+            "PRIORITY: Look for regions with high cellularity (dense packed nucleated cells) and clear blast visibility. "
+            "For high-cellularity subregions, ZOOM INTO IT to capture the best single-cell morphology. "
+            "Do NOT select boxes centered on blank/white background; always place boxes tightly around tissue and high-cellularity areas. "
+            "In AML local search, stay within high-cellularity regions and zoom to find the clearest detail; avoid panning to empty areas. "
+            "Do not default to the image center unless it shows the best cellularity."
         )
 
         current_view_msg = {
@@ -450,30 +438,19 @@ def _inject_wsi_images(
             max_accepted_rois,
             max(1, int(getattr(state, "TARGET_ACCEPTED_ROIS", 5) or 5)),
         )
-        aml_stop_lines = [
-            "AML efficiency reminder:",
-            f"- Soft goal: target {target_roi_count} kept ROIs from distinct regions for AML if feasible.",
-            f"- Hard stop: do not exceed {max_accepted_rois} kept ROIs.",
-        ]
-        if kept_roi_count >= max_accepted_rois:
-            aml_stop_lines.append(
-                f"- Hard cap reached: {kept_roi_count}/{max_accepted_rois} kept ROI(s). Stop calling ROI tools and give the final AML decision."
-            )
-        elif kept_roi_count < target_roi_count:
-            aml_stop_lines.append(
-                f"- Current progress: {kept_roi_count}/{target_roi_count} toward the soft goal. Keep searching for additional distinct AML ROIs."
-            )
+        if kept_roi_count < target_roi_count:
+            aml_stop_lines = [
+                f"- Current progress: {kept_roi_count}/{target_roi_count} ROIs marked.",
+                f"Keep searching for additional distinct AML ROIs to reach the {target_roi_count} ROI target.",
+            ]
+        elif kept_roi_count >= max_accepted_rois:
+            aml_stop_lines = [
+                f"- Hard cap reached: {kept_roi_count}/{max_accepted_rois} kept ROI(s). Provide final AML diagnosis.",
+            ]
         else:
-            aml_stop_lines.append(
-                f"- Soft goal reached: {kept_roi_count}/{target_roi_count} kept ROI(s). Final AML decision is now allowed if the evidence is stable; only add more ROIs if they could materially change the decision before the hard cap."
-            )
-        if kept_roi_count:
-            aml_stop_lines.append("- Kept ROI reference evidence:")
-            for roi in state._roi_marks[-min(3, kept_roi_count):]:
-                ref_evidence = roi.get("aml_reference_evidence") if isinstance(roi.get("aml_reference_evidence"), dict) else None
-                summary = ref_evidence.get("summary") if ref_evidence else None
-                if isinstance(summary, str) and summary:
-                    aml_stop_lines.append(f"- ROI #{roi.get('roi_id')}: {summary}")
+            aml_stop_lines = [
+                f"- ROI target reached: {kept_roi_count}/{target_roi_count} kept ROI(s). Provide AML blast estimate and diagnosis.",
+            ]
         new_messages.insert(
             insert_pos,
             _tag_context_message({"role": "user", "content": [{"type": "text", "text": "\n".join(aml_stop_lines)}]}, "aml_guidance"),
@@ -484,68 +461,45 @@ def _inject_wsi_images(
     if state._roi_marks:
         latest_roi_debug_path = str(state._roi_marks[-1].get("debug_path") or "")
     current_view_debug_path = str(state._current_view.get("debug_path") or "") if state._current_view else ""
+    current_view_nav_mode = str(state._current_view.get("candidate_navigation_mode") or "") if state._current_view else ""
     mark_tool_names = {"wsi_mark_roi_norm", "wsi_mark_candidate"}
+    suppress_candidates_for_free_local_search = current_view_nav_mode == "free_local_search"
+    kept_roi_count_for_candidates = len(state._roi_marks)
+    target_accepted_rois_for_candidates = max(1, int(getattr(state, "TARGET_ACCEPTED_ROIS", 5) or 5))
+    at_or_past_target = kept_roi_count_for_candidates >= target_accepted_rois_for_candidates
     should_include_current_candidates = bool(state._last_roi_candidates) and (
-        tool_name not in mark_tool_names or current_view_debug_path != latest_roi_debug_path
+        not suppress_candidates_for_free_local_search
+        and not at_or_past_target
+        and (tool_name not in mark_tool_names or current_view_debug_path != latest_roi_debug_path)
     )
+
+    if suppress_candidates_for_free_local_search and _agent_type() == "aml":
+        free_search_text = (
+            "You are now inside a suggested AML search region. "
+            "Treat the CURRENT VIEW as a search area. "
+            "Look for areas with high cellularity (dense packed nucleated cells) and clear blast visibility—these are priority. "
+            "Finding a visibly high-cellularity subregion: STAY and zoom into it to capture the clearest single-cell morphology. "
+            "Avoid jumping to other regions unless the current area is clearly empty or severely artifact-affected. "
+            "Prefer patches with readable single-cell detail, abundant nucleated cells, acceptable focus, and limited artifact; broad full-field cellularity is not required but high local concentration is a strong positive signal. "
+            "Avoid empty/pale areas, severely RBC-dominant regions, heavy stain pooling, clot/crush artifact, and blurred or unreadable zones. "
+            "Call wsi_mark_roi_norm only after identifying a high-cellularity local subregion with good blast visibility; otherwise keep exploring within this field or skip to another region."
+        )
+        new_messages.insert(
+            insert_pos,
+            _tag_context_message({"role": "user", "content": [{"type": "text", "text": free_search_text}]}, "aml_free_local_search"),
+        )
+        insert_pos += 1
 
     if should_include_current_candidates:
         source = state._last_roi_candidate_source or "unknown"
         cand_lines = []
         for c in state._last_roi_candidates[:max(1, CONTEXT_ROI_CANDIDATE_LINES_MAX)]:
             rank = c.get("rank")
-            center = c.get("center_norm", [0, 0])
             score = c.get("score")
             score_txt = f"{float(score):.3f}" if isinstance(score, (int, float)) else "n/a"
-            reference_mode = str(c.get("reference_mode") or "")
-            bad_refs_active = ("good_bad" in reference_mode) or ("bad_only" in reference_mode)
             quality_hint = c.get("quality_hint")
-            bad_like = c.get("bad_likelihood")
-            retrieval_score = c.get("retrieval_score")
-            bad_top1 = c.get("bad_top1_similarity")
-            good_top1 = c.get("good_top1_similarity")
-            blast_top1 = c.get("blast_top1_similarity")
-            bad_refs = c.get("retrieved_bad_refs")
-            good_refs = c.get("retrieved_good_refs")
-            blast_refs = c.get("retrieved_blast_refs")
-            nav_bbox = c.get("navigation_bbox_norm")
-            extras = []
-            if isinstance(quality_hint, str) and quality_hint:
-                extras.append(f"hint={quality_hint}")
-            if isinstance(retrieval_score, (int, float)):
-                extras.append(f"retrieval={float(retrieval_score):.2f}")
-            if bad_refs_active and isinstance(bad_like, (int, float)):
-                extras.append(f"bad_like={float(bad_like):.2f}")
-            if bad_refs_active and isinstance(bad_top1, (int, float)):
-                extras.append(f"bad_top1={float(bad_top1):.2f}")
-            if isinstance(good_top1, (int, float)):
-                extras.append(f"good_top1={float(good_top1):.2f}")
-            if isinstance(blast_top1, (int, float)):
-                extras.append(f"blast_top1={float(blast_top1):.2f}")
-            if isinstance(nav_bbox, list) and len(nav_bbox) == 4:
-                extras.append(
-                    f"nav_box=({int(nav_bbox[0])},{int(nav_bbox[1])},{int(nav_bbox[2])},{int(nav_bbox[3])})"
-                )
-            if bad_refs_active and isinstance(bad_refs, list) and bad_refs:
-                top_bad = bad_refs[0]
-                sim = top_bad.get("similarity")
-                name = top_bad.get("name") or os.path.basename(str(top_bad.get("path") or ""))
-                if name and isinstance(sim, (int, float)):
-                    extras.append(f"bad_nn={name}@{float(sim):.2f}")
-            if isinstance(good_refs, list) and good_refs:
-                top_good = good_refs[0]
-                sim = top_good.get("similarity")
-                name = top_good.get("name") or os.path.basename(str(top_good.get("path") or ""))
-                if name and isinstance(sim, (int, float)):
-                    extras.append(f"good_nn={name}@{float(sim):.2f}")
-            if isinstance(blast_refs, list) and blast_refs:
-                top_blast = blast_refs[0]
-                sim = top_blast.get("similarity")
-                name = top_blast.get("name") or os.path.basename(str(top_blast.get("path") or ""))
-                if name and isinstance(sim, (int, float)):
-                    extras.append(f"blast_nn={name}@{float(sim):.2f}")
-            suffix = f", {', '.join(extras)}" if extras else ""
-            cand_lines.append(f"#{rank}: center=({int(center[0])},{int(center[1])}), score={score_txt}{suffix}")
+            hint_txt = f" hint={quality_hint}" if isinstance(quality_hint, str) and quality_hint else ""
+            cand_lines.append(f"#{rank}: score={score_txt}{hint_txt}")
         aml_meta_line = ""
         meta = state._roi_ranker_meta if isinstance(state._roi_ranker_meta, dict) else {}
         ref_stats = meta.get("reference_stats") if isinstance(meta.get("reference_stats"), dict) else None
@@ -580,26 +534,31 @@ def _inject_wsi_images(
             f"{extractor_name}_exact_retrieval" if _agent_type() == "aml" else f"{extractor_name}_knn"
         )
         cand_text = (
-            "Top ROI candidates for CURRENT VIEW (normalized 0-999 coordinates). "
+            "Top ROI candidates for the CURRENT VIEW. "
             f"Candidate source: {source}. "
-            f"Expected source is '{expected_source_name}' from {expected_source} "
-            "Prefer wsi_open_candidate(rank) for the first jump into an approximately 1500 um field around a candidate, then choose the best local ROI region yourself with wsi_mark_roi_norm or skip. navigation_bbox_norm is available as a coordinate fallback. "
-            "Interpret quality_hint as support from good-quality ROI references only, not as a diagnosis and not as a guarantee of cellularity by itself. "
-            "Prefer good_like candidates first, but uncertain candidates are still acceptable when they look interpretable, reasonably cellular, and morphologically informative. "
-            "Use blast_top1/blast_nn as separate blast-reference evidence, prioritize deep blue-purple cellular candidates first, treat dark red-pink as a fallback only when clearly cellular, prefer fields with many separate crisp round purple cells, and reject only clearly trash regions such as stringy, gray-black, acellular, or broad gray-clump ROIs. "
-            "For wsi_mark_roi_norm, choose one of these candidate centers/bboxes; arbitrary ROI coords are rejected:\n"
+            f"Expected source: '{expected_source_name}' from {expected_source}. "
+            "IMPORTANT: If the CURRENT VIEW shows high cellularity with good blast visibility or abundant nucleated cells, STAY IN THIS REGION and zoom to find the best local ROI—do not jump to other candidates. Only jump to a different candidate if the current region is clearly unsuitable (mostly empty, severe artifact, etc.). "
+            "When zooming within the current high-cellularity field, look for areas with the clearest single-cell morphology and best blast visibility. "
+            "To navigate to a different candidate, use wsi_open_candidate(rank) to jump into an approximately " + str(int(round(_selected_candidate_nav_field_um()))) + " um field around that candidate. "
+            "Treat quality_hint only as supportive reference evidence; it does not guarantee cellularity or interpretability. "
+            "Prefer representative, interpretable marrow patches with readable single-cell morphology, abundant nucleated cells, acceptable focus, and limited artifact. "
+            "High cellularity (dense packed nucleated cells) is a strong signal of good diagnostic potential—prioritize these regions. "
+            "A partial but clearly usable cellular area is acceptable; broad full-field cellularity is not required, and high local blast concentration can be diagnostic. "
+            "Avoid heavy stain pooling, dark blue clot-like material, stringy smear artifact, gray-black debris, and nearly acellular regions. "
+            "Some empty/vacuolated space is acceptable if a nearby local ROI is still clearly usable for rough blast estimation. "
+            "Use ranked candidates as region-level guidance only; choose the final ROI box based on the best local morphology:\n"
             + "\n".join(cand_lines)
             + aml_meta_line
         )
         candidate_content = [{"type": "text", "text": cand_text}]
-        if include_candidate_overlay:
+        if include_candidate_overlay and _agent_type() != "aml":
             overlay_part = _make_image_part(state._last_roi_candidate_overlay_path or "", budget)
             if overlay_part:
                 candidate_content.append(overlay_part)
         new_messages.insert(insert_pos, _tag_context_message({"role": "user", "content": candidate_content}, "roi_candidates"))
         insert_pos += 1
 
-    if include_overview and state._last_overview_with_box_path:
+    if include_overview and state._last_overview_with_box_path and not suppress_candidates_for_free_local_search:
         overview_part = _make_image_part(state._last_overview_with_box_path, budget)
         if overview_part:
             fw = state._current_view.get("field_width_um") if state._current_view else None

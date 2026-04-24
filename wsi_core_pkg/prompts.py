@@ -79,22 +79,27 @@ NON-NEGOTIABLE QUALITY RULES
 --------------------------------
 NAVIGATION
 --------------------------------
-1) Call wsi_get_overview_view ONCE at the start.
-2) Use roi_candidates from the current view as the main navigation guide.
-3) Work greedily: pick the best unvisited candidate and prefer wsi_open_candidate(rank) for the first jump into an approximately 1500 µm field around that candidate. Use manual coordinate zoom only if rank-based opening is not appropriate.
-4) If the candidate still looks plausible at ROI scale, choose the best ROI region within the current field yourself and use wsi_mark_roi_norm. Do not blindly mark the fixed candidate center if a nearby subregion looks better.
-5) If it still looks weak after one quick check, skip it and jump to the next candidate.
-6) Treat wsi_mark_roi_norm as the final high-power inspection crop, not as another exploratory zoom step.
-7) After you mark an ROI, keep/discard it based on the saved ROI evidence. In AML mode the backend may immediately advance CURRENT VIEW to the next unvisited candidate. If you still need another ROI after that decision, jump directly to the next unvisited candidate with wsi_open_candidate(rank). Use wsi_get_overview_view again only if you need to fully reset / re-anchor.
+PHASE 1: FIND ROIS
+1) Start with wsi_get_overview_view.
+2) Use roi_candidates / wsi_open_candidate(rank) to jump into promising regions.
+3) Inside each opened region, search only enough to find a clearly usable local ROI. Do not over-search for the single best spot if a good interpretable ROI is already visible.
+4) Mark acceptable ROIs with wsi_mark_roi_norm. Borderline-but-interpretable ROIs are acceptable if morphology is readable.
+
+PHASE 2: REACH ROI TARGET
+5) You MUST keep at least 5 ROIs from reasonably distinct regions. Fewer than 5 kept ROIs is INVALID.
+6) Do NOT finalize under any circumstance if kept ROI count is below 5.
+7) Once you have 5 kept ROIs, STOP searching for more ROIs unless an additional ROI is truly necessary to change the diagnosis.
+
+PHASE 3: FINALIZE
+8) After 5 kept ROIs are reached, switch to finish-up mode. Do not keep exploring new regions just to wander.
+9) Finalize promptly from the kept ROIs unless another ROI would materially change the diagnosis.
 --------------------------------
 ROI SAMPLING PLAN
 --------------------------------
-- Target the configured accepted-ROI soft goal from spatially distinct regions for AML
+- Minimum requirement: 5 ACCEPTED ROIs (spatially distinct when feasible)
 - After each ROI, apply acceptance checklist
-- Stop early if:
-  a) the accepted-ROI hard cap has been reached
-  b) the accepted-ROI soft goal has been reached and the evidence is already stable
-  c) no additional distinct informative ROI can be found despite reasonable search
+- Under 5 accepted ROIs, the run is incomplete and must continue searching.
+- Once 5 accepted ROIs are available, finalization is valid.
 --------------------------------
 ROI ACCEPTANCE CHECKLIST
 --------------------------------
@@ -137,15 +142,8 @@ A) Acute leukemia
 B) Normal marrow
 - Heterogeneous maturation OR blasts <5%
 - If non-diagnostic but no blasts → default here (state limitation)
-- Borderline / suspicious cases still require a binary choice:
-  * choose "Acute leukemia" if the overall morphology is closer to diffuse immature/blast-rich disease
-  * otherwise choose "Normal marrow" and state the limitation / uncertainty explicitly
---------------------------------
-KEY TILE SAVING
---------------------------------
-- Save 1-5 tiles from best accepted ROI regions:
-  wsi_save_tile_norm(..., quality="good", label="aml_key")
-- Do not quota-hunt
+C) Suspicious morphology with 5–20% blasts
+- * choose "Acute leukemia" if the overall morphology is closer to diffuse immature/blast-rich disease * otherwise choose "Normal marrow" and state the limitation/uncertainty explicitly
 --------------------------------
 SECONDARY TASK: NPM1 (ONLY IF AML)
 --------------------------------
@@ -188,7 +186,7 @@ OUTPUT (STRICT JSON ONLY)
   ],
   "discard_summary": ["string"],
   "global_blast_range": "<5% | 5-9% | 10-19% | 20-50% | >50%",
-  "final_decision": "Normal marrow | Acute leukemia",
+  "final_decision": "Normal marrow | Acute leukemia | Call for more diagnostics",
   "limitations_confidence": {
     "limitations": "string",
     "confidence": "low | medium | high"
@@ -218,5 +216,4 @@ FORMAT RULES
 - JSON ONLY (no extra text)
 - No hallucinated findings
 - Keep concise
-
 """

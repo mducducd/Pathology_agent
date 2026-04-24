@@ -16,11 +16,12 @@ EXTRACTOR_NAME: str = "reddino_base"
 TILE_SIZE_UM: float = 256.0
 TILE_SIZE_PX: int = 224
 BATCH_SIZE: int = 128
-TILE_PREFILTER_METHOD: str = "quality"
+TILE_PREFILTER_METHOD: str = "hyvrid"
 ROI_OUTPUT_SIZE_PX: int = 1024
 MAX_ACCEPTED_ROIS: int = 10
 TARGET_ACCEPTED_ROIS: int = 5
 DEFAULT_MPP_UM_OVERRIDE: float | None = None
+CANDIDATE_NAV_FIELD_UM_OVERRIDE: float | None = None
 QUALITY_METHOD: str = "embedding"
 
 _slide: Optional[openslide.AbstractSlide] = None
@@ -101,9 +102,10 @@ def reset_wsi_state(
     max_accepted_rois: int = 10,
     target_accepted_rois: int = 5,
     default_mpp_um: float | None = None,
+    candidate_nav_field_um: float | None = None,
     quality_method: str = "embedding",
 ) -> None:
-    global RUN_ID, AGENT_TYPE, EXTRACTOR_NAME, TILE_SIZE_UM, TILE_SIZE_PX, BATCH_SIZE, TILE_PREFILTER_METHOD, ROI_OUTPUT_SIZE_PX, MAX_ACCEPTED_ROIS, TARGET_ACCEPTED_ROIS, DEFAULT_MPP_UM_OVERRIDE, QUALITY_METHOD, _debug_img_counter, DEBUG_SAVE_DIR
+    global RUN_ID, AGENT_TYPE, EXTRACTOR_NAME, TILE_SIZE_UM, TILE_SIZE_PX, BATCH_SIZE, TILE_PREFILTER_METHOD, ROI_OUTPUT_SIZE_PX, MAX_ACCEPTED_ROIS, TARGET_ACCEPTED_ROIS, DEFAULT_MPP_UM_OVERRIDE, CANDIDATE_NAV_FIELD_UM_OVERRIDE, QUALITY_METHOD, _debug_img_counter, DEBUG_SAVE_DIR
     global _step_log, _roi_marks, _attempted_roi_bboxes_level0, _view_history
     global _current_view, _overview_cache, _last_overview_with_box_path, _last_overview_debug_path
     global _slide, _saved_good_tiles, _saved_bad_tiles, _example_tiles_injected, _example_rois_injected
@@ -125,6 +127,7 @@ def reset_wsi_state(
     MAX_ACCEPTED_ROIS = max(1, int(max_accepted_rois or 10))
     TARGET_ACCEPTED_ROIS = min(MAX_ACCEPTED_ROIS, max(1, int(target_accepted_rois or 5)))
     DEFAULT_MPP_UM_OVERRIDE = max(1e-6, float(default_mpp_um)) if default_mpp_um is not None else None
+    CANDIDATE_NAV_FIELD_UM_OVERRIDE = max(100.0, float(candidate_nav_field_um)) if candidate_nav_field_um is not None else None
     QUALITY_METHOD = str(quality_method or "embedding").strip().lower()
 
     _debug_img_counter = 0

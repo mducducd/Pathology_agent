@@ -45,8 +45,58 @@ from .slide_utils import (
 )
 from .tuning_config import tuning_value
 
-ROI_CANDIDATE_TOP_K = int(os.getenv("ROI_CANDIDATE_TOP_K", "36"))
-ROI_CANDIDATE_MIN_SEPARATION_PX = int(os.getenv("ROI_CANDIDATE_MIN_SEPARATION_PX", "120"))
+
+def _tools_int(key: str, section: str = "tools.candidates", default: int = 0) -> int:
+    env = os.getenv(key)
+    if env is not None:
+        try:
+            return int(env)
+        except Exception:
+            pass
+    try:
+        return int(tuning_value(section, key))
+    except Exception:
+        return default
+
+
+def _tools_float(key: str, section: str = "tools.candidates", default: float = 0.0) -> float:
+    env = os.getenv(key)
+    if env is not None:
+        try:
+            return float(env)
+        except Exception:
+            pass
+    try:
+        return float(tuning_value(section, key))
+    except Exception:
+        return default
+
+
+def _tools_bool(key: str, section: str = "tools.candidates", default: bool = True) -> bool:
+    env = os.getenv(key)
+    if env is not None:
+        text = env.strip().lower()
+        if text in {"1", "true", "yes", "y", "on"}:
+            return True
+        if text in {"0", "false", "no", "n", "off"}:
+            return False
+    try:
+        return bool(tuning_value(section, key))
+    except Exception:
+        return default
+
+
+def _tools_str(key: str, section: str = "tools.cache", default: str = "") -> str:
+    env = os.getenv(key)
+    if env is not None:
+        return env.strip()
+    try:
+        return str(tuning_value(section, key))
+    except Exception:
+        return default
+
+
+ROI_CANDIDATE_TOP_K = _tools_int("ROI_CANDIDATE_TOP_K", "tools.candidates", 72)
 ROI_MARK_CANDIDATE_TOLERANCE_NORM = int(os.getenv("ROI_MARK_CANDIDATE_TOLERANCE_NORM", "170"))
 ROI_CANDIDATE_ALLOW_FALLBACK = os.getenv("ROI_CANDIDATE_ALLOW_FALLBACK", "1").strip().lower() in {"1", "true", "yes", "y"}
 # Hard cap on how many candidates the VLM sees in AML mode after raw retrieval ranking.
@@ -108,11 +158,156 @@ def _selected_target_accepted_rois() -> int:
     return min(_selected_max_accepted_rois(), max(1, raw_target))
 
 
+def _allow_discard_last_roi(roi: Dict[str, Any]) -> tuple[bool, str]:
+    """Near the AML target ROI count, allow discard only for clearly bad ROIs."""
+    if not _agent_is_aml():
+        return True, ""
+
+    kept_roi_count = len(getattr(state, "_roi_marks", []) or [])
+    target_accepted_rois = _selected_target_accepted_rois()
+    tissue_fraction = roi.get("tissue_fraction")
+    clearly_empty = isinstance(tissue_fraction, (int, float)) and float(tissue_fraction) < 0.15
+
+    if kept_roi_count >= max(1, target_accepted_rois - 1) and not clearly_empty:
+        return (
+            False,
+            (
+                f"Discard blocked: you already have {kept_roi_count} kept ROI(s) and target is "
+                f"{target_accepted_rois}. Near the target, keep borderline/interpretable AML ROIs. "
+                "Reserve discard for clearly bad ROIs such as mostly background or empty views."
+            ),
+        )
+
+    return True, ""
+
+
+def _save_tile_from_current_view_center(
+    *,
+    label: str,
+    quality: str = "good",
+    nav_reason: str = "Auto-save diagnostic tile from kept ROI",
+) -> Dict[str, Any]:
+    if not state._current_view:
+        raise RuntimeError("Tile save requested before any current view exists.")
+
+    quality = (quality or "good").strip().lower()
+    if quality not in {"good", "bad"}:
+        raise ValueError("quality must be 'good' or 'bad'")
+
+    if quality == "good" and len(state._saved_good_tiles) >= MAX_GOOD_TILES:
+        return {"ok": False, "reason": "max_good_tiles_reached"}
+    if quality == "bad" and len(state._saved_bad_tiles) >= MAX_BAD_TILES:
+        return {"ok": False, "reason": "max_bad_tiles_reached"}
+
+    slide = _load_slide()
+    mpp = _effective_slide_mpp_um(slide)
+    tile_px = int(round(TILE_SIZE_UM / mpp))
+    tile_px = max(32, tile_px)
+
+    cv_x0 = int(state._current_view["x0"])
+    cv_y0 = int(state._current_view["y0"])
+    cv_w = int(state._current_view["w"])
+    cv_h = int(state._current_view["h"])
+    slide_w0, slide_h0 = slide.level_dimensions[0]
+    tile_px = min(tile_px, slide_w0, slide_h0)
+
+    cx_base = cv_x0 + (cv_w // 2)
+    cy_base = cv_y0 + (cv_h // 2)
+    x0 = cx_base - (tile_px // 2)
+    y0 = cy_base - (tile_px // 2)
+    x0 = max(0, min(x0, slide_w0 - tile_px))
+    y0 = max(0, min(y0, slide_h0 - tile_px))
+
+    region = slide.read_region((x0, y0), 0, (tile_px, tile_px)).convert("RGB")
+    region = region.resize((TILE_PX, TILE_PX), Image.BILINEAR)
+
+    run_id = state.RUN_ID or datetime.now().strftime("%Y%m%d_%H%M%S")
+    out_dir = os.path.join(SELECTED_TILES_ROOT, run_id, "Selected_Tiles", quality)
+    os.makedirs(out_dir, exist_ok=True)
+
+    idx = (len(state._saved_good_tiles) + 1) if quality == "good" else (len(state._saved_bad_tiles) + 1)
+    x_um = x0 * mpp
+    y_um = y0 * mpp
+    out_path = os.path.join(out_dir, f"{quality}_{idx:04d}_tile_({x_um}, {y_um}).jpg")
+    region.save(out_path, format="JPEG", quality=95)
+
+    record = {
+        "quality": quality,
+        "label": label,
+        "path": out_path,
+        "bbox_level0": [x0, y0, tile_px, tile_px],
+        "tile_px": TILE_PX,
+        "tile_um": TILE_SIZE_UM,
+        "mpp_used": mpp,
+    }
+    if quality == "good":
+        state._saved_good_tiles.append(record)
+    else:
+        state._saved_bad_tiles.append(record)
+
+    try:
+        from wsi_core_pkg.embeddings.roi_ranker import _clear_reference_hnsw_cache
+        _clear_reference_hnsw_cache()
+    except Exception:
+        pass
+
+    _log_step(
+        "wsi_save_tile_norm",
+        nav_reason,
+        {
+            "view_bbox_level0": record["bbox_level0"],
+            "field_width_um": TILE_SIZE_UM,
+            "field_height_um": TILE_SIZE_UM,
+        },
+    )
+
+    return {
+        "ok": True,
+        "quality": quality,
+        "path": out_path,
+        "count_good": len(state._saved_good_tiles),
+        "count_bad": len(state._saved_bad_tiles),
+        "tile_px": TILE_PX,
+        "tile_um": TILE_SIZE_UM,
+        "mpp_used": mpp,
+    }
+
+
 def _selected_candidate_nav_field_um() -> float:
     try:
+        override = getattr(state, "CANDIDATE_NAV_FIELD_UM_OVERRIDE", None)
+        if override is not None:
+            return max(100.0, float(override))
         return max(100.0, float(getattr(state, "CANDIDATE_NAV_FIELD_UM", DEFAULT_CANDIDATE_NAV_FIELD_UM) or DEFAULT_CANDIDATE_NAV_FIELD_UM))
     except Exception:
         return float(DEFAULT_CANDIDATE_NAV_FIELD_UM)
+
+
+def _is_free_local_search_view() -> bool:
+    try:
+        return str(state._current_view.get("candidate_navigation_mode") or "") == "free_local_search"
+    except Exception:
+        return False
+
+
+def _strip_candidate_payload_for_free_local_search(info: Dict[str, Any]) -> Dict[str, Any]:
+    if not (_agent_is_aml() and _is_free_local_search_view()):
+        return info
+    for key in (
+        "roi_candidates",
+        "roi_candidate_count",
+        "roi_candidate_source",
+        "roi_candidate_overlay_path",
+        "roi_candidate_warning",
+        "roi_candidate_guidance",
+        "recommended_action",
+        "local_roi_budget",
+        "selected_candidate_rank",
+        "selected_candidate_center_norm",
+        "selected_candidate_bbox_norm",
+    ):
+        info.pop(key, None)
+    return info
 
 
 def _selected_default_mpp_um() -> float:
@@ -264,7 +459,7 @@ def _use_quality_prefilter(method: str | None = None) -> bool:
 
 
 def _use_dark_region_gating(method: str | None = None, *, aml_mode: bool = False) -> bool:
-    return bool(aml_mode and (method or _selected_tile_prefilter_method()) != "none")
+    return False
 
 
 def _tile_prefilter_label(method: str | None = None) -> str:
@@ -376,36 +571,11 @@ def _postprocess_roi_candidates_for_view(
         "forced_min_candidate": False,
     }
 
-    attempted_bboxes = list(getattr(state, "_attempted_roi_bboxes_level0", []) or [])
-    if processed and attempted_bboxes:
-        blocked_centers: list[tuple[float, float, float]] = []
-        for bbox in attempted_bboxes:
-            try:
-                ex_w = max(1, int(bbox[2]))
-                ex_h = max(1, int(bbox[3]))
-                ex_cx = int(bbox[0]) + ex_w // 2
-                ex_cy = int(bbox[1]) + ex_h // 2
-                min_sep = 0.3 * float(max(ex_w, ex_h))
-                blocked_centers.append((float(ex_cx), float(ex_cy), float(min_sep * min_sep)))
-            except Exception:
-                continue
-        if blocked_centers:
-            def _not_attempted(candidate: Dict[str, Any]) -> bool:
-                center = candidate.get("center_level0")
-                if not center:
-                    return True
-                cx, cy = center[0], center[1]
-                return all(
-                    (float(cx) - mx) ** 2 + (float(cy) - my) ** 2 >= min_sep_sq
-                    for mx, my, min_sep_sq in blocked_centers
-                )
-
-            processed = [candidate for candidate in processed if _not_attempted(candidate)]
-            if not processed and ROI_CANDIDATE_ALLOW_FALLBACK:
-                fallback = _fallback_candidates_from_current_view(top_k)
-                if fallback:
-                    processed = _filter_edge_touching_candidates_for_current_view(fallback)
-                    source = "fallback_heuristic"
+    if not processed and ROI_CANDIDATE_ALLOW_FALLBACK:
+        fallback = _fallback_candidates_from_current_view(top_k)
+        if fallback:
+            processed = _filter_edge_touching_candidates_for_current_view(fallback)
+            source = "fallback_heuristic"
 
     if aml_mode and processed:
         aml_cap = max(ROI_CANDIDATE_TOP_K_AML, 14)
@@ -1018,7 +1188,7 @@ def _remember_overview_candidate_bank() -> None:
     state._overview_roi_candidates = [dict(c) for c in (state._last_roi_candidates or [])]
 
 
-def _refresh_roi_candidates_for_current_view(top_k: int = ROI_CANDIDATE_TOP_K) -> List[Dict[str, Any]]:
+def _refresh_roi_candidates_for_current_view(top_k: int = ROI_CANDIDATE_TOP_K, skip_refresh: bool = False) -> List[Dict[str, Any]]:
     if not state._current_view:
         _clear_roi_candidate_cache()
         return []
@@ -1030,6 +1200,9 @@ def _refresh_roi_candidates_for_current_view(top_k: int = ROI_CANDIDATE_TOP_K) -
         and state._last_roi_candidate_view_key == view_key
         and state._last_roi_candidate_top_k == top_k
     ):
+        return list(state._last_roi_candidates)
+
+    if skip_refresh and state._last_roi_candidates:
         return list(state._last_roi_candidates)
 
     candidates: List[Dict[str, Any]] = []
@@ -1051,7 +1224,7 @@ def _refresh_roi_candidates_for_current_view(top_k: int = ROI_CANDIDATE_TOP_K) -
             index=index,
             view_bbox_level0=view_bbox,
             top_k=top_k,
-            min_center_separation_px=max(64, ROI_CANDIDATE_MIN_SEPARATION_PX),
+            min_center_separation_px=0,
             focus_boxes_level0=dark_region_boxes if use_dark_region_gating else None,
         )
         source = _selected_candidate_source(aml_mode)
@@ -1061,26 +1234,30 @@ def _refresh_roi_candidates_for_current_view(top_k: int = ROI_CANDIDATE_TOP_K) -
         if candidates:
             source = "fallback_heuristic"
 
-    candidates, source, candidate_meta = _postprocess_roi_candidates_for_view(
-        candidates,
-        top_k=top_k,
-        aml_mode=aml_mode,
-        source=source,
-    )
-    if not candidates and ROI_CANDIDATE_ALLOW_FALLBACK and source != "fallback_heuristic":
-        fallback_candidates = _fallback_candidates_from_current_view(top_k)
-        if fallback_candidates:
-            candidates, source, candidate_meta = _postprocess_roi_candidates_for_view(
-                fallback_candidates,
-                top_k=top_k,
-                aml_mode=aml_mode,
-                source="fallback_heuristic",
-            )
+    if not skip_refresh:
+        candidates, source, candidate_meta = _postprocess_roi_candidates_for_view(
+            candidates,
+            top_k=top_k,
+            aml_mode=aml_mode,
+            source=source,
+        )
+        if not candidates and ROI_CANDIDATE_ALLOW_FALLBACK and source != "fallback_heuristic":
+            fallback_candidates = _fallback_candidates_from_current_view(top_k)
+            if fallback_candidates:
+                candidates, source, candidate_meta = _postprocess_roi_candidates_for_view(
+                    fallback_candidates,
+                    top_k=top_k,
+                    aml_mode=aml_mode,
+                    source="fallback_heuristic",
+                )
+    else:
+        candidate_meta = {}
 
     state._last_roi_candidates = candidates
     state._last_roi_candidate_meta = candidate_meta
     state._last_roi_candidate_source = source
-    state._last_roi_candidate_overlay_path = _build_roi_candidate_overlay(candidates)
+    if not skip_refresh:
+        state._last_roi_candidate_overlay_path = _build_roi_candidate_overlay(candidates)
     state._last_roi_candidate_view_key = view_key
     state._last_roi_candidate_top_k = top_k
     return candidates
@@ -1145,8 +1322,13 @@ def _candidate_navigation_bbox_norm(
         return None
 
 
-def _attach_roi_candidates(info: Dict[str, Any], top_k: int = ROI_CANDIDATE_TOP_K) -> Dict[str, Any]:
-    candidates = _refresh_roi_candidates_for_current_view(top_k=top_k)
+def _attach_roi_candidates(info: Dict[str, Any], top_k: int = ROI_CANDIDATE_TOP_K, skip_refresh: bool = False) -> Dict[str, Any]:
+    kept_roi_count = len(getattr(state, "_roi_marks", []) or [])
+    target_accepted_rois = _selected_target_accepted_rois()
+    if kept_roi_count >= target_accepted_rois:
+        return info
+
+    candidates = _refresh_roi_candidates_for_current_view(top_k=top_k, skip_refresh=skip_refresh)
     aml_mode = str(getattr(state, "AGENT_TYPE", "") or "").lower() == "aml"
     nav_field_um = _selected_candidate_nav_field_um()
     for candidate in candidates:
@@ -1162,6 +1344,7 @@ def _attach_roi_candidates(info: Dict[str, Any], top_k: int = ROI_CANDIDATE_TOP_
     forced_min_candidate = bool(candidate_meta.get("forced_min_candidate"))
     info["roi_candidates"] = [_candidate_for_vlm(c) for c in candidates]
     info["roi_candidate_count"] = len(candidates)
+    info["local_roi_budget"] = len(candidates)
     info["marked_roi_count"] = len(state._roi_marks)
     info["max_accepted_rois"] = _selected_max_accepted_rois()
     info["target_accepted_rois"] = _selected_target_accepted_rois()
@@ -1187,22 +1370,6 @@ def _attach_roi_candidates(info: Dict[str, Any], top_k: int = ROI_CANDIDATE_TOP_
                     "rank": int(top["rank"]),
                 },
             }
-        else:
-            info["recommended_action"] = {
-                "tool": "wsi_mark_roi_norm",
-                "urgency": "HIGH",
-                "reason": (
-                    f"Candidate #1 is pre-ranked by AML relevance. Use it as a fast guide, "
-                    "but choose the best ROI subregion in the current field before marking."
-                ),
-                "params": {
-                    "x0_999": top["bbox_norm"][0],
-                    "y0_999": top["bbox_norm"][1],
-                    "x1_999": top["bbox_norm"][2],
-                    "y1_999": top["bbox_norm"][3],
-                    "label": "aml_roi",
-                },
-            }
 
     # Exploration budget counter - shows VLM how many steps it has used
     total_steps = len(state._step_log) if state._step_log else 0
@@ -1218,7 +1385,7 @@ def _attach_roi_candidates(info: Dict[str, Any], top_k: int = ROI_CANDIDATE_TOP_
         "message": (
             f"Used {total_steps} steps ({navigation_steps} navigation, {roi_steps} ROIs). "
             f"Recommended max ~12 steps total. "
-            "If navigation_steps > 4, STOP and mark an ROI immediately."
+            "If navigation_steps > 2, stop wandering between views: search within a strong opened region and mark once you find a representative interpretable high-power ROI."
         ),
     }
 
@@ -1230,6 +1397,11 @@ def _attach_roi_candidates(info: Dict[str, Any], top_k: int = ROI_CANDIDATE_TOP_
             info["aml_stop_hint"] = (
                 f"Accepted ROI cap reached ({kept_roi_count}/{max_accepted_rois}). "
                 "Stop searching immediately and give the final AML answer from the kept ROIs."
+            )
+        elif target_accepted_rois == max_accepted_rois and kept_roi_count >= target_accepted_rois:
+            info["aml_stop_hint"] = (
+                f"Configured ROI target reached ({kept_roi_count}/{target_accepted_rois}), and target equals hard cap. "
+                "Stop calling ROI/navigation tools now and give the final AML answer from the kept ROIs."
             )
         elif kept_roi_count >= target_accepted_rois:
             info["aml_stop_hint"] = (
@@ -1312,23 +1484,22 @@ def _attach_roi_candidates(info: Dict[str, Any], top_k: int = ROI_CANDIDATE_TOP_
     if aml_mode and navigation_steps >= 5 and roi_steps == 0:
         next_rank_hint = _next_unattempted_candidate_rank()
         exploration_action = (
-            f"IMMEDIATE ACTION REQUIRED: Call wsi_open_candidate(rank={next_rank_hint}) now, inspect quickly, and either mark an ROI or skip. "
+            f"Open candidate region #{next_rank_hint} next, then search inside that field with zoom/pan until you find a representative interpretable high-power ROI with adequate nucleated cells, readable morphology, and acceptable focus; mark only after that search, or skip the region. "
             if next_rank_hint is not None
             else
-            "IMMEDIATE ACTION REQUIRED: Call wsi_mark_roi_norm on candidate #1 NOW, "
-            "or call wsi_get_overview_view and pick a completely different region. "
+            "Search within the current strong region with zoom/pan until you find a representative local interpretable ROI with adequate nucleated cells and readable morphology, or call wsi_get_overview_view and move to a different region. "
         )
         info["exploration_over_budget_warning"] = (
             f"CRITICAL: You have navigated {navigation_steps} times without marking any ROI. "
             "This is excessive exploration. "
             + exploration_action
-            + "Do NOT continue navigating in this view."
+            + "Do not mark the candidate center by default."
         )
     elif aml_mode and navigation_steps >= 3 and roi_steps == 0:
         info["exploration_warning"] = (
             f"WARNING: {navigation_steps} navigation steps with 0 ROIs marked. "
-            "You are over-exploring. Mark candidate #1 with wsi_mark_roi_norm now. "
-            "The ranking is pre-computed—do not waste steps comparing candidates."
+            "You are over-exploring. Use wsi_open_candidate(rank) to jump into a strong region, then search within that field by zooming to high power before you mark. "
+            "Do not treat the candidate center tile as the ROI."
         )
 
     info["roi_candidate_source"] = state._last_roi_candidate_source
@@ -1433,15 +1604,13 @@ def _attach_roi_candidates(info: Dict[str, Any], top_k: int = ROI_CANDIDATE_TOP_
             )
             info["roi_candidate_guidance"] = (
                 guidance_intro +
-                "Follow the practical hierarchy: tissue first, then deep blue-purple nucleated-cell-rich vs RBC-rich/empty, then blast-suspected morphology. Prefer fields with many separate crisp round purple cells; reject broad gray/brown clumps or smears even if a few purple cells are present. "
+                "Follow a standard practical hierarchy: tissue first, then nucleated-cell-rich interpretable marrow over RBC-rich/empty areas, then blast-suspected morphology. Prefer ROIs with adequate nucleated cells, readable single-cell detail, acceptable focus, and limited artifact. Moderate cellularity is acceptable if morphology is still assessable; do not reject a usable ROI only because it is not the single densest field in the region. "
                 f"A single ROI is screening evidence only. For AML, soft target is {_selected_target_accepted_rois()} kept ROIs from representative distinct slide regions when feasible; hard cap is {_selected_max_accepted_rois()}. "
-                "Use one of the top-K candidate centers/bboxes for wsi_mark_roi_norm; "
-                "arbitrary ROI coordinates are rejected."
+                "Use roi_candidates only to jump into a promising region quickly. After opening a candidate region, search within that field by zooming/panning until you find a representative high-power ROI. Choose a nearby area with better readability or less artifact when available, but do not over-search indefinitely for a marginally denser patch. Then use wsi_mark_roi_norm."
             )
         else:
             info["roi_candidate_guidance"] = (
-                "Use one of the top-K candidate centers/bboxes for wsi_mark_roi_norm. "
-                "Arbitrary ROI coordinates are rejected."
+                "Use roi_candidates as region-level guidance, then search locally within the opened field before choosing a final ROI with wsi_mark_roi_norm."
             )
     return info
 
@@ -1590,8 +1759,8 @@ def _mark_roi_from_candidate(
     if tf is not None and tf < 0.15:
         info["tissue_warning"] = (
             "This high-power ROI is mostly background/empty glass (low tissue_fraction). "
-            "You should immediately discard it using wsi_discard_last_roi and select an "
-            "ROI centered on diagnostic tissue."
+            "This is one of the few cases where immediate discard is appropriate. "
+            "Use wsi_discard_last_roi and select an ROI centered on diagnostic tissue."
         )
 
     level = info["view_level"]
@@ -1627,18 +1796,28 @@ def _mark_roi_from_candidate(
     state._roi_marks.append(roi)
     _record_attempted_roi_bbox(roi.get("view_bbox_level0"))
 
+    if _agent_is_aml() and len(state._saved_good_tiles) < 5:
+        auto_tile = _save_tile_from_current_view_center(
+            label=label or f"roi_{roi_id}",
+            quality="good",
+            nav_reason=f"Auto-save one good tile for kept AML ROI #{roi_id}",
+        )
+        roi["auto_saved_tile"] = dict(auto_tile)
+        if auto_tile.get("ok"):
+            roi["auto_saved_tile_path"] = auto_tile.get("path")
+
     next_rank_hint = _next_unattempted_candidate_rank()
     roi["next_candidate_rank_hint"] = next_rank_hint
     roi["next_action_hint"] = (
         "You just requested a high-power ROI. "
         + (
-            "The AML navigator will immediately move CURRENT VIEW to the next unvisited candidate when available. "
-            "If this kept ROI should actually be discarded after review, call wsi_discard_last_roi with a brief nav_reason. "
+            "In AML mode, discard only if this ROI is clearly bad on review, such as mostly background/empty glass. "
+            "If it is borderline but interpretable, keep it and continue searching for additional ROIs. "
             if _agent_is_aml()
             else
             "Carefully inspect the newly shown ROI image in the conversation. "
             "If it is mostly background, out of focus, or not diagnostic, "
-            "your very next step should be to call wsi_discard_last_roi with a brief nav_reason. "
+            "very next step should be to call wsi_discard_last_roi with a brief nav_reason. "
         )
         + (
             f"If you still need more evidence, use candidate #{next_rank_hint} next instead of continuing local search inside this ROI. "
@@ -1651,25 +1830,17 @@ def _mark_roi_from_candidate(
     print(f"[WSI][ROI_NORM] Marked ROI {roi_id}: {label} (importance={importance})")
     _log_step("wsi_mark_roi_norm", nav_reason, info)
 
-    auto_advanced = False
-    if _agent_is_aml() and next_rank_hint is not None and not _roi_cap_reached():
-        followup_reason = f"Auto-open next candidate after marking ROI {roi_id}"
-        next_view = _open_candidate_by_rank(
-            rank=next_rank_hint,
-            nav_reason=followup_reason,
-            max_dim=MAX_IMG_DIM,
-        )
-        if next_view.get("ok") is not False:
-            roi["auto_opened_candidate_rank"] = next_rank_hint
-            roi["post_mark_current_view_debug_path"] = next_view.get("debug_path")
-            roi["post_mark_current_view_bbox_level0"] = next_view.get("view_bbox_level0")
-            auto_advanced = True
+    # Do NOT auto-advance to next candidate. Allow agent to mark multiple ROIs within current subregion if strong.
+    # Agent should explicitly call wsi_open_candidate(rank) to move to next candidate when current one is exhausted.
+    roi["guidance_for_next_action"] = (
+        f"ROI #{roi_id} has been marked and saved. You can now:\n"
+        f"1) Continue searching WITHIN THIS CANDIDATE REGION for additional strong ROIs by using wsi_zoom_current_norm to explore other sub-areas.\n"
+        f"2) When this candidate region is exhausted (no more strong tissue), call wsi_open_candidate(rank={next_rank_hint}) to move to the next candidate.\n"
+        f"If you just discarded an ROI, you can search for a different position in this region OR jump to the next candidate."
+    )
 
-    if auto_advanced:
-        _make_overview_with_current_box(draw_current_box=True)
-    else:
-        _make_overview_with_current_box(draw_current_box=True)
-        _clear_roi_candidate_cache()
+    _make_overview_with_current_box(draw_current_box=True)
+    # Do not auto clear candidate cache - allow continued exploration within current region
 
     return roi
 
@@ -1733,10 +1904,19 @@ def _open_candidate_by_rank(
             "back to ROI scale. Do not zoom smaller than the ROI crop; if the candidate is centered, use "
             "wsi_mark_candidate or wsi_mark_roi_norm instead."
         )
-    info["selected_candidate_rank"] = int(chosen.get("rank", rank))
-    info["selected_candidate_center_norm"] = chosen.get("center_norm")
-    info["selected_candidate_bbox_norm"] = chosen.get("bbox_norm")
+    info["candidate_navigation_mode"] = "free_local_search"
+    info["candidate_search_guidance"] = (
+        "CRITICAL: This is a candidate-search region centered on a promising area. Systematically zoom into different "
+        "sub-areas (corners, edges, quadrants) using wsi_zoom_current_norm to find ALL strong cellular, high-density subregions. "
+        "Mark ROIs at EACH strong position you discover. If this candidate region contains multiple distinct high-quality areas, "
+        "mark multiple ROIs here before moving to the next candidate. After marking each ROI, continue zooming to different areas "
+        "of this region to search for additional strong ROIs. Do NOT mark ROI at this view's center - mark it where you find the "
+        "best tissue via systematic zooming. Only call wsi_open_candidate(rank) to move to the next candidate when this region is exhausted."
+    )
+    if isinstance(state._current_view, dict):
+        state._current_view["candidate_navigation_mode"] = "free_local_search"
     info = _attach_roi_candidates(info)
+    info = _strip_candidate_payload_for_free_local_search(info)
     _log_step("wsi_open_candidate", nav_reason, info)
     return info
 
@@ -1867,7 +2047,8 @@ def wsi_zoom_current_norm(
                 "wsi_mark_roi_norm instead."
             )
 
-        info = _attach_roi_candidates(info)
+        info = _attach_roi_candidates(info, skip_refresh=True)
+        info = _strip_candidate_payload_for_free_local_search(info)
         _log_step("wsi_zoom_current_norm", nav_reason, info)
         return info
 
@@ -1950,7 +2131,8 @@ def wsi_zoom_full_norm(
                 "wsi_mark_roi_norm instead."
             )
 
-        info = _attach_roi_candidates(info)
+        info = _attach_roi_candidates(info, skip_refresh=True)
+        info = _strip_candidate_payload_for_free_local_search(info)
         _log_step("wsi_zoom_full_norm", nav_reason, info)
         return info
 
@@ -2011,7 +2193,8 @@ def wsi_pan_current(
             max_dim=min(max_dim, MAX_IMG_DIM),
             tag="pan",
         )
-        info = _attach_roi_candidates(info)
+        info = _attach_roi_candidates(info, skip_refresh=True)
+        info = _strip_candidate_payload_for_free_local_search(info)
         _log_step("wsi_pan_current", nav_reason, info)
         return info
 
@@ -2052,6 +2235,7 @@ def wsi_get_view_info(nav_reason: str = "Get current view info") -> str:
             "tissue_fraction": state._current_view.get("tissue_fraction"),
         }
         info = _attach_roi_candidates(info)
+        info = _strip_candidate_payload_for_free_local_search(info)
         _log_step(
             "wsi_get_view_info",
             nav_reason,
@@ -2095,7 +2279,7 @@ def wsi_mark_roi_norm(
             raise RuntimeError("wsi_mark_roi_norm called before wsi_get_overview_view.")
 
         # Always refresh candidate ranking on the active view before marking ROI.
-        candidates = _refresh_roi_candidates_for_current_view(top_k=ROI_CANDIDATE_TOP_K)
+        _refresh_roi_candidates_for_current_view(top_k=ROI_CANDIDATE_TOP_K)
 
         x0_999_cl = max(0, min(999, x0_999))
         x1_999_cl = max(0, min(999, x1_999))
@@ -2104,7 +2288,6 @@ def wsi_mark_roi_norm(
 
         requested_cx_999 = (x0_999_cl + x1_999_cl) / 2.0
         requested_cy_999 = (y0_999_cl + y1_999_cl) / 2.0
-        chosen, dist = _closest_candidate(requested_cx_999, requested_cy_999) if candidates else (None, float("inf"))
         cv_x0 = state._current_view["x0"]
         cv_y0 = state._current_view["y0"]
         cv_w = state._current_view["w"]
@@ -2112,8 +2295,8 @@ def wsi_mark_roi_norm(
         cx_base = cv_x0 + int(round((requested_cx_999 / 999.0) * cv_w))
         cy_base = cv_y0 + int(round((requested_cy_999 / 999.0) * cv_h))
         chosen_for_mark = {
-            "rank": chosen.get("rank") if chosen is not None and dist <= float(ROI_MARK_CANDIDATE_TOLERANCE_NORM) else None,
-            "score": chosen.get("score") if chosen is not None and dist <= float(ROI_MARK_CANDIDATE_TOLERANCE_NORM) else None,
+            "rank": None,
+            "score": None,
             "center_norm": [int(round(requested_cx_999)), int(round(requested_cy_999))],
             "center_level0": [cx_base, cy_base],
         }
@@ -2347,7 +2530,28 @@ def wsi_discard_last_roi(
     def _inner(nav_reason: str) -> Dict[str, Any]:
         if not state._roi_marks:
             return {"ok": False, "message": "No ROI to discard."}
+        roi = state._roi_marks[-1]
+        allow_discard, block_message = _allow_discard_last_roi(roi)
+        if not allow_discard:
+            return {
+                "ok": False,
+                "reason": "discard_blocked_near_target",
+                "message": block_message,
+                "kept_roi_count": len(state._roi_marks),
+                "target_accepted_rois": _selected_target_accepted_rois(),
+            }
         roi = state._roi_marks.pop()
+        auto_tile_path = str(roi.get("auto_saved_tile_path") or "")
+        if auto_tile_path:
+            state._saved_good_tiles = [
+                record for record in state._saved_good_tiles
+                if str(record.get("path") or "") != auto_tile_path
+            ]
+            try:
+                if os.path.exists(auto_tile_path):
+                    os.remove(auto_tile_path)
+            except Exception:
+                pass
         next_rank_hint = _next_unattempted_candidate_rank()
         print(f"[WSI][ROI] Discarded ROI {roi['roi_id']}: {roi['label']}")
         _log_step(
@@ -2359,31 +2563,11 @@ def wsi_discard_last_roi(
             "ok": True,
             "discarded_roi_id": roi["roi_id"],
             "label": roi["label"],
-            "next_candidate_rank_hint": next_rank_hint,
+            "message": f"ROI discarded.",
         }
         if next_rank_hint is not None:
-            followup_reason = (
-                f"Jump to next candidate after discarding ROI {roi['roi_id']}"
-            )
-            next_view = _open_candidate_by_rank(
-                rank=next_rank_hint,
-                nav_reason=followup_reason,
-                max_dim=MAX_IMG_DIM,
-            )
-            if next_view.get("ok") is False:
-                response["message"] = (
-                    f"ROI discarded, but auto-open of candidate #{next_rank_hint} failed. "
-                    f"Open the next candidate directly with wsi_open_candidate(rank={next_rank_hint})."
-                )
-                response["auto_open_candidate_result"] = next_view
-            else:
-                response["auto_opened_candidate_rank"] = next_rank_hint
-                response["message"] = (
-                    f"ROI discarded. Automatically moved to candidate #{next_rank_hint}."
-                )
-                response["current_view_debug_path"] = next_view.get("debug_path")
-                response["current_view_bbox_level0"] = next_view.get("view_bbox_level0")
-                response["current_view_field_width_um"] = next_view.get("field_width_um")
+            response["next_candidate_rank_hint"] = next_rank_hint
+            response["message"] += f" Next candidate available: #{next_rank_hint}."
         return response
 
     return _safe(_inner, nav_reason=nav_reason)
