@@ -7,6 +7,8 @@
   const uploadActionMenu = document.getElementById("upload-action-menu");
   const uploadActionOptions = Array.from(document.querySelectorAll(".upload-action-option"));
   const uploadActionTip = document.getElementById("upload-action-tip");
+  const themeToggle = document.getElementById("theme-toggle");
+  const themeToggleLabel = document.getElementById("theme-toggle-label");
 
   const btnClear = document.getElementById("btn-clear");
   const btnStart = document.getElementById("btn-start");
@@ -20,10 +22,24 @@
   const agentSelect = document.getElementById("agent-select");
   const modelSelect = document.getElementById("model-select");
   const extractorSelect = document.getElementById("extractor-select");
+  const targetAcceptedRoisSelect = document.getElementById("target-accepted-rois-select");
+  const maxAcceptedRoisSelect = document.getElementById("max-accepted-rois-select");
   const tileSizeSelect = document.getElementById("tile-size-select");
   const batchSizeSelect = document.getElementById("batch-size-select");
   const tilePrefilterMethodSelect = document.getElementById("tile-prefilter-method-select");
+  const roiOutputSizeSelect = document.getElementById("roi-output-size-select");
+  const defaultMppInput = document.getElementById("default-mpp-input");
+  const candidateNavFieldUmInput = document.getElementById("candidate-nav-field-um-input");
+  const roiSettingsGroup = document.getElementById("roi-settings-group");
   const tilePrefilterMethodStorageKey = "slide-agent.tile-prefilter-method";
+  const roiOutputSizeStorageKey = "slide-agent.roi-output-size";
+  const targetAcceptedRoisStorageKey = "slide-agent.target-accepted-rois";
+  const maxAcceptedRoisStorageKey = "slide-agent.max-accepted-rois";
+  const defaultMppStorageKey = "slide-agent.default-mpp-um";
+  const candidateNavFieldUmStorageKey = "slide-agent.candidate-nav-field-um";
+  const roiSettingsGroupStorageKey = "slide-agent.roi-settings-group-open";
+  const themeStorageKey = "slide-agent.theme";
+  const defaultMppAutoStorageValue = "__auto__";
 
   const statusPill = document.getElementById("status-pill");
   const btnActions = document.getElementById("btn-actions");
@@ -97,33 +113,135 @@
     return (modelSelect && modelSelect.value) ? modelSelect.value : "GPT-OSS-120B";
   }
 
+  function readPositiveInt(el, fallback) {
+    const raw = (el && el.value) ? el.value : String(fallback);
+    const parsed = Number.parseInt(raw, 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+  }
+
   function selectedBatchSize() {
-    const parsed = Number.parseInt(
-      (batchSizeSelect && batchSizeSelect.value) ? batchSizeSelect.value : "128",
-      10
-    );
-    return Number.isFinite(parsed) && parsed > 0 ? parsed : 128;
+    return readPositiveInt(batchSizeSelect, 128);
   }
 
   function selectedTilePrefilterMethod() {
     return (tilePrefilterMethodSelect && tilePrefilterMethodSelect.value) ? tilePrefilterMethodSelect.value : "quality";
   }
 
+  function selectedRoiOutputSizePx() {
+    return readPositiveInt(roiOutputSizeSelect, 1024);
+  }
+
+  function selectedMaxAcceptedRois() {
+    return readPositiveInt(maxAcceptedRoisSelect, 10);
+  }
+
+  function selectedTargetAcceptedRois() {
+    return readPositiveInt(targetAcceptedRoisSelect, 5);
+  }
+
+  function selectedDefaultMppUm() {
+    const raw = (defaultMppInput && typeof defaultMppInput.value === "string")
+      ? defaultMppInput.value.trim()
+      : "";
+    if (!raw) return null;
+    const parsed = Number.parseFloat(raw);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+  }
+
+  function selectedCandidateNavFieldUm() {
+    const raw = (candidateNavFieldUmInput && typeof candidateNavFieldUmInput.value === "string")
+      ? candidateNavFieldUmInput.value.trim()
+      : "";
+    if (!raw) return null;
+    const parsed = Number.parseFloat(raw);
+    return Number.isFinite(parsed) && parsed >= 100 ? parsed : null;
+  }
+
+  function formatMppUm(value) {
+    const n = Number(value);
+    if (!Number.isFinite(n) || n <= 0) return "";
+    return n.toFixed(3).replace(/0+$/, "").replace(/\.$/, "");
+  }
+
+  function setSelectValueIfPresent(selectEl, value) {
+    if (!selectEl) return false;
+    const text = String(value);
+    const hasOption = Array.from(selectEl.options).some((opt) => opt.value === text);
+    if (!hasOption) return false;
+    selectEl.value = text;
+    return true;
+  }
+
+  function syncAcceptedRoiSelectors(changedBy = "") {
+    if (!maxAcceptedRoisSelect || !targetAcceptedRoisSelect) return;
+    let maxVal = selectedMaxAcceptedRois();
+    let targetVal = selectedTargetAcceptedRois();
+
+    if (changedBy === "target" && targetVal > maxVal) {
+      if (setSelectValueIfPresent(maxAcceptedRoisSelect, targetVal)) {
+        maxVal = selectedMaxAcceptedRois();
+      }
+    } else if (changedBy === "max" && maxVal < targetVal) {
+      if (setSelectValueIfPresent(targetAcceptedRoisSelect, maxVal)) {
+        targetVal = selectedTargetAcceptedRois();
+      }
+    } else if (targetVal > maxVal) {
+      if (setSelectValueIfPresent(targetAcceptedRoisSelect, maxVal)) {
+        targetVal = selectedTargetAcceptedRois();
+      }
+    }
+
+    saveStoredValue(maxAcceptedRoisStorageKey, String(maxVal));
+    saveStoredValue(targetAcceptedRoisStorageKey, String(targetVal));
+  }
+
   function loadStoredValue(key) {
     try {
-      return window.localStorage.getItem(key);
-    } catch (_e) {
-      // Ignore localStorage access issues.
+      return localStorage.getItem(key);
+    } catch {
+      return null;
     }
-    return null;
   }
 
   function saveStoredValue(key, value) {
     try {
-      window.localStorage.setItem(key, value);
-    } catch (_e) {
-      // Ignore localStorage access issues.
+      localStorage.setItem(key, value);
+    } catch {}
+  }
+
+  function normalizedTheme(value) {
+    return value === "dark" || value === "light" ? value : null;
+  }
+
+  function preferredTheme() {
+    try {
+      return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    } catch {
+      return "light";
     }
+  }
+
+  function applyTheme(theme, persist = false) {
+    const nextTheme = normalizedTheme(theme) || "light";
+    document.documentElement.dataset.theme = nextTheme;
+    if (themeToggleLabel) {
+      themeToggleLabel.textContent = nextTheme === "dark" ? "Dark" : "Light";
+    }
+    if (themeToggle) {
+      const nextLabel = nextTheme === "dark" ? "Switch to light theme" : "Switch to dark theme";
+      themeToggle.setAttribute("aria-label", nextLabel);
+      themeToggle.setAttribute("aria-pressed", nextTheme === "dark" ? "true" : "false");
+      themeToggle.title = nextLabel;
+    }
+    if (persist) {
+      saveStoredValue(themeStorageKey, nextTheme);
+    }
+  }
+
+  function initTheme() {
+    const storedTheme = normalizedTheme(loadStoredValue(themeStorageKey));
+    const currentTheme = normalizedTheme(document.documentElement.dataset.theme);
+    applyTheme(storedTheme || currentTheme || preferredTheme(), false);
   }
 
   function uploadHintForAction(action) {
@@ -272,6 +390,47 @@
     }
   }
 
+  async function loadModelOptions() {
+    if (!modelSelect) return;
+    try {
+      const res = await fetch("/api/models", { cache: "no-store" });
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}`);
+      }
+      const payload = await res.json();
+      const rawModels = Array.isArray(payload && payload.models) ? payload.models : [];
+      const models = [];
+      for (const value of rawModels) {
+        const name = typeof value === "string" ? value.trim() : "";
+        if (!name || models.includes(name)) continue;
+        models.push(name);
+      }
+      if (!models.length) return;
+
+      const currentValue = modelSelect.value;
+      const defaultModel =
+        payload && typeof payload.default_model_name === "string" && payload.default_model_name.trim()
+          ? payload.default_model_name.trim()
+          : models[0];
+      const fallbackValue = models.includes(currentValue) ? currentValue : models[0];
+      const nextValue = (!modelSelectionTouched && models.includes(defaultModel)) ? defaultModel : fallbackValue;
+
+      modelSelect.innerHTML = "";
+      for (const name of models) {
+        const option = document.createElement("option");
+        option.value = name;
+        option.textContent = name;
+        modelSelect.appendChild(option);
+      }
+
+      modelSelect.value = nextValue;
+      currentModelName = modelSelect.value || defaultModel;
+      setModelStatus(activeRunStatus || "idle", currentModelName);
+    } catch (err) {
+      console.warn("Failed to load model options from backend", err);
+    }
+  }
+
   function maybeLoadDefaultPrompt() {
     const type = selectedAgentType();
     const d = defaultPrompts[type] || "";
@@ -308,6 +467,7 @@
   let currentRunId = null;
   let currentModelName = null;
   let pollingTimer = null;
+  let pollInFlight = false;
   let lastRenderedStep = 0;
   let lastRenderedRoi = 0;
   let darkRegionsLoaded = false;
@@ -373,10 +533,9 @@
 
   function readStoredPx(key) {
     try {
-      const raw = localStorage.getItem(key);
-      const n = Number(raw);
+      const n = Number(localStorage.getItem(key));
       return Number.isFinite(n) ? n : null;
-    } catch (_e) {
+    } catch {
       return null;
     }
   }
@@ -384,9 +543,7 @@
   function writeStoredPx(key, value) {
     try {
       localStorage.setItem(key, String(Math.round(value)));
-    } catch (_e) {
-      // Ignore persistence failures (private mode or blocked storage).
-    }
+    } catch {}
   }
 
   function readCssVarPx(el, name, fallback) {
@@ -487,7 +644,7 @@
       localStorage.removeItem(LAYOUT_STORAGE_KEYS.rightColPx);
       localStorage.removeItem(LAYOUT_STORAGE_KEYS.viewerLeftColPx);
       localStorage.setItem(LAYOUT_STORAGE_KEYS.version, LAYOUT_STORAGE_VERSION);
-    } catch (_e) {
+    } catch {
       // Ignore storage access failures.
     }
   }
@@ -523,7 +680,7 @@
       document.body.classList.add("is-resizing");
       try {
         handleEl.setPointerCapture(ev.pointerId);
-      } catch (_e) {
+      } catch {
         // Ignore pointer capture failures.
       }
 
@@ -633,8 +790,8 @@
     if (!roisEl) return;
     const shouldStick = force || roiListPinnedToBottom || isListNearBottom(roisEl);
     if (!shouldStick) return;
-    roisEl.scrollTop = roisEl.scrollHeight;
     roiListPinnedToBottom = true;
+    requestAnimationFrame(() => { roisEl.scrollTop = roisEl.scrollHeight; });
   }
 
   function escapeHtml(s) {
@@ -855,7 +1012,7 @@
       }
       const fallbackExtracted = extractFinalReportOnly(fallbackText || "");
       renderFinalReportMarkdown(fallbackExtracted || "No final report available.", false);
-    } catch (_e) {
+    } catch {
       if (token !== reportFetchToken) return;
       const fallbackExtracted = extractFinalReportOnly(fallbackText || "");
       renderFinalReportMarkdown(fallbackExtracted || "No final report available.", false);
@@ -939,8 +1096,8 @@
   function setDarkRegionsEnabled(enabled) {
     darkRegionsEnabled = !!enabled;
     if (btnDarkToggle) {
-      btnDarkToggle.textContent = darkRegionsEnabled ? "Hide dark regions" : "Show dark regions";
       btnDarkToggle.setAttribute("aria-pressed", darkRegionsEnabled ? "true" : "false");
+      btnDarkToggle.setAttribute("aria-label", darkRegionsEnabled ? "Hide dark regions" : "Show dark regions");
       btnDarkToggle.classList.toggle("is-active", darkRegionsEnabled);
     }
     if (!darkRegionsEnabled) {
@@ -1610,6 +1767,7 @@
   async function openExplorer() {
     if (!explorerModal) return;
     explorerModal.hidden = false;
+    requestAnimationFrame(() => explorerModal.classList.add("is-open"));
     setExplorerError("");
     explorerEntries = [];
     renderExplorerList();
@@ -1630,8 +1788,10 @@
 
   function closeExplorer() {
     if (!explorerModal) return;
-    explorerModal.hidden = true;
+    explorerModal.classList.remove("is-open");
     setExplorerError("");
+    const onEnd = () => { explorerModal.hidden = true; };
+    explorerModal.addEventListener("transitionend", onEnd, { once: true });
   }
 
   function upsertLiveStep(stepId, title, subText) {
@@ -1719,7 +1879,7 @@
     renderFinalReportMarkdown("Waiting for model output…", true);
     setReasoningContent("");
     reportLink.textContent = "";
-    stepsEl.innerHTML = "";
+    // Don't clear stepsEl here - keep live status visible during initialization
     roisEl.innerHTML = "";
 
     lastRenderedStep = 0;
@@ -1755,7 +1915,7 @@
     }
 
     listEl.appendChild(li);
-    listEl.scrollTop = listEl.scrollHeight;
+    requestAnimationFrame(() => { listEl.scrollTop = listEl.scrollHeight; });
   }
 
   function _ensureRoiLoadingBadge(li) {
@@ -1835,16 +1995,18 @@
     img.dataset.revealToken = token;
     img.classList.add("is-revealing");
 
-    if (item) {
-      item.classList.remove("is-revealing");
-      void item.offsetWidth;
-      item.classList.add("is-revealing");
-    }
-
     const done = () => _finishImageReveal(img, token, item);
     img.addEventListener("load", done, { once: true });
     img.addEventListener("error", done, { once: true });
     img.src = nextSrc;
+
+    if (item) {
+      item.classList.remove("is-revealing");
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        if (token && img.dataset.revealToken !== token) return;
+        item.classList.add("is-revealing");
+      }));
+    }
 
     if (img.complete && img.naturalWidth > 0) {
       done();
@@ -1956,6 +2118,16 @@
     return new Set(["created", "uploading", "pending", "running"]).has(activeRunStatus) && !!searchTargetBoxPx;
   }
 
+  function _currentViewIsMarkedRoi(currentView, incomingRois = []) {
+    if (!currentView || typeof currentView !== "object") return false;
+    if (String(currentView.view_tag || "") === "roi") return true;
+    const currentDebugPath = String(currentView.debug_path || "");
+    if (!currentDebugPath) return false;
+    return (Array.isArray(incomingRois) ? incomingRois : []).some((roi) => (
+      roi && String(roi.debug_path || "") === currentDebugPath
+    ));
+  }
+
   function _startOverlayLoop() {
     if (overlayRafId !== null) return;
     overlayRafId = requestAnimationFrame(_overlayFrame);
@@ -1987,7 +2159,7 @@
     if (keepRunning) _startOverlayLoop();
   }
 
-  function updateSearchingBox(currentView, runStatus) {
+  function updateSearchingBox(currentView, runStatus, incomingRois = []) {
     activeRunStatus = runStatus || "";
     lastCurrentViewState = currentView || null;
     const statusActive = new Set(["created", "uploading", "pending", "running"]).has(activeRunStatus);
@@ -2010,6 +2182,14 @@
 
     if (!currentView || !Number.isFinite(Number(currentView.x0)) || !Number.isFinite(Number(currentView.y0)) ||
         !Number.isFinite(Number(currentView.w)) || !Number.isFinite(Number(currentView.h))) {
+      searchTargetBoxPx = null;
+      searchDrawBoxPx = null;
+      searchTransition = null;
+      renderOverviewRoiOverlay();
+      return;
+    }
+
+    if (_currentViewIsMarkedRoi(currentView, incomingRois)) {
       searchTargetBoxPx = null;
       searchDrawBoxPx = null;
       searchTransition = null;
@@ -2184,7 +2364,7 @@
     renderOverviewRoiOverlay();
   }
 
-  function upsertLiveRoiItem(currentView, runStatus) {
+  function upsertLiveRoiItem(currentView, runStatus, incomingRois = []) {
     const existing = document.getElementById("roi-live-item");
     const runningStates = new Set(["created", "uploading", "pending", "running"]);
     const hasLive = currentView && currentView.image_url && runningStates.has(runStatus);
@@ -2194,8 +2374,17 @@
       return;
     }
 
+    const latestRoi = Array.isArray(incomingRois) && incomingRois.length ? incomingRois[incomingRois.length - 1] : null;
+    const currentDebugPath = String(currentView.debug_path || "");
+    const isMarkedRoiView = !!(
+      latestRoi &&
+      currentDebugPath &&
+      String(latestRoi.debug_path || "") === currentDebugPath
+    );
     const nextRoiId = lastRenderedRoi + 1;
-    const title = `ROI ${nextRoiId} (searching...)`;
+    const title = isMarkedRoiView
+      ? `ROI ${Number(latestRoi.roi_id)} (inspect/discard)`
+      : `ROI ${nextRoiId} (searching...)`;
     const parts = [];
     if (currentView.field_width_um && currentView.field_height_um) {
       parts.push(`Field ~${currentView.field_width_um.toFixed(0)}×${currentView.field_height_um.toFixed(0)} µm`);
@@ -2211,7 +2400,7 @@
       li.id = "roi-live-item";
       li.className = "logitem live-roi-item";
     }
-    li.classList.add("roi-searching");
+    li.classList.toggle("roi-searching", !isMarkedRoiView);
     // Keep the live preview as the active/latest ROI slot.
     roisEl.appendChild(li);
 
@@ -2273,10 +2462,13 @@
     if (!runLoadingEl) return;
     let label = (modelName && String(modelName).trim()) || currentModelName || "Model";
     if ((!status || status === "idle") && modelSelect && modelSelect.value) {
-      // For pre-run/idle UI, always reflect currently selected model.
       label = modelSelect.value;
     }
     if (runStateTextEl) runStateTextEl.textContent = label;
+
+    const isActive = status === "running" || status === "created" || status === "uploading" || status === "pending";
+    const rightCard = panelRightEl && panelRightEl.querySelector(".card");
+    if (rightCard) rightCard.classList.toggle("is-running", isActive);
 
     runLoadingEl.classList.remove("model-good", "model-warn", "model-bad", "model-idle", "is-active");
 
@@ -2411,13 +2603,15 @@
         currentModelName = name;
       }
       setModelStatus(activeRunStatus || "idle", currentModelName);
-    } catch (_e) {
+    } catch {
       // Keep fallback label if health check is unavailable.
     }
   }
 
   async function pollRun() {
     if (!currentRunId) return;
+    if (pollInFlight) return;
+    pollInFlight = true;
     try {
       const res = await fetch(`/api/runs/${currentRunId}`);
       if (!res.ok) return;
@@ -2428,9 +2622,65 @@
         (run && typeof run.tile_prefilter_method === "string" && run.tile_prefilter_method)
           ? String(run.tile_prefilter_method)
           : ((st && typeof st.tile_prefilter_method === "string" && st.tile_prefilter_method) ? String(st.tile_prefilter_method) : null);
+      const roiOutputSizePx =
+        (run && Number.isFinite(Number(run.roi_output_size_px)))
+          ? Number(run.roi_output_size_px)
+          : ((st && Number.isFinite(Number(st.roi_output_size_px))) ? Number(st.roi_output_size_px) : null);
+      const maxAcceptedRois =
+        (run && Number.isFinite(Number(run.max_accepted_rois)))
+          ? Number(run.max_accepted_rois)
+          : ((st && Number.isFinite(Number(st.max_accepted_rois))) ? Number(st.max_accepted_rois) : null);
+      const targetAcceptedRois =
+        (run && Number.isFinite(Number(run.target_accepted_rois)))
+          ? Number(run.target_accepted_rois)
+          : ((st && Number.isFinite(Number(st.target_accepted_rois))) ? Number(st.target_accepted_rois) : null);
+      const defaultMppUm =
+        (run && Number.isFinite(Number(run.default_mpp_um)))
+          ? Number(run.default_mpp_um)
+          : ((st && Number.isFinite(Number(st.default_mpp_um))) ? Number(st.default_mpp_um) : null);
+      const slideMppUm =
+        (st && Number.isFinite(Number(st.slide_mpp_um))) ? Number(st.slide_mpp_um) : null;
       if (tilePrefilterMethodSelect && tilePrefilterMethod) {
         tilePrefilterMethodSelect.value = tilePrefilterMethod;
         saveStoredValue(tilePrefilterMethodStorageKey, tilePrefilterMethod);
+      }
+      if (roiOutputSizeSelect && roiOutputSizePx) {
+        const nextRoiValue = String(Math.round(roiOutputSizePx));
+        if (Array.from(roiOutputSizeSelect.options).some((opt) => opt.value === nextRoiValue)) {
+          roiOutputSizeSelect.value = nextRoiValue;
+          saveStoredValue(roiOutputSizeStorageKey, nextRoiValue);
+        }
+      }
+      if (maxAcceptedRoisSelect && maxAcceptedRois) {
+        const nextMaxRoisValue = String(Math.round(maxAcceptedRois));
+        if (setSelectValueIfPresent(maxAcceptedRoisSelect, nextMaxRoisValue)) {
+          saveStoredValue(maxAcceptedRoisStorageKey, nextMaxRoisValue);
+        }
+      }
+      if (targetAcceptedRoisSelect && targetAcceptedRois) {
+        const nextTargetRoisValue = String(Math.round(targetAcceptedRois));
+        if (setSelectValueIfPresent(targetAcceptedRoisSelect, nextTargetRoisValue)) {
+          saveStoredValue(targetAcceptedRoisStorageKey, nextTargetRoisValue);
+        }
+      }
+      syncAcceptedRoiSelectors();
+      if (defaultMppInput && document.activeElement !== defaultMppInput) {
+        if (defaultMppUm) {
+          const nextMppValue = formatMppUm(defaultMppUm);
+          defaultMppInput.value = nextMppValue;
+          saveStoredValue(defaultMppStorageKey, nextMppValue);
+        } else {
+          defaultMppInput.value = "";
+        }
+      }
+      const candidateNavFieldUm =
+        (run && Number.isFinite(Number(run.candidate_nav_field_um)))
+          ? Number(run.candidate_nav_field_um)
+          : null;
+      if (candidateNavFieldUmInput && document.activeElement !== candidateNavFieldUmInput && candidateNavFieldUm != null) {
+        const nextNavFieldValue = String(Math.round(candidateNavFieldUm));
+        candidateNavFieldUmInput.value = nextNavFieldValue;
+        saveStoredValue(candidateNavFieldUmStorageKey, nextNavFieldValue);
       }
       activeRunStatus = run.status || "";
       lastCurrentViewState = (st && st.current_view) ? st.current_view : null;
@@ -2487,8 +2737,6 @@
         darkRegionsLoaded = false;  // Reset to allow re-fetch
         fetchDarkRegions(currentRunId);
       }
-      updateSearchingBox(lastCurrentViewState, run.status);
-
       const hasReportPath = !!run.report_path;
       if (!hasReportPath) {
         if (run.final_output) {
@@ -2560,7 +2808,17 @@
         }
       }
       syncLiveRunStatusStep(effectiveStatus);
+      const prep = (st && st.roi_candidate_prep && typeof st.roi_candidate_prep === "object") ? st.roi_candidate_prep : null;
+      const isPrepActive = prep && (prep.active || prep.status === "starting" || prep.status === "running");
       updateLivePrepProgress(run, st);
+      if (!isPrepActive && st && st.current_agent_action && run.status === "running") {
+        upsertLiveStatusStep("Agent action", st.current_agent_action);
+      } else if (!isPrepActive && (run.status === "done" || run.status === "error" || run.status === "terminated")) {
+        // Keep status bar visible when complete
+      } else if (!isPrepActive && run.status === "idle") {
+        // Only clear when truly idle, not during initial startup
+        upsertLiveStep("step-live-status", "", "");
+      }
       upsertLiveStep("step-live-prep", "", "");
       const incomingRois = (st && Array.isArray(st.roi_marks))
         ? st.roi_marks.filter((roi) => roi && Number.isFinite(Number(roi.roi_id)))
@@ -2602,7 +2860,8 @@
         selectedOverviewRoiId = Number(incomingRois[incomingRois.length - 1].roi_id);
       }
 
-      upsertLiveRoiItem(st && st.current_view ? st.current_view : null, run.status);
+      updateSearchingBox(lastCurrentViewState, run.status, incomingRois);
+      upsertLiveRoiItem(st && st.current_view ? st.current_view : null, run.status, incomingRois);
       setSelectedRoiInList();
       renderOverviewRoiOverlay();
 
@@ -2615,8 +2874,10 @@
         }
       }
       syncStartButtonState();
-    } catch (e) {
+    } catch {
       // ignore transient errors
+    } finally {
+      pollInFlight = false;
     }
   }
 
@@ -2730,6 +2991,13 @@
     fd.append("tile_size_px", tileSizeSelect ? tileSizeSelect.value : "224");
     fd.append("batch_size", String(selectedBatchSize()));
     fd.append("tile_prefilter_method", selectedTilePrefilterMethod());
+    fd.append("roi_output_size_px", String(selectedRoiOutputSizePx()));
+    fd.append("max_accepted_rois", String(selectedMaxAcceptedRois()));
+    fd.append("target_accepted_rois", String(selectedTargetAcceptedRois()));
+    const selectedDefaultMpp = selectedDefaultMppUm();
+    fd.append("default_mpp_um", selectedDefaultMpp == null ? "" : String(selectedDefaultMpp));
+    const selectedNavField = selectedCandidateNavFieldUm();
+    fd.append("candidate_nav_field_um", selectedNavField == null ? "" : String(selectedNavField));
     const res = await fetch("/api/runs/create", { method: "POST", body: fd });
     if (!res.ok) throw new Error(await res.text());
     return await res.json();
@@ -2907,7 +3175,7 @@
     if (activeUploadXhr) {
       try {
         activeUploadXhr.abort();
-      } catch (_e) {
+      } catch {
         // Ignore upload abort failures.
       }
     }
@@ -2966,8 +3234,21 @@
   }
 
   // Buttons
+  initTheme();
+  if (themeToggle) {
+    themeToggle.addEventListener("click", () => {
+      const currentTheme = normalizedTheme(document.documentElement.dataset.theme) || preferredTheme();
+      applyTheme(currentTheme === "dark" ? "light" : "dark", true);
+    });
+  }
   btnClear.addEventListener("click", clearSelection);
   btnStart.addEventListener("click", startFlow);
+  if (batchSizeSelect) {
+    batchSizeSelect.addEventListener("change", () => {
+      const next = selectedBatchSize();
+      batchSizeSelect.value = String(next);
+    });
+  }
   if (tilePrefilterMethodSelect) {
     const storedTilePrefilterMethod = loadStoredValue(tilePrefilterMethodStorageKey);
     if (storedTilePrefilterMethod) {
@@ -2975,6 +3256,81 @@
     }
     tilePrefilterMethodSelect.addEventListener("change", () => {
       saveStoredValue(tilePrefilterMethodStorageKey, selectedTilePrefilterMethod());
+    });
+  }
+  if (roiOutputSizeSelect) {
+    const storedRoiOutputSize = loadStoredValue(roiOutputSizeStorageKey);
+    if (
+      storedRoiOutputSize &&
+      Array.from(roiOutputSizeSelect.options).some((opt) => opt.value === storedRoiOutputSize)
+    ) {
+      roiOutputSizeSelect.value = storedRoiOutputSize;
+    }
+    roiOutputSizeSelect.addEventListener("change", () => {
+      saveStoredValue(roiOutputSizeStorageKey, String(selectedRoiOutputSizePx()));
+    });
+  }
+  if (targetAcceptedRoisSelect) {
+    const storedTargetAcceptedRois = loadStoredValue(targetAcceptedRoisStorageKey);
+    if (
+      storedTargetAcceptedRois &&
+      Array.from(targetAcceptedRoisSelect.options).some((opt) => opt.value === storedTargetAcceptedRois)
+    ) {
+      targetAcceptedRoisSelect.value = storedTargetAcceptedRois;
+    }
+    targetAcceptedRoisSelect.addEventListener("change", () => {
+      syncAcceptedRoiSelectors("target");
+    });
+  }
+  if (maxAcceptedRoisSelect) {
+    const storedMaxAcceptedRois = loadStoredValue(maxAcceptedRoisStorageKey);
+    if (
+      storedMaxAcceptedRois &&
+      Array.from(maxAcceptedRoisSelect.options).some((opt) => opt.value === storedMaxAcceptedRois)
+    ) {
+      maxAcceptedRoisSelect.value = storedMaxAcceptedRois;
+    }
+    maxAcceptedRoisSelect.addEventListener("change", () => {
+      syncAcceptedRoiSelectors("max");
+    });
+  }
+  syncAcceptedRoiSelectors();
+  if (defaultMppInput) {
+    const storedDefaultMpp = loadStoredValue(defaultMppStorageKey);
+    if (storedDefaultMpp === defaultMppAutoStorageValue) {
+      defaultMppInput.value = "";
+    } else if (storedDefaultMpp) {
+      defaultMppInput.value = storedDefaultMpp;
+    }
+    defaultMppInput.addEventListener("change", () => {
+      const nextMpp = selectedDefaultMppUm();
+      defaultMppInput.value = nextMpp == null ? "" : formatMppUm(nextMpp);
+      saveStoredValue(
+        defaultMppStorageKey,
+        nextMpp == null ? defaultMppAutoStorageValue : defaultMppInput.value,
+      );
+    });
+  }
+  if (candidateNavFieldUmInput) {
+    const storedNavField = loadStoredValue(candidateNavFieldUmStorageKey);
+    if (storedNavField) {
+      candidateNavFieldUmInput.value = storedNavField;
+    }
+    candidateNavFieldUmInput.addEventListener("change", () => {
+      const nextVal = selectedCandidateNavFieldUm();
+      candidateNavFieldUmInput.value = nextVal == null ? "1200" : String(Math.round(nextVal));
+      saveStoredValue(candidateNavFieldUmStorageKey, candidateNavFieldUmInput.value);
+    });
+  }
+  if (roiSettingsGroup) {
+    const storedGroupState = loadStoredValue(roiSettingsGroupStorageKey);
+    if (storedGroupState === "0") {
+      roiSettingsGroup.open = false;
+    } else if (storedGroupState === "1") {
+      roiSettingsGroup.open = true;
+    }
+    roiSettingsGroup.addEventListener("toggle", () => {
+      saveStoredValue(roiSettingsGroupStorageKey, roiSettingsGroup.open ? "1" : "0");
     });
   }
   if (btnActions && statusActionsMenu) {
@@ -3019,10 +3375,6 @@
       }
     });
   }
-  if (overviewImg) {
-    overviewImg.addEventListener("load", renderOverviewRoiOverlay);
-  }
-
   if (uploadActionTrigger && uploadActionMenu) {
     uploadActionTrigger.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -3171,7 +3523,7 @@
 
   if (overviewImg) {
     overviewImg.addEventListener("load", () => {
-      updateSearchingBox(lastCurrentViewState, activeRunStatus);
+      updateSearchingBox(lastCurrentViewState, activeRunStatus, Array.from(roiById.values()));
       renderOverviewRoiOverlay();
     });
   }
@@ -3182,7 +3534,9 @@
       if (!(target instanceof Element)) return;
       const item = target.closest(".roi-item");
       if (!item) return;
-      const roiId = Number(item.dataset.roiId || "");
+      const raw = item.dataset.roiId;
+      if (!raw) return;
+      const roiId = Number(raw);
       if (!Number.isFinite(roiId)) return;
       selectOverviewRoi(roiId);
     });
@@ -3197,5 +3551,6 @@
   setExplorerBusyState(false);
   updateExplorerSelectionPreview();
   render();
+  loadModelOptions();
   fetchServiceModelName();
 })();

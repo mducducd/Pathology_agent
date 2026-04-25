@@ -11,6 +11,8 @@
 #       [--extractor uni2] \
 #       [--tile-filter hybrid] \
 #       [--tile-size-px 224] \
+#       [--roi-size-px 2048] \
+#       [--default-mpp-um <from config>] \
 #       [--batch-size 512] \
 #       [--experiment-root /path/to/experiment] \
 #       [--use-tile-cache] \
@@ -39,6 +41,32 @@ EXTRACTOR="uni2"
 TILE_FILTER="hybrid"
 TILE_SIZE_PX="224"
 BATCH_SIZE="512"
+ROI_SIZE_PX="2048"
+DEFAULT_MPP_UM="$(python3 - <<'PY'
+from pathlib import Path
+import yaml
+cfg = Path('configs/config.yaml')
+default = '0.159'
+try:
+    data = yaml.safe_load(cfg.read_text()) or {}
+    value = data.get('tools', {}).get('slide', {}).get('DEFAULT_MPP_UM', default)
+    print(value)
+except Exception:
+    print(default)
+PY
+)"
+CONFIG_CACHE_ROOT_DIR="$(python3 - <<'PY'
+from pathlib import Path
+import yaml
+cfg = Path('configs/config.yaml')
+try:
+    data = yaml.safe_load(cfg.read_text()) or {}
+    value = str(data.get('tools', {}).get('cache', {}).get('CACHE_ROOT_DIR', '') or '').strip()
+    print(value)
+except Exception:
+    print('')
+PY
+)"
 AGENT="aml"
 RESUME=false
 USE_TILE_CACHE=false
@@ -65,6 +93,8 @@ while [[ $# -gt 0 ]]; do
         --tile-filter)  TILE_FILTER="$2"; shift 2 ;;
         --tile-size-px) TILE_SIZE_PX="$2"; shift 2 ;;
         --batch-size)   BATCH_SIZE="$2";  shift 2 ;;
+        --roi-size-px)  ROI_SIZE_PX="$2"; shift 2 ;;
+        --default-mpp-um) DEFAULT_MPP_UM="$2"; shift 2 ;;
         --agent)        AGENT="$2";       shift 2 ;;
         --use-tile-cache) USE_TILE_CACHE=true; shift ;;
         --resume)       RESUME=true;      shift   ;;
@@ -173,9 +203,12 @@ echo " Agent:       $AGENT"
 echo " Model:       $MODEL   Extractor: $EXTRACTOR   Filter: $TILE_FILTER"
 echo " Tile size:   ${TILE_SIZE_PX}px"
 echo " Batch size:  $BATCH_SIZE"
+echo " ROI size:    ${ROI_SIZE_PX}px"
+echo " Default MPP: ${DEFAULT_MPP_UM}"
 echo " Tile cache:  $USE_TILE_CACHE"
 echo " CUDA devices:${CUDA_VISIBLE_DEVICES:+ }${CUDA_VISIBLE_DEVICES:-all}"
-echo " Cache root:  $EXPERIMENT_ROOT"
+echo " Experiment root: $EXPERIMENT_ROOT"
+echo " Config cache dir:${CONFIG_CACHE_ROOT_DIR:+ }${CONFIG_CACHE_ROOT_DIR:-<empty>}"
 echo " Patients:    $TOTAL"
 echo " Resume:      $RESUME"
 echo "═══════════════════════════════════════════════════════════════"
@@ -260,6 +293,8 @@ PY
         --tile-filter "$TILE_FILTER"
         --tile-size-px "$TILE_SIZE_PX"
         --batch-size "$BATCH_SIZE"
+        --roi-size-px "$ROI_SIZE_PX"
+        --default-mpp-um "$DEFAULT_MPP_UM"
         --agent "$AGENT"
     )
     if [[ -n "$CUDA_DEVICE" ]]; then

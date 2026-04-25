@@ -1,13 +1,40 @@
 import json
 import os
+import re
 import traceback
 from typing import Any, Dict, List, Optional, Tuple
 
+import numpy as np
 import openslide
 from PIL import Image, ImageDraw
 
 from . import state
 from .config import MAX_IMG_DIM, MAX_NATIVE_VIEW_DIM
+from .tuning_config import tuning_value
+
+DEFAULT_MPP_FALLBACK_UM = float(tuning_value("tools.slide", "DEFAULT_MPP_UM"))
+
+_SAFE_FILENAME_DROP_RE = re.compile(r"[^\w\s-]")
+_SAFE_FILENAME_SPACE_RE = re.compile(r"\s")
+
+_LOG_STEP_KEYS = (
+    "debug_path",
+    "view_level",
+    "view_bbox_level0",
+    "view_image_dims",
+    "field_width_um",
+    "field_height_um",
+    "tissue_fraction",
+    "roi_candidate_count",
+    "roi_candidate_source",
+    "roi_candidate_warning",
+    "roi_candidate_stage",
+    "roi_candidate_pipeline",
+    "roi_candidate_index_meta",
+    "aml_reference_stats",
+)
+
+_VIEW_HISTORY_MAX = 8
 
 
 # ---------------------------------------------------------------------
@@ -20,7 +47,6 @@ def _load_slide() -> openslide.AbstractSlide:
         print(f"[WSI] Loading slide from: {state.SLIDE_PATH}")
         if not os.path.exists(state.SLIDE_PATH):
             raise FileNotFoundError(f"Slide not found at: {state.SLIDE_PATH}")
-        # open_slide() supports OpenSlide formats and falls back to ImageSlide for simple images.
         state._slide = openslide.open_slide(state.SLIDE_PATH)
         print(
             f"[WSI] Slide loaded. "
@@ -44,8 +70,7 @@ def _get_mpp_um(slide: openslide.AbstractSlide) -> Optional[float]:
     obj = props.get("openslide.objective-power")
     if obj:
         try:
-            obj = float(obj)
-            return 10.0 / obj
+            return 10.0 / float(obj)
         except Exception:
             pass
 
@@ -53,29 +78,15 @@ def _get_mpp_um(slide: openslide.AbstractSlide) -> Optional[float]:
 
 
 def _estimate_tissue_fraction(img: Image.Image) -> float:
-    gray = img.convert("L")
-    w, h = gray.size
-    pixels = gray.load()
-
-    total = 0
-    tissue = 0
-
-    step_x = max(1, w // 128)
-    step_y = max(1, h // 128)
-
-    for y in range(0, h, step_y):
-        for x in range(0, w, step_x):
-            total += 1
-            if pixels[x, y] < 240:
-                tissue += 1
-
-    return float(tissue) / total if total > 0 else 0.0
+    gray = np.array(img.convert("L"))
+    step = max(1, gray.shape[0] // 128), max(1, gray.shape[1] // 128)
+    sampled = gray[::step[0], ::step[1]]
+    return float(np.mean(sampled < 240))
 
 
 def _next_debug_filename(tag: str) -> str:
     state._debug_img_counter += 1
-    filename = f"{state._debug_img_counter:04d}_{tag}.jpg"
-    return os.path.join(state.DEBUG_SAVE_DIR, filename)
+    return os.path.join(state.DEBUG_SAVE_DIR, f"{state._debug_img_counter:04d}_{tag}.jpg")
 
 
 def _save_debug_image(img: Image.Image, tag: str) -> str:
@@ -88,9 +99,7 @@ def _save_debug_image(img: Image.Image, tag: str) -> str:
 def _safe(fn, **kwargs) -> str:
     try:
         out = fn(**kwargs)
-        if isinstance(out, str):
-            return out
-        return json.dumps(out)
+        return out if isinstance(out, str) else json.dumps(out)
     except Exception as e:
         if isinstance(e, (FileNotFoundError, openslide.OpenSlideError)):
             state.HAS_FATAL_ERROR = True
@@ -115,29 +124,23 @@ def _resize_to_max_dim(region: Image.Image, max_dim: int) -> Tuple[Image.Image, 
     if max(w, h) <= max_dim:
         return region, w, h
     scale = max_dim / float(max(w, h))
-    out_w = int(round(w * scale))
-    out_h = int(round(h * scale))
-    region = region.resize((out_w, out_h), Image.BILINEAR)
-    return region, out_w, out_h
+    out_w, out_h = int(round(w * scale)), int(round(h * scale))
+    return region.resize((out_w, out_h), Image.BILINEAR), out_w, out_h
 
 
 def _choose_level_for_bbox(base_w: int, base_h: int, slide: openslide.AbstractSlide) -> int:
     side0 = max(base_w, base_h)
     for level in range(slide.level_count):
-        ds = float(slide.level_downsamples[level])
-        side_lvl = side0 / ds
-        if side_lvl <= MAX_NATIVE_VIEW_DIM:
+        if side0 / float(slide.level_downsamples[level]) <= MAX_NATIVE_VIEW_DIM:
             return level
     return slide.level_count - 1
 
 
 def _add_view_to_history(info: Dict[str, Any], tag: str) -> None:
-    entry = dict(info)
-    entry["tag"] = tag
+    entry = {**info, "tag": tag}
     state._view_history.append(entry)
-    max_views = 8
-    if len(state._view_history) > max_views:
-        state._view_history = state._view_history[-max_views:]
+    if len(state._view_history) > _VIEW_HISTORY_MAX:
+        state._view_history = state._view_history[-_VIEW_HISTORY_MAX:]
 
 
 def _make_overview_with_current_box(
@@ -174,11 +177,21 @@ def _make_overview_with_current_box(
 
     path = _save_debug_image(region, tag=tag)
     state._last_overview_with_box_path = path
-    print(
-        f"[WSI][OV_BOX] Saved overview image at "
-        f"{path} for base bbox=({vx0},{vy0},{vw},{vh})"
-    )
+    print(f"[WSI][OV_BOX] Saved overview image at {path} for base bbox=({vx0},{vy0},{vw},{vh})")
     return path
+
+
+def _resolve_mpp(slide: openslide.AbstractSlide) -> float:
+    override = getattr(state, "DEFAULT_MPP_UM_OVERRIDE", None)
+    if override is not None:
+        try:
+            mpp = float(override)
+            if mpp > 0:
+                return mpp
+        except Exception:
+            pass
+    mpp = _get_mpp_um(slide)
+    return mpp if (mpp is not None and mpp > 0) else DEFAULT_MPP_FALLBACK_UM
 
 
 def _render_view_from_base_bbox(
@@ -213,29 +226,23 @@ def _render_view_from_base_bbox(
     )
 
     region = _read_region_rgb(slide, x0, y0, level, (w_lvl, h_lvl))
-    region, out_w, out_h = _resize_to_max_dim(region, max_dim=min(max_dim, MAX_IMG_DIM))
+    region, out_w, out_h = _resize_to_max_dim(region, max_dim=max(1, int(max_dim or MAX_IMG_DIM)))
 
     tissue_fraction = _estimate_tissue_fraction(region)
-
     debug_path = _save_debug_image(region, tag=tag)
 
-    mpp = _get_mpp_um(slide)
-    if mpp is not None:
-        field_width_um = w * mpp
-        field_height_um = h * mpp
-    else:
-        field_width_um = None
-        field_height_um = None
+    mpp = _resolve_mpp(slide)
+    field_width_um = w * mpp
+    field_height_um = h * mpp
 
     x_lvl = int(round(x0 / ds))
     y_lvl = int(round(y0 / ds))
-    w_lvl_int = int(round(w / ds))
-    h_lvl_int = int(round(h / ds))
 
     info = {
         "debug_path": debug_path,
+        "view_tag": tag,
         "view_level": level,
-        "view_bbox_level": [x_lvl, y_lvl, w_lvl_int, h_lvl_int],
+        "view_bbox_level": [x_lvl, y_lvl, w_lvl, h_lvl],
         "view_bbox_level0": [x0, y0, w, h],
         "view_image_dims": [out_w, out_h],
         "field_width_um": field_width_um,
@@ -244,15 +251,13 @@ def _render_view_from_base_bbox(
     }
 
     state._current_view = {
-        "x0": x0,
-        "y0": y0,
-        "w": w,
-        "h": h,
+        "x0": x0, "y0": y0, "w": w, "h": h,
         "level": level,
         "level_downsample": ds,
         "shown_w": out_w,
         "shown_h": out_h,
         "debug_path": debug_path,
+        "view_tag": tag,
         "field_width_um": field_width_um,
         "field_height_um": field_height_um,
         "tissue_fraction": tissue_fraction,
@@ -278,54 +283,36 @@ def _bbox_from_norm_with_aspect_controls(
     shrink_if_large: float = 0.35,
     max_aspect: float = 1.4,
 ) -> Tuple[int, int, int, int]:
-    x0_999 = max(0, min(999, x0_999))
-    y0_999 = max(0, min(999, y0_999))
-    x1_999 = max(0, min(999, x1_999))
-    y1_999 = max(0, min(999, y1_999))
-    x0n, x1n = sorted([x0_999, x1_999])
-    y0n, y1n = sorted([y0_999, y1_999])
+    x0n, x1n = sorted([max(0, min(999, x0_999)), max(0, min(999, x1_999))])
+    y0n, y1n = sorted([max(0, min(999, y0_999)), max(0, min(999, y1_999))])
 
-    x0_rel = x0n / 999.0
-    y0_rel = y0n / 999.0
-    x1_rel = x1n / 999.0
-    y1_rel = y1n / 999.0
+    x0_rel, y0_rel = x0n / 999.0, y0n / 999.0
+    x1_rel, y1_rel = x1n / 999.0, y1n / 999.0
 
     x0 = cv_x0 + int(round(x0_rel * cv_w))
     y0 = cv_y0 + int(round(y0_rel * cv_h))
-    w = int(round((x1_rel - x0_rel) * cv_w))
-    h = int(round((y1_rel - y0_rel) * cv_h))
+    w = max(1, int(round((x1_rel - x0_rel) * cv_w)))
+    h = max(1, int(round((y1_rel - y0_rel) * cv_h)))
 
-    w = max(1, w)
-    h = max(1, h)
-
-    frac_w = w / float(cv_w)
-    frac_h = h / float(cv_h)
-    if frac_w > 0.7 or frac_h > 0.7:
-        cx = x0 + w // 2
-        cy = y0 + h // 2
-        w = int(round(w * shrink_if_large))
-        h = int(round(h * shrink_if_large))
-        w = max(32, w)
-        h = max(32, h)
-        x0 = cx - w // 2
-        y0 = cy - h // 2
+    if w / float(cv_w) > 0.7 or h / float(cv_h) > 0.7:
+        cx, cy = x0 + w // 2, y0 + h // 2
+        w = max(32, int(round(w * shrink_if_large)))
+        h = max(32, int(round(h * shrink_if_large)))
+        x0, y0 = cx - w // 2, cy - h // 2
 
     x0 = max(0, min(x0, slide_w0 - 1))
     y0 = max(0, min(y0, slide_h0 - 1))
     w = max(1, min(w, slide_w0 - x0))
     h = max(1, min(h, slide_h0 - y0))
 
-    aspect = max(w / float(h), h / float(w))
-    if aspect > max_aspect:
+    if max(w, h) / float(min(w, h)) > max_aspect:
         if w > h:
-            target_w = int(round(h * max_aspect))
             cx = x0 + w // 2
-            w = max(1, target_w)
+            w = max(1, int(round(h * max_aspect)))
             x0 = max(0, min(cx - w // 2, slide_w0 - w))
         else:
-            target_h = int(round(w * max_aspect))
             cy = y0 + h // 2
-            h = max(1, target_h)
+            h = max(1, int(round(w * max_aspect)))
             y0 = max(0, min(cy - h // 2, slide_h0 - h))
 
     return x0, y0, w, h
@@ -337,31 +324,13 @@ def _log_step(tool_name: str, nav_reason: str, info: Dict[str, Any]) -> None:
         "step_index": step_idx,
         "tool": tool_name,
         "nav_reason": nav_reason.strip() if nav_reason else "(none provided)",
-        "debug_path": info.get("debug_path"),
-        "view_level": info.get("view_level"),
-        "view_bbox_level0": info.get("view_bbox_level0"),
-        "view_image_dims": info.get("view_image_dims"),
-        "field_width_um": info.get("field_width_um"),
-        "field_height_um": info.get("field_height_um"),
-        "tissue_fraction": info.get("tissue_fraction"),
-        "roi_candidate_count": info.get("roi_candidate_count"),
-        "roi_candidate_source": info.get("roi_candidate_source"),
-        "roi_candidate_warning": info.get("roi_candidate_warning"),
-        "roi_candidate_stage": info.get("roi_candidate_stage"),
-        "roi_candidate_pipeline": info.get("roi_candidate_pipeline"),
-        "roi_candidate_index_meta": info.get("roi_candidate_index_meta"),
-        "aml_reference_stats": info.get("aml_reference_stats"),
+        **{k: info.get(k) for k in _LOG_STEP_KEYS},
     }
     state._step_log.append(entry)
     print(f"[WSI][STEP_LOG] Step {step_idx}: {tool_name}, nav_reason='{nav_reason}'")
 
 
 def _safe_filename(text: str, max_len: int = 64) -> str:
-    cleaned = []
-    for ch in text.strip():
-        if ch.isalnum() or ch in {"-", "_"}:
-            cleaned.append(ch)
-        elif ch.isspace():
-            cleaned.append("_")
-    out = "".join(cleaned).strip("_")
+    t = _SAFE_FILENAME_DROP_RE.sub("", text.strip())
+    out = _SAFE_FILENAME_SPACE_RE.sub("_", t).strip("_")
     return out[:max_len] if out else "tile"

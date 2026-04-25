@@ -38,12 +38,14 @@ MAX_NATIVE_VIEW_DIM = 4096
 MAX_TURNS = int(os.getenv("MAX_TURNS", "140"))
 
 ROI_TARGET_SIDE_PX = 1500
+ROI_TARGET_WIDTH_UM = float(os.getenv("ROI_TARGET_WIDTH_UM", "964.0"))
+ROI_TARGET_HEIGHT_UM = float(os.getenv("ROI_TARGET_HEIGHT_UM", "771.0"))
 
 TILE_SIZE_UM = 256.0
 TILE_PX = 224
 MAX_GOOD_TILES = 200
 MAX_BAD_TILES = 50
-DEFAULT_MPP_UM = 0.25
+DEFAULT_MPP_UM = 0.159
 
 OUTPUTS_ROOT_DIR = os.path.abspath("./outputs")
 os.makedirs(OUTPUTS_ROOT_DIR, exist_ok=True)
@@ -66,5 +68,18 @@ EXAMPLE_ROIS_ROOT = os.path.abspath(os.getenv("EXAMPLE_ROIS_ROOT", "./Example_RO
 EXAMPLE_ROIS_POS_DIR = os.path.join(EXAMPLE_ROIS_ROOT, "ROI")
 EXAMPLE_ROIS_NEG_DIR = os.path.join(EXAMPLE_ROIS_ROOT, "Non_ROI")
 EXAMPLE_ROIS_MAX_PER_CLASS = int(os.getenv("EXAMPLE_ROIS_MAX_PER_CLASS", "2"))
-CONTEXT_PREVIOUS_VIEWS_MAX = int(os.getenv("CONTEXT_PREVIOUS_VIEWS_MAX", "0"))
-CONTEXT_ROI_CANDIDATE_LINES_MAX = int(os.getenv("CONTEXT_ROI_CANDIDATE_LINES_MAX", "4"))
+def _context_tuning_int(section: str, key: str, default: int) -> int:
+    env = os.getenv(key)
+    if env is not None:
+        try:
+            return int(env)
+        except Exception:
+            pass
+    try:
+        from .tuning_config import tuning_value
+        return int(tuning_value(section, key))
+    except Exception:
+        return default
+
+CONTEXT_PREVIOUS_VIEWS_MAX = _context_tuning_int("context_injection.candidates", "CONTEXT_PREVIOUS_VIEWS_MAX", 0)
+CONTEXT_ROI_CANDIDATE_LINES_MAX = _context_tuning_int("context_injection.candidates", "CONTEXT_ROI_CANDIDATE_LINES_MAX", 8)

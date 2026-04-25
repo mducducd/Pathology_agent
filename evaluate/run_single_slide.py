@@ -20,6 +20,7 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
+from xml.dom import minidom
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
@@ -32,12 +33,121 @@ FINAL_DECISIONS = (
     "Call for more diagnostics",
 )
 FINAL_DECISION_LOOKUP = {label.lower(): label for label in FINAL_DECISIONS}
+try:
+    from wsi_core_pkg.tuning_config import tuning_value
+    DEFAULT_MPP_UM_FALLBACK = float(tuning_value("tools.slide", "DEFAULT_MPP_UM"))
+    try:
+        CONFIG_CACHE_ROOT_DIR = str(tuning_value("tools.cache", "CACHE_ROOT_DIR") or "").strip()
+    except Exception:
+        CONFIG_CACHE_ROOT_DIR = ""
+except Exception:
+    DEFAULT_MPP_UM_FALLBACK = 0.159
+    CONFIG_CACHE_ROOT_DIR = ""
 
 
 def _make_run_id(patient_name: str) -> str:
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     safe = patient_name.replace("/", "_").replace(" ", "_")[:60]
     return f"{ts}_{safe}"
+
+
+def _read_slide_mpp_um(slide_path: str) -> tuple[float | None, str | None]:
+    try:
+        import openslide
+    except Exception:
+        return None, None
+
+    slide = None
+    try:
+        slide = openslide.open_slide(str(slide_path))
+        props = getattr(slide, "properties", {}) or {}
+
+        for key in ("openslide.mpp-x", "openslide.mpp-y", "aperio.MPP"):
+            value = props.get(key)
+            if value:
+                try:
+                    return float(value), key
+                except Exception:
+                    pass
+
+        slide_comment = props.get("openslide.comment", "")
+        match = re.search(r"<PixelSizeMicrons>(.*?)</PixelSizeMicrons>", slide_comment)
+        if match is not None:
+            try:
+                return float(match.group(1)), "openslide.comment:PixelSizeMicrons"
+            except Exception:
+                pass
+
+        xml_text = props.get("tiff.ImageDescription")
+        if xml_text:
+            try:
+                doc = minidom.parseString(xml_text)
+                images = doc.documentElement.getElementsByTagName("Image")
+                pixels = images[0].getElementsByTagName("Pixels")
+                physical_size_x = pixels[0].getAttribute("PhysicalSizeX")
+                if physical_size_x:
+                    return float(physical_size_x), "tiff.ImageDescription:PhysicalSizeX"
+            except Exception:
+                pass
+
+        objective_power = props.get("openslide.objective-power")
+        if objective_power:
+            try:
+                return 10.0 / float(objective_power), "openslide.objective-power"
+            except Exception:
+                pass
+    except Exception:
+        return None, None
+    finally:
+        if slide is not None:
+            try:
+                slide.close()
+            except Exception:
+                pass
+
+    return None, None
+
+
+def _resolve_tile_size_config(
+    *,
+    slide_path: str,
+    tile_size_px: int,
+    requested_tile_size_um: float | None,
+    requested_default_mpp_um: float | None,
+) -> dict[str, float | str | None]:
+    slide_mpp_um, mpp_source = _read_slide_mpp_um(slide_path)
+    if requested_default_mpp_um is not None and float(requested_default_mpp_um) > 0:
+        resolved_mpp_um = float(requested_default_mpp_um)
+        effective_mpp_source = "input_default_mpp"
+    elif slide_mpp_um and slide_mpp_um > 0:
+        resolved_mpp_um = float(slide_mpp_um)
+        effective_mpp_source = str(mpp_source or "slide_metadata")
+    else:
+        resolved_mpp_um = DEFAULT_MPP_UM_FALLBACK
+        effective_mpp_source = "default_fallback"
+
+    if requested_tile_size_um is not None:
+        tile_size_um = float(requested_tile_size_um)
+        tile_size_um_source = "explicit"
+    else:
+        tile_size_um = float(tile_size_px) * float(resolved_mpp_um)
+        if effective_mpp_source == "input_default_mpp":
+            tile_size_um_source = "auto_from_input_mpp"
+        elif slide_mpp_um and slide_mpp_um > 0:
+            tile_size_um_source = "auto_from_slide_mpp"
+        else:
+            tile_size_um_source = "auto_from_default_mpp"
+
+    return {
+        "tile_size_um": tile_size_um,
+        "tile_size_um_requested": requested_tile_size_um,
+        "tile_size_um_source": tile_size_um_source,
+        "default_mpp_um_requested": requested_default_mpp_um,
+        "slide_mpp_um": slide_mpp_um,
+        "resolved_mpp_um": resolved_mpp_um,
+        "mpp_source": effective_mpp_source,
+        "default_mpp_um_fallback": DEFAULT_MPP_UM_FALLBACK,
+    }
 
 
 def _strip_tile_cache(root: Path) -> None:
@@ -66,16 +176,24 @@ def _cleanup_fresh_embedding_cache(cache_info: dict[str, str] | None) -> None:
         shutil.rmtree(cache_root, ignore_errors=True)
 
 
+def _resolve_cache_root(*, output_dir: Path, experiment_root: Path | None) -> Path:
+    configured = CONFIG_CACHE_ROOT_DIR.strip()
+    if configured:
+        return Path(configured).expanduser().resolve()
+    return (experiment_root or output_dir).resolve() / "_cache"
+
+
 def _configure_persistent_reference_cache(
     *,
     output_dir: Path,
     experiment_root: Path | None,
     extractor_name: str,
 ) -> Path:
-    cache_root = (experiment_root or output_dir).resolve()
-    reference_cache_dir = cache_root / "_cache" / "reference_hnsw" / _sanitize_stem(extractor_name)
+    cache_root = _resolve_cache_root(output_dir=output_dir, experiment_root=experiment_root)
+    reference_cache_dir = cache_root / "reference_hnsw" / _sanitize_stem(extractor_name)
     reference_cache_dir.mkdir(parents=True, exist_ok=True)
     os.environ["AML_REFERENCE_CACHE_DIR"] = str(reference_cache_dir)
+    os.environ["CACHE_ROOT_DIR"] = str(cache_root)
     return reference_cache_dir
 
 
@@ -93,16 +211,16 @@ def _configure_experiment_tile_cache(
         return None
 
     os.environ.pop("ROI_DISABLE_TILE_CACHE", None)
-    cache_root = (experiment_root or output_dir).resolve()
+    cache_root = _resolve_cache_root(output_dir=output_dir, experiment_root=experiment_root)
     tile_cache_dir = (
         cache_root
-        / "_cache"
         / "tile_cache"
         / _sanitize_stem(extractor_name)
         / _sanitize_stem(_normalize_tile_filter_name(tile_filter))
     )
     tile_cache_dir.mkdir(parents=True, exist_ok=True)
     os.environ["ROI_TILE_CACHE_DIR"] = str(tile_cache_dir)
+    os.environ["CACHE_ROOT_DIR"] = str(cache_root)
     return tile_cache_dir
 
 
@@ -122,16 +240,16 @@ def _configure_experiment_feature_cache(
     extractor_name: str,
     tile_filter: str,
 ) -> Path:
-    cache_root = (experiment_root or output_dir).resolve()
+    cache_root = _resolve_cache_root(output_dir=output_dir, experiment_root=experiment_root)
     feature_cache_dir = (
         cache_root
-        / "_cache"
         / "feature_cache"
         / _sanitize_stem(extractor_name)
         / _sanitize_stem(_normalize_tile_filter_name(tile_filter))
     )
     feature_cache_dir.mkdir(parents=True, exist_ok=True)
     os.environ["ROI_FEATURE_CACHE_DIR"] = str(feature_cache_dir)
+    os.environ["CACHE_ROOT_DIR"] = str(cache_root)
     return feature_cache_dir
 
 
@@ -393,9 +511,24 @@ def _persist_report_artifacts(
             "model_name": args.model,
             "feature_extractor": {"key": args.extractor},
             "tile_filter": args.tile_filter,
-            "tile_size": {"px": args.tile_size_px, "um": args.tile_size_um},
+            "tile_size": {
+                "px": args.tile_size_px,
+                "um": args.tile_size_um,
+                "requested_um": getattr(args, "tile_size_um_requested", args.tile_size_um),
+                "source": getattr(args, "tile_size_um_source", "explicit"),
+                "mpp_um": getattr(args, "resolved_mpp_um", None),
+                "mpp_source": getattr(args, "mpp_source", None),
+            },
             "tile_size_px": args.tile_size_px,
             "tile_size_um": args.tile_size_um,
+            "tile_size_um_requested": getattr(args, "tile_size_um_requested", args.tile_size_um),
+            "tile_size_um_source": getattr(args, "tile_size_um_source", "explicit"),
+            "default_mpp_um_requested": getattr(args, "default_mpp_um_requested", None),
+            "slide_mpp_um": getattr(args, "slide_mpp_um", None),
+            "resolved_mpp_um": getattr(args, "resolved_mpp_um", None),
+            "default_mpp_um_fallback": getattr(args, "default_mpp_um_fallback", DEFAULT_MPP_UM_FALLBACK),
+            "mpp_source": getattr(args, "mpp_source", None),
+            "roi_size_px": args.roi_size_px,
             "batch_size": args.batch_size,
             "elapsed_sec": round(elapsed, 1),
             "final_decision": final_decision,
@@ -461,9 +594,21 @@ def main() -> int:
     parser.add_argument("--extractor", default="uni2", help="Feature extractor key")
     parser.add_argument("--tile-filter", default="hybrid", help="Tile prefilter method")
     parser.add_argument("--agent", default="aml", help="Agent mode (e.g. aml, wsi)")
-    parser.add_argument("--tile-size-um", type=float, default=256.0)
+    parser.add_argument(
+        "--tile-size-um",
+        type=float,
+        default=None,
+        help=f"Tile size in microns. If omitted, auto-compute from preferred MPP override when set, otherwise slide MPP; fallback MPP is {DEFAULT_MPP_UM_FALLBACK}.",
+    )
     parser.add_argument("--tile-size-px", type=int, default=224)
     parser.add_argument("--batch-size", type=int, default=128)
+    parser.add_argument("--roi-size-px", type=int, default=2048, help="ROI crop/output size in pixels")
+    parser.add_argument(
+        "--default-mpp-um",
+        type=float,
+        default=None,
+        help="Preferred MPP override. When set, this wins over slide metadata.",
+    )
     parser.add_argument(
         "--fresh-embedding-cache",
         action="store_true",
@@ -476,6 +621,10 @@ def main() -> int:
     )
     args = parser.parse_args()
     args.tile_filter = _normalize_tile_filter_name(args.tile_filter)
+    if args.tile_size_um is not None and float(args.tile_size_um) <= 0:
+        parser.error("--tile-size-um must be > 0")
+    if args.default_mpp_um is not None and float(args.default_mpp_um) <= 0:
+        parser.error("--default-mpp-um must be > 0")
 
     slide_path = os.path.abspath(args.slide)
     if not os.path.exists(slide_path):
@@ -487,6 +636,7 @@ def main() -> int:
     out_dir = Path(args.output_dir).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
     experiment_root = Path(args.experiment_root).resolve() if args.experiment_root else None
+    cache_root = _resolve_cache_root(output_dir=out_dir, experiment_root=experiment_root)
 
     if args.cuda_device not in (None, ""):
         os.environ["CUDA_VISIBLE_DEVICES"] = str(args.cuda_device)
@@ -519,20 +669,50 @@ def main() -> int:
         )
     run_artifacts = REPO_ROOT / "outputs" / run_id
 
-    print(f"[SLIDE] {slide_path}")
-    print(f"[RUN]   {run_id}")
-    print(f"[MODEL] {args.model}  [EXTRACTOR] {args.extractor}  [FILTER] {args.tile_filter}")
-    if reference_cache_dir is not None:
-        print(f"[REFCACHE] {reference_cache_dir}")
-    print(f"[FEATCACHE] {feature_cache_dir}")
-    if os.getenv("CUDA_VISIBLE_DEVICES"):
-        print(f"[CUDA]  CUDA_VISIBLE_DEVICES={os.getenv('CUDA_VISIBLE_DEVICES')}")
-
     from wsi_core_pkg.runtime import run_wsi_agent_for_web
 
     t0 = time.time()
     try:
         _validate_slide_package(slide_path)
+        tile_size_config = _resolve_tile_size_config(
+            slide_path=slide_path,
+            tile_size_px=args.tile_size_px,
+            requested_tile_size_um=args.tile_size_um,
+            requested_default_mpp_um=args.default_mpp_um,
+        )
+        args.tile_size_um = float(tile_size_config["tile_size_um"])
+        args.tile_size_um_requested = tile_size_config["tile_size_um_requested"]
+        args.tile_size_um_source = str(tile_size_config["tile_size_um_source"])
+        args.default_mpp_um_requested = tile_size_config["default_mpp_um_requested"]
+        args.slide_mpp_um = tile_size_config["slide_mpp_um"]
+        args.resolved_mpp_um = float(tile_size_config["resolved_mpp_um"])
+        args.mpp_source = str(tile_size_config["mpp_source"])
+        args.default_mpp_um_fallback = float(tile_size_config["default_mpp_um_fallback"])
+
+        print(f"[SLIDE] {slide_path}")
+        print(f"[RUN]   {run_id}")
+        print(f"[MODEL] {args.model}  [EXTRACTOR] {args.extractor}  [FILTER] {args.tile_filter}")
+        print(f"[ROI]   {args.roi_size_px}px")
+        print(
+            "[TILE]  %spx / %.3fum  [source=%s, mpp=%.6f from %s]"
+            % (
+                args.tile_size_px,
+                args.tile_size_um,
+                args.tile_size_um_source,
+                args.resolved_mpp_um,
+                args.mpp_source,
+            )
+        )
+        print(f"[CACHEROOT] {cache_root}")
+        if tile_cache_dir is not None:
+            print(f"[TILECACHE] {tile_cache_dir}")
+        else:
+            print("[TILECACHE] disabled")
+        if reference_cache_dir is not None:
+            print(f"[REFCACHE] {reference_cache_dir}")
+        print(f"[FEATCACHE] {feature_cache_dir}")
+        if os.getenv("CUDA_VISIBLE_DEVICES"):
+            print(f"[CUDA]  CUDA_VISIBLE_DEVICES={os.getenv('CUDA_VISIBLE_DEVICES')}")
 
         result = run_wsi_agent_for_web(
             slide_path=slide_path,
@@ -545,6 +725,8 @@ def main() -> int:
             tile_size_px=args.tile_size_px,
             batch_size=args.batch_size,
             tile_prefilter_method=args.tile_filter,
+            roi_output_size_px=args.roi_size_px,
+            default_mpp_um=args.default_mpp_um,
         )
         elapsed = time.time() - t0
 
@@ -595,6 +777,14 @@ def main() -> int:
             tile_filter=args.tile_filter,
             tile_size_px=args.tile_size_px,
             tile_size_um=args.tile_size_um,
+            tile_size_um_requested=getattr(args, "tile_size_um_requested", args.tile_size_um),
+            tile_size_um_source=getattr(args, "tile_size_um_source", "explicit"),
+            default_mpp_um_requested=getattr(args, "default_mpp_um_requested", None),
+            slide_mpp_um=getattr(args, "slide_mpp_um", None),
+            resolved_mpp_um=getattr(args, "resolved_mpp_um", None),
+            default_mpp_um_fallback=getattr(args, "default_mpp_um_fallback", DEFAULT_MPP_UM_FALLBACK),
+            mpp_source=getattr(args, "mpp_source", None),
+            roi_size_px=args.roi_size_px,
             batch_size=args.batch_size,
             elapsed_sec=round(elapsed, 1),
             status="ok",
@@ -625,6 +815,14 @@ def main() -> int:
             tile_filter=args.tile_filter,
             tile_size_px=args.tile_size_px,
             tile_size_um=args.tile_size_um,
+            tile_size_um_requested=getattr(args, "tile_size_um_requested", args.tile_size_um),
+            tile_size_um_source=getattr(args, "tile_size_um_source", "explicit"),
+            default_mpp_um_requested=getattr(args, "default_mpp_um_requested", None),
+            slide_mpp_um=getattr(args, "slide_mpp_um", None),
+            resolved_mpp_um=getattr(args, "resolved_mpp_um", None),
+            default_mpp_um_fallback=getattr(args, "default_mpp_um_fallback", DEFAULT_MPP_UM_FALLBACK),
+            mpp_source=getattr(args, "mpp_source", None),
+            roi_size_px=args.roi_size_px,
             batch_size=args.batch_size,
             elapsed_sec=round(elapsed, 1),
             status="error",
