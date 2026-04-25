@@ -262,13 +262,13 @@ roi_ranker:
 context_injection:
   images:
     # Maximum image dimension (px) when encoding context images as JPEG data URLs.
-    CONTEXT_IMAGE_MAX_DIM: 224
+    CONTEXT_IMAGE_MAX_DIM: 512
     # JPEG quality used when encoding context images.
     CONTEXT_IMAGE_JPEG_QUALITY: 55
     # Maximum number of inline images included per LLM request.
     CONTEXT_MAX_INLINE_IMAGES: 2
     # Maximum total base64 chars for all inline images per LLM request.
-    CONTEXT_MAX_INLINE_IMAGE_URL_CHARS: 30000
+    CONTEXT_MAX_INLINE_IMAGE_URL_CHARS: 90000
 
   candidates:
     # Maximum previous-view images included in context per request.

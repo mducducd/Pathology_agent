@@ -37,7 +37,6 @@ values = {
     "ROI_SIZE_PX": str(slide_cfg.get("ROI_SIZE_PX", "2048")),
     "AGENT": str(slide_cfg.get("AGENT", "aml")),
     "DEFAULT_MPP_UM": str(slide_cfg.get("DEFAULT_MPP_UM", "0.159")),
-    "CONFIG_CACHE_ROOT": str(data.get("tools", {}).get("cache", {}).get("CACHE_ROOT_DIR", "") or "").strip(),
     "RESUME": "true",
     "USE_TILE_CACHE": "true",
 }
@@ -48,18 +47,18 @@ PY
 )"
 EXTRACTORS_FILTER=""
 RUNS=(
-    # "GLM-4.6V-FP8|uni2|GLM-4.6V-FP8_UNI2_224px"
-    # "GLM-4.6V-FP8|virchow2|GLM-4.6V-FP8_Virchow2_224px"
-    # "GLM-4.6V-FP8|h_optimus_1|GLM-4.6V-FP8_H-optimus-1_224px"
-    # "GLM-4.6V-FP8|dinobloom_giant|GLM-4.6V-FP8_DinoBloom-G_224px"
-    # "GPT-OSS-120B|uni2|GPT-OSS-120B_UNI2_224px"
-    # "GPT-OSS-120B|virchow2|GPT-OSS-120B_Virchow2_224px"
-    # "GPT-OSS-120B|h_optimus_1|GPT-OSS-120B_H-optimus-1_224px"
-    # "GPT-OSS-120B|dinobloom_giant|GPT-OSS-120B_DinoBloom-G_224px"
     "gemma-4-31B-it|uni2|gemma-4-31B-it_UNI2_224px"
     "gemma-4-31B-it|virchow2|gemma-4-31B-it_Virchow2_224px"
     "gemma-4-31B-it|h_optimus_1|gemma-4-31B-it_H-optimus-1_224px"
     "gemma-4-31B-it|dinobloom_giant|gemma-4-31B-it_DinoBloom-G_224px"
+    # "GPT-OSS-120B|uni2|GPT-OSS-120B_UNI2_224px"
+    # "GPT-OSS-120B|virchow2|GPT-OSS-120B_Virchow2_224px"
+    # "GPT-OSS-120B|h_optimus_1|GPT-OSS-120B_H-optimus-1_224px"
+    # "GPT-OSS-120B|dinobloom_giant|GPT-OSS-120B_DinoBloom-G_224px"
+    # "Qwen3.5-397B-A17B-FP8|uni2|Qwen3.5-397B-A17B-FP8_UNI2_224px"
+    # "Qwen3.5-397B-A17B-FP8|virchow2|Qwen3.5-397B-A17B-FP8_Virchow2_224px"
+    # "Qwen3.5-397B-A17B-FP8|h_optimus_1|Qwen3.5-397B-A17B-FP8_H-optimus-1_224px"
+    # "Qwen3.5-397B-A17B-FP8|dinobloom_giant|Qwen3.5-397B-A17B-FP8_DinoBloom-G_224px"
 )
 
 format_elapsed() {
@@ -156,8 +155,7 @@ echo " ROI size:         ${ROI_SIZE_PX}px"
 echo " Default MPP:      ${DEFAULT_MPP_UM}"
 echo " Tile cache:       $USE_TILE_CACHE"
 echo " CUDA devices:     ${CUDA_VISIBLE_DEVICES:-all}"
-echo " Experiment root:  $BASE_OUTPUT_ROOT"
-echo " Config cache dir: ${CONFIG_CACHE_ROOT:-<empty>}"
+echo " Cache root:       $BASE_OUTPUT_ROOT"
 echo " Resume:           $RESUME"
 echo " Extractors:       ${EXTRACTORS_FILTER:-all}"
 echo " Runs:             ${#FILTERED_RUNS[@]}"

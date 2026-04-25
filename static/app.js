@@ -7,6 +7,8 @@
   const uploadActionMenu = document.getElementById("upload-action-menu");
   const uploadActionOptions = Array.from(document.querySelectorAll(".upload-action-option"));
   const uploadActionTip = document.getElementById("upload-action-tip");
+  const themeToggle = document.getElementById("theme-toggle");
+  const themeToggleLabel = document.getElementById("theme-toggle-label");
 
   const btnClear = document.getElementById("btn-clear");
   const btnStart = document.getElementById("btn-start");
@@ -36,6 +38,7 @@
   const defaultMppStorageKey = "slide-agent.default-mpp-um";
   const candidateNavFieldUmStorageKey = "slide-agent.candidate-nav-field-um";
   const roiSettingsGroupStorageKey = "slide-agent.roi-settings-group-open";
+  const themeStorageKey = "slide-agent.theme";
   const defaultMppAutoStorageValue = "__auto__";
 
   const statusPill = document.getElementById("status-pill");
@@ -110,12 +113,14 @@
     return (modelSelect && modelSelect.value) ? modelSelect.value : "GPT-OSS-120B";
   }
 
+  function readPositiveInt(el, fallback) {
+    const raw = (el && el.value) ? el.value : String(fallback);
+    const parsed = Number.parseInt(raw, 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+  }
+
   function selectedBatchSize() {
-    const parsed = Number.parseInt(
-      (batchSizeSelect && batchSizeSelect.value) ? batchSizeSelect.value : "128",
-      10
-    );
-    return Number.isFinite(parsed) && parsed > 0 ? parsed : 128;
+    return readPositiveInt(batchSizeSelect, 128);
   }
 
   function selectedTilePrefilterMethod() {
@@ -123,27 +128,15 @@
   }
 
   function selectedRoiOutputSizePx() {
-    const parsed = Number.parseInt(
-      (roiOutputSizeSelect && roiOutputSizeSelect.value) ? roiOutputSizeSelect.value : "1024",
-      10
-    );
-    return Number.isFinite(parsed) && parsed > 0 ? parsed : 1024;
+    return readPositiveInt(roiOutputSizeSelect, 1024);
   }
 
   function selectedMaxAcceptedRois() {
-    const parsed = Number.parseInt(
-      (maxAcceptedRoisSelect && maxAcceptedRoisSelect.value) ? maxAcceptedRoisSelect.value : "10",
-      10
-    );
-    return Number.isFinite(parsed) && parsed > 0 ? parsed : 10;
+    return readPositiveInt(maxAcceptedRoisSelect, 10);
   }
 
   function selectedTargetAcceptedRois() {
-    const parsed = Number.parseInt(
-      (targetAcceptedRoisSelect && targetAcceptedRoisSelect.value) ? targetAcceptedRoisSelect.value : "5",
-      10
-    );
-    return Number.isFinite(parsed) && parsed > 0 ? parsed : 5;
+    return readPositiveInt(targetAcceptedRoisSelect, 5);
   }
 
   function selectedDefaultMppUm() {
@@ -204,19 +197,51 @@
 
   function loadStoredValue(key) {
     try {
-      return window.localStorage.getItem(key);
-    } catch (_e) {
-      // Ignore localStorage access issues.
+      return localStorage.getItem(key);
+    } catch {
+      return null;
     }
-    return null;
   }
 
   function saveStoredValue(key, value) {
     try {
-      window.localStorage.setItem(key, value);
-    } catch (_e) {
-      // Ignore localStorage access issues.
+      localStorage.setItem(key, value);
+    } catch {}
+  }
+
+  function normalizedTheme(value) {
+    return value === "dark" || value === "light" ? value : null;
+  }
+
+  function preferredTheme() {
+    try {
+      return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+    } catch {
+      return "light";
     }
+  }
+
+  function applyTheme(theme, persist = false) {
+    const nextTheme = normalizedTheme(theme) || "light";
+    document.documentElement.dataset.theme = nextTheme;
+    if (themeToggleLabel) {
+      themeToggleLabel.textContent = nextTheme === "dark" ? "Dark" : "Light";
+    }
+    if (themeToggle) {
+      const nextLabel = nextTheme === "dark" ? "Switch to light theme" : "Switch to dark theme";
+      themeToggle.setAttribute("aria-label", nextLabel);
+      themeToggle.setAttribute("aria-pressed", nextTheme === "dark" ? "true" : "false");
+      themeToggle.title = nextLabel;
+    }
+    if (persist) {
+      saveStoredValue(themeStorageKey, nextTheme);
+    }
+  }
+
+  function initTheme() {
+    const storedTheme = normalizedTheme(loadStoredValue(themeStorageKey));
+    const currentTheme = normalizedTheme(document.documentElement.dataset.theme);
+    applyTheme(storedTheme || currentTheme || preferredTheme(), false);
   }
 
   function uploadHintForAction(action) {
@@ -442,6 +467,7 @@
   let currentRunId = null;
   let currentModelName = null;
   let pollingTimer = null;
+  let pollInFlight = false;
   let lastRenderedStep = 0;
   let lastRenderedRoi = 0;
   let darkRegionsLoaded = false;
@@ -507,10 +533,9 @@
 
   function readStoredPx(key) {
     try {
-      const raw = localStorage.getItem(key);
-      const n = Number(raw);
+      const n = Number(localStorage.getItem(key));
       return Number.isFinite(n) ? n : null;
-    } catch (_e) {
+    } catch {
       return null;
     }
   }
@@ -518,9 +543,7 @@
   function writeStoredPx(key, value) {
     try {
       localStorage.setItem(key, String(Math.round(value)));
-    } catch (_e) {
-      // Ignore persistence failures (private mode or blocked storage).
-    }
+    } catch {}
   }
 
   function readCssVarPx(el, name, fallback) {
@@ -621,7 +644,7 @@
       localStorage.removeItem(LAYOUT_STORAGE_KEYS.rightColPx);
       localStorage.removeItem(LAYOUT_STORAGE_KEYS.viewerLeftColPx);
       localStorage.setItem(LAYOUT_STORAGE_KEYS.version, LAYOUT_STORAGE_VERSION);
-    } catch (_e) {
+    } catch {
       // Ignore storage access failures.
     }
   }
@@ -657,7 +680,7 @@
       document.body.classList.add("is-resizing");
       try {
         handleEl.setPointerCapture(ev.pointerId);
-      } catch (_e) {
+      } catch {
         // Ignore pointer capture failures.
       }
 
@@ -767,8 +790,8 @@
     if (!roisEl) return;
     const shouldStick = force || roiListPinnedToBottom || isListNearBottom(roisEl);
     if (!shouldStick) return;
-    roisEl.scrollTop = roisEl.scrollHeight;
     roiListPinnedToBottom = true;
+    requestAnimationFrame(() => { roisEl.scrollTop = roisEl.scrollHeight; });
   }
 
   function escapeHtml(s) {
@@ -989,7 +1012,7 @@
       }
       const fallbackExtracted = extractFinalReportOnly(fallbackText || "");
       renderFinalReportMarkdown(fallbackExtracted || "No final report available.", false);
-    } catch (_e) {
+    } catch {
       if (token !== reportFetchToken) return;
       const fallbackExtracted = extractFinalReportOnly(fallbackText || "");
       renderFinalReportMarkdown(fallbackExtracted || "No final report available.", false);
@@ -1073,8 +1096,8 @@
   function setDarkRegionsEnabled(enabled) {
     darkRegionsEnabled = !!enabled;
     if (btnDarkToggle) {
-      btnDarkToggle.textContent = darkRegionsEnabled ? "Hide dark regions" : "Show dark regions";
       btnDarkToggle.setAttribute("aria-pressed", darkRegionsEnabled ? "true" : "false");
+      btnDarkToggle.setAttribute("aria-label", darkRegionsEnabled ? "Hide dark regions" : "Show dark regions");
       btnDarkToggle.classList.toggle("is-active", darkRegionsEnabled);
     }
     if (!darkRegionsEnabled) {
@@ -1744,6 +1767,7 @@
   async function openExplorer() {
     if (!explorerModal) return;
     explorerModal.hidden = false;
+    requestAnimationFrame(() => explorerModal.classList.add("is-open"));
     setExplorerError("");
     explorerEntries = [];
     renderExplorerList();
@@ -1764,8 +1788,10 @@
 
   function closeExplorer() {
     if (!explorerModal) return;
-    explorerModal.hidden = true;
+    explorerModal.classList.remove("is-open");
     setExplorerError("");
+    const onEnd = () => { explorerModal.hidden = true; };
+    explorerModal.addEventListener("transitionend", onEnd, { once: true });
   }
 
   function upsertLiveStep(stepId, title, subText) {
@@ -1889,7 +1915,7 @@
     }
 
     listEl.appendChild(li);
-    listEl.scrollTop = listEl.scrollHeight;
+    requestAnimationFrame(() => { listEl.scrollTop = listEl.scrollHeight; });
   }
 
   function _ensureRoiLoadingBadge(li) {
@@ -1969,16 +1995,18 @@
     img.dataset.revealToken = token;
     img.classList.add("is-revealing");
 
-    if (item) {
-      item.classList.remove("is-revealing");
-      void item.offsetWidth;
-      item.classList.add("is-revealing");
-    }
-
     const done = () => _finishImageReveal(img, token, item);
     img.addEventListener("load", done, { once: true });
     img.addEventListener("error", done, { once: true });
     img.src = nextSrc;
+
+    if (item) {
+      item.classList.remove("is-revealing");
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        if (token && img.dataset.revealToken !== token) return;
+        item.classList.add("is-revealing");
+      }));
+    }
 
     if (img.complete && img.naturalWidth > 0) {
       done();
@@ -2434,10 +2462,13 @@
     if (!runLoadingEl) return;
     let label = (modelName && String(modelName).trim()) || currentModelName || "Model";
     if ((!status || status === "idle") && modelSelect && modelSelect.value) {
-      // For pre-run/idle UI, always reflect currently selected model.
       label = modelSelect.value;
     }
     if (runStateTextEl) runStateTextEl.textContent = label;
+
+    const isActive = status === "running" || status === "created" || status === "uploading" || status === "pending";
+    const rightCard = panelRightEl && panelRightEl.querySelector(".card");
+    if (rightCard) rightCard.classList.toggle("is-running", isActive);
 
     runLoadingEl.classList.remove("model-good", "model-warn", "model-bad", "model-idle", "is-active");
 
@@ -2572,13 +2603,15 @@
         currentModelName = name;
       }
       setModelStatus(activeRunStatus || "idle", currentModelName);
-    } catch (_e) {
+    } catch {
       // Keep fallback label if health check is unavailable.
     }
   }
 
   async function pollRun() {
     if (!currentRunId) return;
+    if (pollInFlight) return;
+    pollInFlight = true;
     try {
       const res = await fetch(`/api/runs/${currentRunId}`);
       if (!res.ok) return;
@@ -2841,8 +2874,10 @@
         }
       }
       syncStartButtonState();
-    } catch (e) {
+    } catch {
       // ignore transient errors
+    } finally {
+      pollInFlight = false;
     }
   }
 
@@ -3140,7 +3175,7 @@
     if (activeUploadXhr) {
       try {
         activeUploadXhr.abort();
-      } catch (_e) {
+      } catch {
         // Ignore upload abort failures.
       }
     }
@@ -3199,8 +3234,21 @@
   }
 
   // Buttons
+  initTheme();
+  if (themeToggle) {
+    themeToggle.addEventListener("click", () => {
+      const currentTheme = normalizedTheme(document.documentElement.dataset.theme) || preferredTheme();
+      applyTheme(currentTheme === "dark" ? "light" : "dark", true);
+    });
+  }
   btnClear.addEventListener("click", clearSelection);
   btnStart.addEventListener("click", startFlow);
+  if (batchSizeSelect) {
+    batchSizeSelect.addEventListener("change", () => {
+      const next = selectedBatchSize();
+      batchSizeSelect.value = String(next);
+    });
+  }
   if (tilePrefilterMethodSelect) {
     const storedTilePrefilterMethod = loadStoredValue(tilePrefilterMethodStorageKey);
     if (storedTilePrefilterMethod) {
@@ -3327,10 +3375,6 @@
       }
     });
   }
-  if (overviewImg) {
-    overviewImg.addEventListener("load", renderOverviewRoiOverlay);
-  }
-
   if (uploadActionTrigger && uploadActionMenu) {
     uploadActionTrigger.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -3490,7 +3534,9 @@
       if (!(target instanceof Element)) return;
       const item = target.closest(".roi-item");
       if (!item) return;
-      const roiId = Number(item.dataset.roiId || "");
+      const raw = item.dataset.roiId;
+      if (!raw) return;
+      const roiId = Number(raw);
       if (!Number.isFinite(roiId)) return;
       selectOverviewRoi(roiId);
     });

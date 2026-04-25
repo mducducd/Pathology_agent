@@ -3,19 +3,40 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="light dark" />
   <title>WSI Agent Prototype</title>
-  <link rel="icon" type="image/svg+xml" href="/static/assets/STAMP_logo.svg?v=1" />
-  <link rel="shortcut icon" href="/static/assets/STAMP_logo.svg?v=1" />
-  <link rel="stylesheet" href="/static/styles.css?v=52" />
+  <link rel="icon" type="image/svg+xml" href="/static/assets/logo.svg?v=1" />
+  <link rel="shortcut icon" href="/static/assets/logo.svg?v=1" />
+  <script>
+    (() => {
+      try {
+        const storedTheme = localStorage.getItem("slide-agent.theme");
+        const preferredTheme = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+        document.documentElement.dataset.theme = storedTheme || preferredTheme;
+      } catch {
+        document.documentElement.dataset.theme = "light";
+      }
+    })();
+  </script>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" />
+  <link rel="stylesheet" href="/static/styles.css?v=66" />
 </head>
 <body>
   <header class="topbar">
     <div class="title brand-title">
-      <img class="brand-logo" src="/static/assets/STAMP_logo.svg" alt="STAMP logo" />
-      <h1>
-        <span class="brand-word">Pathology</span>
-        <span class="brand-accent">Agent</span>
-      </h1>
+      <img class="brand-logo" src="/static/assets/logo.svg" alt="Pathology Agent logo" />
+      <div class="brand-copy">
+        <div class="brand-name">Pathology Agent</div>
+        <div class="brand-tagline">For Clinical WSI</div>
+      </div>
+    </div>
+    <div class="topbar-actions">
+      <button id="theme-toggle" type="button" class="theme-toggle" aria-label="Switch color theme" aria-pressed="false">
+        <span class="theme-toggle-icon" aria-hidden="true"></span>
+        <span id="theme-toggle-label">Light</span>
+      </button>
     </div>
   </header>
 
@@ -86,7 +107,9 @@
                   <option value="GPT-OSS-120B" selected>GPT-OSS-120B</option>
                   <option value="gpt-oss-20b">gpt-oss-20b</option>
                   <option value="GLM-4.6V-FP8">GLM-4.6V-FP8</option>
+                  <option value="Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled">Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled</option>
                   <option value="qwen3.5-35b-a3b">qwen3.5-35b-a3b</option>
+                  <option value="qwen3.6-35b-a3b">qwen3.6-35b-a3b</option>
                   <option value="qwen3-vl-32b-thinking-fp8">qwen3-vl-32b-thinking-fp8</option>
                   <option value="Qwen3.5-397B-A17B-FP8">Qwen3.5-397B-A17B-FP8</option>
                   <option value="gemma-4-31B-it">gemma-4-31B-it</option>
@@ -183,18 +206,18 @@
                   <div class="field compact-field">
                     <label>ROI size (px)</label>
                     <select id="roi-output-size-select" class="picker-list roi-size-picker" aria-label="ROI output size selector">
-                      <option value="640">640</option>
-                      <option value="768">768</option>
                       <option value="1024" selected>1024</option>
                       <option value="1536">1536</option>
                       <option value="2048">2048</option>
+                      <option value="3072">3K (3072)</option>
+                      <option value="4096">4K (4096)</option>
                     </select>
                   </div>
                 </div>
 
                 <div class="field-row field-row-settings-2">
                   <div class="field compact-field">
-                    <label>MPP (um/px)</label>
+                    <label>MPP <span class="label-unit">(&micro;m/px)</span></label>
                     <input
                       id="default-mpp-input"
                       class="picker-list mpp-input"
@@ -209,7 +232,7 @@
                   </div>
 
                   <div class="field compact-field">
-                    <label>Local field (µm)</label>
+                    <label>Local field <span class="label-unit">(&micro;m)</span></label>
                     <input
                       id="candidate-nav-field-um-input"
                       class="picker-list candidate-nav-field-input"
@@ -255,7 +278,12 @@
             <div class="viewer-col viewer-main-left">
               <div class="overview-head">
                 <h3>Overview</h3>
-                <span id="btn-dark-toggle" class="dark-toggle-link" role="button" tabindex="0" aria-label="Toggle dark regions" aria-pressed="false">Show dark regions</span>
+                <button id="btn-dark-toggle" type="button" class="dark-toggle-btn icon-btn" aria-label="Show dark regions" aria-pressed="false" title="Toggle dark regions">
+                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                    <circle cx="8" cy="8" r="5.5" stroke="currentColor" stroke-width="1.5"/>
+                    <path d="M8 2.5A5.5 5.5 0 0 0 8 13.5V2.5Z" fill="currentColor"/>
+                  </svg>
+                </button>
               </div>
               <div class="muted small">Darker orange dashed box = live search. Finished ROIs stay on overview with different colors.</div>
               <div class="img-stack">
@@ -333,6 +361,11 @@
     </section>
   </main>
 
+  <footer class="site-footer">
+    <span>&copy; 2026 Kather Lab &middot; EKFZ for Digital Health, TU Dresden</span>
+    <span>Clinical WSI AI workspace</span>
+  </footer>
+
   <div id="explorer-modal" class="modal-shell" hidden>
     <div id="explorer-backdrop" class="modal-backdrop" aria-hidden="true"></div>
     <section class="modal-card explorer-modal-card" role="dialog" aria-modal="true" aria-labelledby="explorer-title">
@@ -372,6 +405,6 @@
     </section>
   </div>
 
-  <script src="/static/app.js?v=92"></script>
+  <script src="/static/app.js?v=97"></script>
 </body>
 </html>
