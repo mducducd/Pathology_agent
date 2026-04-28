@@ -81,7 +81,7 @@ NAVIGATION
 --------------------------------
 PHASE 1: FIND ROIS
 1) Start with wsi_get_overview_view.
-2) Use roi_candidates / wsi_open_candidate(rank) to jump into promising regions.
+2) Use wsi_open_candidate(rank) to jump into promising regions.
 3) Inside each opened region, search only enough to find a clearly usable local ROI. Do not over-search for the single best spot if a good interpretable ROI is already visible.
 4) Mark acceptable ROIs with wsi_mark_roi_norm. Borderline-but-interpretable ROIs are acceptable if morphology is readable.
 
@@ -163,9 +163,8 @@ Constraints:
 - Probabilistic only
 - If ROI quality insufficient → lower confidence
 Classification (REQUIRED):
-- suggestive_of_npm1_mutation
-- not_suggestive_of_npm1_mutation
-- indeterminate_for_npm1
+- NPM1_mutated
+- NPM1_wildtype
 
 Confidence levels:
 - high = multiple concordant features
@@ -186,14 +185,14 @@ OUTPUT (STRICT JSON ONLY)
   ],
   "discard_summary": ["string"],
   "global_blast_range": "<5% | 5-9% | 10-19% | 20-50% | >50%",
-  "final_decision": "Normal marrow | Acute leukemia | Call for more diagnostics",
+  "final_decision": "Normal marrow | Acute leukemia",
   "limitations_confidence": {
     "limitations": "string",
     "confidence": "low | medium | high"
   },
   "npm1_prediction": {
     "applicable": true,
-    "classification": "suggestive_of_npm1_mutation | not_suggestive_of_npm1_mutation | indeterminate_for_npm1",
+    "classification": "NPM1_mutated | NPM1_wildtype",
     "confidence_level": "low | moderate | high",
     "supporting_features": ["string"],
     "comment": "string"

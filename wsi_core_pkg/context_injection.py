@@ -460,6 +460,29 @@ def _inject_wsi_images(
         )
         insert_pos += 1
 
+        # Inject all kept ROI images only on the turn the target is first reached
+        # (i.e., when the last tool call was wsi_mark_roi_norm and we just hit the target).
+        if tool_name == "wsi_mark_roi_norm" and kept_roi_count >= target_roi_count and state._roi_marks:
+            all_roi_parts: List[Dict[str, Any]] = [
+                {"type": "text", "text": (
+                    "Target ROI count reached. Review ALL kept ROIs below and write the final JSON output. "
+                    "Assign a distinct blast_range per ROI based on each image."
+                )}
+            ]
+            for roi in state._roi_marks:
+                r_id = roi.get("roi_id", "?")
+                r_label = roi.get("label", "")
+                all_roi_parts.append({"type": "text", "text": f"ROI #{r_id}: {r_label}"})
+                img_part = _make_image_part(roi.get("debug_path", ""), budget)
+                if img_part:
+                    all_roi_parts.append(img_part)
+            if len(all_roi_parts) > 1:
+                new_messages.insert(
+                    insert_pos,
+                    _tag_context_message({"role": "user", "content": all_roi_parts}, "aml_all_rois_review"),
+                )
+                insert_pos += 1
+
     latest_roi_debug_path = ""
     if state._roi_marks:
         latest_roi_debug_path = str(state._roi_marks[-1].get("debug_path") or "")

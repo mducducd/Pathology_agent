@@ -1756,6 +1756,30 @@ def _invalid_candidate_rank_response(rank: int) -> Dict[str, Any]:
     }
 
 
+def _dark_blue_flood_fraction(image: Image.Image) -> float:
+    """Return fraction of pixels that are saturated dark-blue flood (no cell outlines)."""
+    rgb = np.asarray(image.convert("RGB"), dtype=np.float32) / 255.0
+    gray = 0.299 * rgb[:, :, 0] + 0.587 * rgb[:, :, 1] + 0.114 * rgb[:, :, 2]
+    ch_max = rgb.max(axis=2)
+    ch_min = rgb.min(axis=2)
+    chroma = ch_max - ch_min
+    padded = np.pad(gray, 1, mode="edge")
+    lap = (
+        padded[1:-1, :-2] + padded[1:-1, 2:] +
+        padded[:-2, 1:-1] + padded[2:, 1:-1] -
+        4.0 * padded[1:-1, 1:-1]
+    )
+    edge_mag = np.abs(lap)
+    mask = (
+        (gray < 0.22) &
+        (chroma > 0.18) &
+        (rgb[:, :, 2] > rgb[:, :, 0] + 0.15) &
+        (rgb[:, :, 2] > rgb[:, :, 1] + 0.05) &
+        (edge_mag < 0.05)
+    )
+    return float(np.mean(mask))
+
+
 def _mark_roi_from_candidate(
     *,
     chosen: Dict[str, Any],
@@ -1853,6 +1877,23 @@ def _mark_roi_from_candidate(
             "This is one of the few cases where immediate discard is appropriate. "
             "Use wsi_discard_last_roi and select an ROI centered on diagnostic tissue."
         )
+
+    if _agent_is_aml():
+        roi_img_path = info.get("debug_path", "")
+        try:
+            flood_frac = _dark_blue_flood_fraction(Image.open(roi_img_path)) if roi_img_path else 0.0
+        except Exception:
+            flood_frac = 0.0
+        if flood_frac > 0.35:
+            return {
+                "ok": False,
+                "reason": "dark_blue_flood_rejected",
+                "flood_fraction": round(flood_frac, 2),
+                "message": (
+                    f"ROI auto-rejected: {round(flood_frac * 100)}% is saturated dark-blue flood "
+                    f"(stain pool, no cell outlines). Move the box away from the flood region and try again."
+                ),
+            }
 
     level = info["view_level"]
     ds = float(slide.level_downsamples[level])
