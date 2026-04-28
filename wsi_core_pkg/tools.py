@@ -25,7 +25,6 @@ from .config import (
     TILE_PX,
     TILE_SIZE_UM,
 )
-from .dark_regions import detect_dark_regions
 from .embeddings import embedding_extractor_display_name, get_embedding_extractor
 from .embeddings.roi_ranker import (
     build_unsupervised_roi_index,
@@ -126,11 +125,6 @@ if not ROI_FEATURE_CACHE_DIR:
 os.environ["CACHE_ROOT_DIR"] = CACHE_ROOT_DIR
 os.environ["AML_REFERENCE_CACHE_DIR"] = os.path.join(CACHE_ROOT_DIR, "reference_hnsw")
 
-DARK_REGION_THRESHOLD_PCT = int(os.getenv("DARK_REGION_THRESHOLD_PCT", "85"))
-DARK_REGION_MIN_AREA = int(os.getenv("DARK_REGION_MIN_AREA", "800"))
-DARK_REGION_MAX_REGIONS = int(os.getenv("DARK_REGION_MAX_REGIONS", "30"))
-DARK_REGION_MAX_DIM = int(os.getenv("DARK_REGION_MAX_DIM", "1024"))
-DARK_REGION_PIPELINE_VERSION = 3
 ROI_INDEX_PIPELINE_VERSION = 3
 DEFAULT_MPP_FALLBACK_UM = float(tuning_value("tools.slide", "DEFAULT_MPP_UM"))
 DEFAULT_MAX_ACCEPTED_ROIS = int(tuning_value("tools.navigation", "MAX_ACCEPTED_ROIS"))
@@ -456,10 +450,6 @@ def _use_quality_prefilter(method: str | None = None) -> bool:
     return (method or _selected_tile_prefilter_method()) in {"quality", "hybrid"}
 
 
-def _use_dark_region_gating(method: str | None = None, *, aml_mode: bool = False) -> bool:
-    return False
-
-
 def _tile_prefilter_label(method: str | None = None) -> str:
     value = method or _selected_tile_prefilter_method()
     return {
@@ -597,46 +587,6 @@ def _postprocess_roi_candidates_for_view(
     return processed, source, meta
 
 
-def _ensure_dark_region_boxes_level0() -> List[Dict[str, Any]]:
-    cached_boxes = getattr(state, "_dark_region_boxes_level0", None)
-    cached_signature = getattr(state, "_dark_region_cache_signature", None)
-    signature = (
-        state.SLIDE_PATH,
-        DARK_REGION_PIPELINE_VERSION,
-        DARK_REGION_MAX_DIM,
-        DARK_REGION_THRESHOLD_PCT,
-        DARK_REGION_MIN_AREA,
-        DARK_REGION_MAX_REGIONS,
-    )
-    if isinstance(cached_boxes, list) and cached_signature == signature:
-        return cached_boxes
-    if not state.SLIDE_PATH or not os.path.exists(state.SLIDE_PATH) or not state.RUN_ID:
-        state._dark_region_boxes_level0 = []
-        state._dark_region_slide_path = state.SLIDE_PATH
-        state._dark_region_cache_signature = signature
-        return []
-
-    try:
-        result = detect_dark_regions(
-            slide_path=state.SLIDE_PATH,
-            run_id=state.RUN_ID,
-            max_dim=DARK_REGION_MAX_DIM,
-            threshold_pct=DARK_REGION_THRESHOLD_PCT,
-            min_area=DARK_REGION_MIN_AREA,
-            max_regions=DARK_REGION_MAX_REGIONS,
-        )
-        boxes = result.get("boxes_level0")
-        if not isinstance(boxes, list):
-            boxes = []
-    except Exception:
-        boxes = []
-
-    state._dark_region_boxes_level0 = boxes
-    state._dark_region_slide_path = state.SLIDE_PATH
-    state._dark_region_cache_signature = signature
-    return boxes
-
-
 def _set_roi_candidate_prep(
     *,
     phase: str,
@@ -716,7 +666,6 @@ def _ensure_unsupervised_roi_index():
     extractor_label = _selected_extractor_label()
     extractor_name = str(getattr(state, "EXTRACTOR_NAME", "uni2") or "uni2")
     tile_prefilter_method = _selected_tile_prefilter_method()
-    use_dark_region_gating = _use_dark_region_gating(tile_prefilter_method, aml_mode=aml_mode)
     use_coarse_prefilter = _use_coarse_prefilter(tile_prefilter_method)
     use_quality_prefilter = _use_quality_prefilter(tile_prefilter_method)
 
@@ -742,13 +691,6 @@ def _ensure_unsupervised_roi_index():
         }
         return cached_index
 
-    # Only detect dark regions if we need to build the index
-    dark_region_boxes = _ensure_dark_region_boxes_level0() if use_dark_region_gating else []
-    dark_region_boxes_hash = (
-        hashlib.sha256(json.dumps(dark_region_boxes, sort_keys=True).encode()).hexdigest()
-        if dark_region_boxes
-        else None
-    )
     if (
         cached is not None
         and meta.get("slide_path") == state.SLIDE_PATH
@@ -756,8 +698,6 @@ def _ensure_unsupervised_roi_index():
         and meta.get("extractor_name") == extractor_name
         and meta.get("tile_prefilter_method") == tile_prefilter_method
         and meta.get("agent_type") == getattr(state, "AGENT_TYPE", None)
-        and bool(meta.get("use_dark_region_gating")) == bool(use_dark_region_gating)
-        and meta.get("dark_region_boxes_hash") == dark_region_boxes_hash
     ):
         _set_roi_candidate_prep(
             phase="ready",
@@ -766,16 +706,6 @@ def _ensure_unsupervised_roi_index():
             extra={"source": "cache", "candidate_source": candidate_source, "slide_path": state.SLIDE_PATH},
         )
         return cached
-    if use_dark_region_gating and dark_region_boxes:
-        _log_step(
-            "wsi_dark_region_gating",
-            "Dark-region guided coarse-to-fine filtering: coarse dark boxes seed supertile selection, then hybrid tile scoring refines within those regions.",
-            {
-                "dark_region_count": len(dark_region_boxes),
-                "dark_region_boxes_level0": dark_region_boxes[:10],  # First 10 for brevity
-            },
-        )
-
     if aml_mode:
         if tile_prefilter_method == "hybrid":
             pipeline_desc = (
@@ -838,12 +768,7 @@ def _ensure_unsupervised_roi_index():
                 total = evt.get("coarse_total_supertile_count")
                 kept = evt.get("coarse_selected_supertile_count")
                 used = bool(evt.get("coarse_prefilter_used"))
-                if use_dark_region_gating and total is not None and kept is not None:
-                    if kept < total:
-                        msg = f"Dark-guided coarse pass kept {kept}/{total} slide regions for fine embedding..."
-                    else:
-                        msg = f"Dark-guided coarse pass kept all {total} slide regions..."
-                elif not use_coarse_prefilter:
+                if not use_coarse_prefilter:
                     if total is not None:
                         msg = f"Scanning all {total} foreground slide regions..."
                     else:
@@ -927,7 +852,7 @@ def _ensure_unsupervised_roi_index():
             quality_min_keep_tile_count=ROI_QUALITY_PREFILTER_MIN_KEEP_TILES if use_quality_prefilter else 0,
             quality_trigger_tile_count=ROI_QUALITY_PREFILTER_TRIGGER_TILES if use_quality_prefilter else None,
             quality_random_reserve_ratio=ROI_QUALITY_PREFILTER_RANDOM_RESERVE_RATIO if use_quality_prefilter else None,
-            dark_region_boxes_level0=dark_region_boxes if use_dark_region_gating else None,
+            dark_region_boxes_level0=None,
             k_neighbors=20,
             use_reference_labels=aml_mode,
             reference_tiles_root=EXAMPLE_TILES_ROOT if aml_mode else None,
@@ -946,8 +871,6 @@ def _ensure_unsupervised_roi_index():
             "tile_size_um": index.tile_size_um,
             "tile_prefilter_method": tile_prefilter_method,
             "agent_type": getattr(state, "AGENT_TYPE", None),
-            "use_dark_region_gating": bool(use_dark_region_gating),
-            "dark_region_boxes_hash": dark_region_boxes_hash,
             "feature_cache_dir": str(feature_cache_dir) if feature_cache_dir is not None else None,
             "reference_cache_dir": str(reference_cache_dir),
             "reference_mode": getattr(index, "reference_mode", "none"),
@@ -1299,10 +1222,6 @@ def _refresh_roi_candidates_for_current_view(top_k: int = ROI_CANDIDATE_TOP_K, s
     candidates: List[Dict[str, Any]] = []
     source: Optional[str] = None
     aml_mode = str(getattr(state, "AGENT_TYPE", "") or "").lower() == "aml"
-    tile_prefilter_method = _selected_tile_prefilter_method()
-    use_dark_region_gating = _use_dark_region_gating(tile_prefilter_method, aml_mode=aml_mode)
-    dark_region_boxes = _ensure_dark_region_boxes_level0() if use_dark_region_gating else []
-
     index = _ensure_unsupervised_roi_index()
     if index is not None and getattr(index, "num_tiles", 0) > 0:
         view_bbox = (
@@ -1316,7 +1235,7 @@ def _refresh_roi_candidates_for_current_view(top_k: int = ROI_CANDIDATE_TOP_K, s
             view_bbox_level0=view_bbox,
             top_k=top_k,
             min_center_separation_px=0,
-            focus_boxes_level0=dark_region_boxes if use_dark_region_gating else None,
+            focus_boxes_level0=None,
         )
         source = _selected_candidate_source(aml_mode)
 
@@ -1598,45 +1517,11 @@ def _attach_roi_candidates(info: Dict[str, Any], top_k: int = ROI_CANDIDATE_TOP_
     info["roi_candidate_overlay_path"] = state._last_roi_candidate_overlay_path
     extractor_label = _selected_extractor_label()
     tile_prefilter_method = _selected_tile_prefilter_method()
-    use_dark_region_gating = _use_dark_region_gating(tile_prefilter_method, aml_mode=aml_mode)
-
-    # AML MODE: Check if current view is outside all dark regions
-    outside_dark_region_warning = False
-    dark_region_boxes = _ensure_dark_region_boxes_level0() if use_dark_region_gating else []
-    if use_dark_region_gating and state._current_view and dark_region_boxes:
-        cv_x0 = state._current_view["x0"]
-        cv_y0 = state._current_view["y0"]
-        cv_w = state._current_view["w"]
-        cv_h = state._current_view["h"]
-        cv_center_x = cv_x0 + cv_w // 2
-        cv_center_y = cv_y0 + cv_h // 2
-        # Check if view center falls within any dark region box
-        in_dark_region = False
-        for box in dark_region_boxes:
-            bx0, by0 = int(box["x0"]), int(box["y0"])
-            bw, bh = int(box["w"]), int(box["h"])
-            bx1, by1 = bx0 + bw, by0 + bh
-            if bx0 <= cv_center_x < bx1 and by0 <= cv_center_y < by1:
-                in_dark_region = True
-                break
-        if not in_dark_region:
-            outside_dark_region_warning = True
 
     if aml_mode:
-        if use_dark_region_gating:
-            info["roi_candidate_pipeline"] = (
-                f"Detect deep blue-purple basophilic regions -> dark-guided supertile coarse filter -> tile-level refinement -> {extractor_label} tile embeddings -> ROI-quality exemplar retrieval + nuclei/dark-region priors -> top-K candidate blast-suspected ROIs per current view"
-            )
-        else:
-            info["roi_candidate_pipeline"] = (
-                f"No tile prefilter -> {extractor_label} tile embeddings -> ROI-quality exemplar retrieval + nuclei/dark-region heuristics -> top-K candidate blast-suspected ROIs per current view"
-            )
-        if outside_dark_region_warning:
-            info["outside_dark_region_warning"] = (
-                "ALERT: Current view is OUTSIDE the coarse dark-region prior boxes. "
-                "That usually lowers candidate quality, but the backend can still rescue strong deep purple tiles just outside the coarse boxes. "
-                "Prefer navigating toward dark blue-purple cellular tissue, not gray-black debris, if the current candidates look weak."
-            )
+        info["roi_candidate_pipeline"] = (
+            f"No tile prefilter -> {extractor_label} tile embeddings -> ROI-quality exemplar retrieval + nuclei/dark-region heuristics -> top-K candidate blast-suspected ROIs per current view"
+        )
     else:
         info["roi_candidate_pipeline"] = f"{extractor_label} tile embeddings -> kNN novelty ranking -> top-K per current view"
     if state._roi_ranker_meta:
@@ -1645,7 +1530,6 @@ def _attach_roi_candidates(info: Dict[str, Any], top_k: int = ROI_CANDIDATE_TOP_
         if aml_mode and isinstance(ref_stats, dict):
             info["aml_reference_stats"] = dict(ref_stats)
     expected_source = _selected_candidate_source(aml_mode)
-    use_dark_region_gating = _use_dark_region_gating(_selected_tile_prefilter_method(), aml_mode=aml_mode)
     if state._last_roi_candidate_source != expected_source:
         info["roi_candidate_warning"] = (
             "Primary candidate source unavailable for this view."
@@ -1687,10 +1571,6 @@ def _attach_roi_candidates(info: Dict[str, Any], top_k: int = ROI_CANDIDATE_TOP_
     if candidates:
         if aml_mode:
             guidance_intro = (
-                "For AML, the pipeline uses coarse-to-fine dark-region guidance: coarse thumbnail dark boxes bias supertile selection, then tile-level scoring refines within those regions and can rescue strong deep purple tiles near coarse-box boundaries. "
-                "Treat roi_candidates as candidate blast-suspected ROIs selected from tissue, nucleated-cell, focus, RBC, and artifact heuristics, with detected dark regions used as a prior rather than a perfect boundary. Prioritize deep dark blue-purple cellular fields; dark red-pink is only a rare fallback when clearly cellular, and gray-black low-chroma junk should be rejected. "
-                if use_dark_region_gating else
-                "For AML with tile filter='none', roi_candidates are ranked from the full embedded tile set without dark-region gating. "
                 "Treat roi_candidates as candidate blast-suspected ROIs selected from tissue, nucleated-cell, focus, RBC, and artifact heuristics across the current view. Prioritize deep dark blue-purple cellular fields; dark red-pink is only a rare fallback when clearly cellular, and gray-black low-chroma junk should be rejected. "
             )
             info["roi_candidate_guidance"] = (
@@ -2049,7 +1929,7 @@ def _open_candidate_by_rank(
     if isinstance(state._current_view, dict):
         state._current_view["candidate_navigation_mode"] = "free_local_search"
     info = _attach_roi_candidates(info)
-    info = _strip_candidate_payload_for_free_local_search(info)
+    # info = _strip_candidate_payload_for_free_local_search(info)
     state.CURRENT_AGENT_ACTION = f"Opened candidate #{rank}: {nav_reason}" if nav_reason else f"Opened candidate #{rank}"
     _log_step("wsi_open_candidate", nav_reason, info)
     return info
@@ -2183,7 +2063,7 @@ def wsi_zoom_current_norm(
             )
 
         info = _attach_roi_candidates(info, skip_refresh=True)
-        info = _strip_candidate_payload_for_free_local_search(info)
+        # info = _strip_candidate_payload_for_free_local_search(info)
         state.CURRENT_AGENT_ACTION = f"Zooming in: {nav_reason}" if nav_reason else "Zooming in"
         _log_step("wsi_zoom_current_norm", nav_reason, info)
         return info
@@ -2268,7 +2148,7 @@ def wsi_zoom_full_norm(
             )
 
         info = _attach_roi_candidates(info, skip_refresh=True)
-        info = _strip_candidate_payload_for_free_local_search(info)
+        # info = _strip_candidate_payload_for_free_local_search(info)
         state.CURRENT_AGENT_ACTION = f"Zooming overview: {nav_reason}" if nav_reason else "Zooming overview"
         _log_step("wsi_zoom_full_norm", nav_reason, info)
         return info
@@ -2331,7 +2211,7 @@ def wsi_pan_current(
             tag="pan",
         )
         info = _attach_roi_candidates(info, skip_refresh=True)
-        info = _strip_candidate_payload_for_free_local_search(info)
+        # info = _strip_candidate_payload_for_free_local_search(info)
         state.CURRENT_AGENT_ACTION = f"Panning: {nav_reason}" if nav_reason else "Panning"
         _log_step("wsi_pan_current", nav_reason, info)
         return info
@@ -2373,7 +2253,7 @@ def wsi_get_view_info(nav_reason: str = "Get current view info") -> str:
             "tissue_fraction": state._current_view.get("tissue_fraction"),
         }
         info = _attach_roi_candidates(info)
-        info = _strip_candidate_payload_for_free_local_search(info)
+        # info = _strip_candidate_payload_for_free_local_search(info)
         _log_step(
             "wsi_get_view_info",
             nav_reason,

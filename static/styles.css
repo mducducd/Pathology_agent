@@ -1188,6 +1188,11 @@ textarea:focus{
   padding-top: 10px;
   padding-bottom: 18px;
   background: var(--bg);
+  margin-left: -18px;
+  margin-right: -18px;
+  padding-left: 18px;
+  padding-right: 18px;
+  box-shadow: 0 -6px 10px 4px var(--bg);
 }
 .run-actions-main{
   display:flex;

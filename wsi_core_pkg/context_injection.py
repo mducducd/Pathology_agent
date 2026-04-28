@@ -411,15 +411,29 @@ def _inject_wsi_images(
     if current_view_part:
         fw = state._current_view.get("field_width_um")
         extra = _format_field_width_caption(fw)
-        text = (
-            f"CURRENT VIEW for navigation{extra}. "
-            "All coordinates for NEXT tool call must be chosen relative to THIS image."
-            "PRIORITY: Look for regions with high cellularity (dense packed nucleated cells) and clear blast visibility. "
-            "Once you find high-cellularity tissue with readable morphology, mark it with wsi_mark_roi_norm. "
-            "Do NOT select boxes centered on blank/white background; always place boxes tightly around tissue and high-cellularity areas. "
-            "Do not search indefinitely for marginal improvements. Mark if tissue is readable and diagnostic, even if not the single densest field. "
-            "Avoid panning to empty areas."
+        _aml_at_target = (
+            _agent_type() == "aml" and
+            len(state._roi_marks) >= min(
+                max(1, int(getattr(state, "MAX_ACCEPTED_ROIS", 10) or 10)),
+                max(1, int(getattr(state, "TARGET_ACCEPTED_ROIS", 5) or 5)),
+            )
         )
+        if _aml_at_target:
+            text = (
+                f"CURRENT VIEW{extra}. "
+                "ROI target is reached — do NOT call any more navigation or marking tools. "
+                "Write the final JSON output now based on the kept ROIs shown above."
+            )
+        else:
+            text = (
+                f"CURRENT VIEW for navigation{extra}. "
+                "All coordinates for NEXT tool call must be chosen relative to THIS image. "
+                "PRIORITY: Look for regions with high cellularity (dense packed nucleated cells) and clear blast visibility. "
+                "Once you find high-cellularity tissue with readable morphology, mark it with wsi_mark_roi_norm. "
+                "Do NOT select boxes centered on blank/white background; always place boxes tightly around tissue and high-cellularity areas. "
+                "Do not search indefinitely for marginal improvements. Mark if tissue is readable and diagnostic, even if not the single densest field. "
+                "Avoid panning to empty areas."
+            )
 
         current_view_msg = {
             "role": "user",
