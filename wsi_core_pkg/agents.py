@@ -1,10 +1,9 @@
 import json
-import os
 from typing import Any, Optional
 
 from agents import Agent, ModelSettings, OpenAIChatCompletionsModel
 
-from .config import MODEL_NAME, client_async
+from .config import ENABLE_THINKING, MODEL_NAME, WSI_AGENT_TEMPERATURE, client_async
 from .prompts import DEFAULT_AML_PROMPT, DEFAULT_TILE_PROMPT
 from .tools import (
     wsi_discard_last_roi,
@@ -45,8 +44,10 @@ class _GLMChatCompletionsModel(OpenAIChatCompletionsModel):
         return result
 
 
-WSI_AGENT_TEMPERATURE = float(os.getenv("WSI_AGENT_TEMPERATURE", "0.0"))
-_MODEL_SETTINGS = ModelSettings(temperature=WSI_AGENT_TEMPERATURE)
+_MODEL_SETTINGS = ModelSettings(
+    temperature=WSI_AGENT_TEMPERATURE,
+    extra_body={"chat_template_kwargs": {"enable_thinking": True}} if ENABLE_THINKING else None,
+)
 
 WSIPathologyAgent = Agent(
     name="WSIPathologyAgent",

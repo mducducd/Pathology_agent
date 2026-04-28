@@ -36,6 +36,25 @@ enable_verbose_stdout_logging()
 MAX_IMG_DIM = int(os.getenv("MAX_IMG_DIM", "1024"))
 MAX_NATIVE_VIEW_DIM = 4096
 MAX_TURNS = int(os.getenv("MAX_TURNS", "140"))
+def _agent_tuning_float(key: str, default: float) -> float:
+    try:
+        from .tuning_config import tuning_value
+        return float(tuning_value("agent", key))
+    except Exception:
+        return default
+
+def _agent_tuning_bool(key: str, default: bool) -> bool:
+    try:
+        from .tuning_config import tuning_value
+        v = tuning_value("agent", key)
+        if isinstance(v, bool):
+            return v
+        return str(v).lower() not in ("0", "false", "no", "")
+    except Exception:
+        return default
+
+WSI_AGENT_TEMPERATURE = _agent_tuning_float("WSI_AGENT_TEMPERATURE", 0.9)
+ENABLE_THINKING = _agent_tuning_bool("ENABLE_THINKING", False)
 
 ROI_TARGET_SIDE_PX = 1500
 ROI_TARGET_WIDTH_UM = float(os.getenv("ROI_TARGET_WIDTH_UM", "964.0"))

@@ -2,6 +2,12 @@
 # Edit these values to tune behavior across runs.
 # Any environment variable with the same key still overrides the file value.
 
+agent:
+  # Sampling temperature for all WSI agents.
+  WSI_AGENT_TEMPERATURE: 0.0
+  # Set to true to enable vLLM chain-of-thought thinking mode.
+  ENABLE_THINKING: false
+
 shared:
   aml_quality_support:
     # Minimum good-reference similarity needed to treat a tile as quality-supported.
@@ -107,11 +113,11 @@ tools:
 
   navigation:
     # Hard cap on kept ROIs; once reached, navigation should stop immediately.
-    MAX_ACCEPTED_ROIS: 10
+    MAX_ACCEPTED_ROIS: 5
     # Soft AML coverage goal; reaching this count is preferred but not mandatory.
     TARGET_ACCEPTED_ROIS: 5
     # Default field width used for the first candidate-inspection jump before ROI marking.
-    CANDIDATE_NAV_FIELD_UM: 1200.0
+    CANDIDATE_NAV_FIELD_UM: 600.0
     # Number of recent view steps checked for repeated movement in the same slide region.
     SAME_REGION_LOOKBACK_STEPS: 0
     # Radius multiplier that defines "same region" relative to current view width.
@@ -262,9 +268,9 @@ roi_ranker:
 context_injection:
   images:
     # Maximum image dimension (px) when encoding context images as JPEG data URLs.
-    CONTEXT_IMAGE_MAX_DIM: 512
+    CONTEXT_IMAGE_MAX_DIM: 1024
     # JPEG quality used when encoding context images.
-    CONTEXT_IMAGE_JPEG_QUALITY: 55
+    CONTEXT_IMAGE_JPEG_QUALITY: 100
     # Maximum number of inline images included per LLM request.
     CONTEXT_MAX_INLINE_IMAGES: 2
     # Maximum total base64 chars for all inline images per LLM request.

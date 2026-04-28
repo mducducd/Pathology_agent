@@ -1406,18 +1406,17 @@ def _attach_roi_candidates(info: Dict[str, Any], top_k: int = ROI_CANDIDATE_TOP_
         if kept_roi_count >= max_accepted_rois:
             info["aml_stop_hint"] = (
                 f"Accepted ROI cap reached ({kept_roi_count}/{max_accepted_rois}). "
-                "Stop searching immediately and give the final AML answer from the kept ROIs."
+                "Finalize now — do not call any more tools."
             )
         elif target_accepted_rois == max_accepted_rois and kept_roi_count >= target_accepted_rois:
             info["aml_stop_hint"] = (
-                f"Configured ROI target reached ({kept_roi_count}/{target_accepted_rois}), and target equals hard cap. "
-                "Stop calling ROI/navigation tools now and give the final AML answer from the kept ROIs."
+                f"ROI target reached ({kept_roi_count}/{target_accepted_rois}). "
+                "Finalize now — do not call any more tools."
             )
         elif kept_roi_count >= target_accepted_rois:
             info["aml_stop_hint"] = (
                 f"Soft ROI target reached ({kept_roi_count}/{target_accepted_rois}; hard cap {max_accepted_rois}). "
-                "Final AML decision is now allowed if the evidence is stable. "
-                "Only inspect additional distinct ROIs if they could materially change the decision."
+                "Finalize unless an additional ROI would materially change the decision — do not call wsi_get_view_info to confirm."
             )
         elif kept_roi_count == max(1, target_accepted_rois - 1):
             info["aml_stop_hint"] = (
@@ -1929,7 +1928,7 @@ def _open_candidate_by_rank(
     if isinstance(state._current_view, dict):
         state._current_view["candidate_navigation_mode"] = "free_local_search"
     info = _attach_roi_candidates(info)
-    # info = _strip_candidate_payload_for_free_local_search(info)
+    info = _strip_candidate_payload_for_free_local_search(info)
     state.CURRENT_AGENT_ACTION = f"Opened candidate #{rank}: {nav_reason}" if nav_reason else f"Opened candidate #{rank}"
     _log_step("wsi_open_candidate", nav_reason, info)
     return info
@@ -2063,7 +2062,7 @@ def wsi_zoom_current_norm(
             )
 
         info = _attach_roi_candidates(info, skip_refresh=True)
-        # info = _strip_candidate_payload_for_free_local_search(info)
+        info = _strip_candidate_payload_for_free_local_search(info)
         state.CURRENT_AGENT_ACTION = f"Zooming in: {nav_reason}" if nav_reason else "Zooming in"
         _log_step("wsi_zoom_current_norm", nav_reason, info)
         return info
@@ -2148,7 +2147,7 @@ def wsi_zoom_full_norm(
             )
 
         info = _attach_roi_candidates(info, skip_refresh=True)
-        # info = _strip_candidate_payload_for_free_local_search(info)
+        info = _strip_candidate_payload_for_free_local_search(info)
         state.CURRENT_AGENT_ACTION = f"Zooming overview: {nav_reason}" if nav_reason else "Zooming overview"
         _log_step("wsi_zoom_full_norm", nav_reason, info)
         return info
@@ -2211,7 +2210,7 @@ def wsi_pan_current(
             tag="pan",
         )
         info = _attach_roi_candidates(info, skip_refresh=True)
-        # info = _strip_candidate_payload_for_free_local_search(info)
+        info = _strip_candidate_payload_for_free_local_search(info)
         state.CURRENT_AGENT_ACTION = f"Panning: {nav_reason}" if nav_reason else "Panning"
         _log_step("wsi_pan_current", nav_reason, info)
         return info
@@ -2253,7 +2252,7 @@ def wsi_get_view_info(nav_reason: str = "Get current view info") -> str:
             "tissue_fraction": state._current_view.get("tissue_fraction"),
         }
         info = _attach_roi_candidates(info)
-        # info = _strip_candidate_payload_for_free_local_search(info)
+        info = _strip_candidate_payload_for_free_local_search(info)
         _log_step(
             "wsi_get_view_info",
             nav_reason,
