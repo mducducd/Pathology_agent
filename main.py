@@ -1324,4 +1324,5 @@ if __name__ == "__main__":
         port=1234,
         reload=reload_enabled,
         reload_excludes=["outputs/*", "wsi_debug/*", "wsi_reports/*"],
+        access_log=False,
     )

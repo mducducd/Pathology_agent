@@ -5,10 +5,17 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 RUN_BATCH_SCRIPT="${SCRIPT_DIR}/run_batch_aml.sh"
 
+# Auto-activate uv environment
+if [[ -z "${VIRTUAL_ENV:-}" ]]; then
+    if [[ -f "${REPO_ROOT}/.venv/bin/activate" ]]; then
+        source "${REPO_ROOT}/.venv/bin/activate"
+    fi
+fi
+
 CSV="/mnt/bulk-neptune/nguyenmin/stamp-dev/experiments/Narmin/AML_HEALTHY_SLIDE_TEST.csv"
 SLIDES_ROOT="/mnt/copernicus3/PATHOLOGY/others/private/haemadata/ALL_WSIs"
 OUTPUT_PARENT="/mnt/bulk-neptune/nguyenmin/stamp-dev/experiments/Narmin"
-EXPERIMENT_NAME="exp_240425_aml_suite"
+EXPERIMENT_NAME="exp_290425_aml_suite"
 BASE_OUTPUT_ROOT=""
 CUDA_DEVICE=""
 eval "$(

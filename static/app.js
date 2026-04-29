@@ -2436,7 +2436,7 @@
       _bindRoiImageLoading(li, img);
       setImageSrcWithReveal(img, currentView.image_url, { revealItem: true });
     }
-    roisEl.scrollTop = roisEl.scrollHeight;
+    maybeScrollRoiListToBottom();
   }
 
   // Detect if the LLM's textual final output signals a slide-load failure despite
@@ -3529,6 +3529,8 @@
   }
 
   if (roisEl) {
+    roisEl.addEventListener("scroll", () => { syncRoiListPinnedState(); });
+
     roisEl.addEventListener("click", (e) => {
       const target = e.target;
       if (!(target instanceof Element)) return;

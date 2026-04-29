@@ -2,6 +2,43 @@
 # Edit these values to tune behavior across runs.
 # Any environment variable with the same key still overrides the file value.
 
+agent:
+  # OpenAI-compatible API base URL (local LLM server).
+  OPENAI_API_BASE: "http://pluto/v1"
+  # API key — for local LLMs any non-empty string works.
+  OPENAI_API_KEY: "local"
+  # Default model name used by the agent.
+  MODEL_NAME: "GPT-OSS-120B"
+  # Default slide path used when running standalone (not batch).
+  DEFAULT_SLIDE_PATH: "341476.svs"
+  # Output root directory for all run artifacts.
+  OUTPUTS_ROOT_DIR: "./outputs"
+  # Root directory for example good/bad tiles used in context injection.
+  EXAMPLE_TILES_ROOT: "./Selected_Tiles"
+  # Root directory for example ROI/Non-ROI images used in context injection.
+  EXAMPLE_ROIS_ROOT: "./Example_ROIs"
+  # Sampling temperature for all WSI agents.
+  WSI_AGENT_TEMPERATURE: 0.0
+  # Set to true to enable vLLM chain-of-thought thinking mode.
+  ENABLE_THINKING: false
+  # Maximum number of agent turns before forced termination.
+  MAX_TURNS: 140
+  # Maximum image dimension (px) for WSI view renders sent to the agent.
+  MAX_IMG_DIM: 1024
+  # Maximum image dimension (px) for native-resolution views (never sent to agent).
+  MAX_NATIVE_VIEW_DIM: 4096
+  # Tile size in microns used for tile-agent saving and TILE_SIZE_UM references.
+  TILE_SIZE_UM: 256.0
+  # Tile output size in pixels after resizing (used by tile-save agent).
+  TILE_PX: 224
+  # Maximum number of good tiles the tile agent will save per run.
+  MAX_GOOD_TILES: 200
+  # Maximum number of bad tiles the tile agent will save per run.
+  MAX_BAD_TILES: 50
+  # Maximum number of example tiles or ROIs injected per class per request.
+  EXAMPLE_TILES_MAX_PER_CLASS: 2
+  EXAMPLE_ROIS_MAX_PER_CLASS: 2
+
 shared:
   aml_quality_support:
     # Minimum good-reference similarity needed to treat a tile as quality-supported.
@@ -41,7 +78,7 @@ tools:
     ROI_CANDIDATE_MIN_SEPARATION_FLOOR_PX: 0
     # Normalized-distance tolerance used when checking proximity to already marked ROIs.
     ROI_MARK_CANDIDATE_TOLERANCE_NORM: 170
-    # Fraction of `ROI_TARGET_SIDE_PX` used to suppress candidates too close to kept ROI marks.
+    # Fraction of current view width used to suppress candidates too close to kept ROI marks.
     ROI_MARKED_CENTER_EXCLUSION_RATIO: 0.30
     # Allow a heuristic fallback candidate set when the learned index returns nothing useful.
     ROI_CANDIDATE_ALLOW_FALLBACK: true
@@ -107,11 +144,11 @@ tools:
 
   navigation:
     # Hard cap on kept ROIs; once reached, navigation should stop immediately.
-    MAX_ACCEPTED_ROIS: 10
+    MAX_ACCEPTED_ROIS: 5
     # Soft AML coverage goal; reaching this count is preferred but not mandatory.
     TARGET_ACCEPTED_ROIS: 5
     # Default field width used for the first candidate-inspection jump before ROI marking.
-    CANDIDATE_NAV_FIELD_UM: 1200.0
+    CANDIDATE_NAV_FIELD_UM: 600.0
     # Number of recent view steps checked for repeated movement in the same slide region.
     SAME_REGION_LOOKBACK_STEPS: 0
     # Radius multiplier that defines "same region" relative to current view width.
@@ -199,6 +236,10 @@ roi_ranker:
     # Margin below which tiles are hard-rejected by AML quality heuristics.
     AML_QUALITY_REJECT_MARGIN: 0.02
 
+  dark_region:
+    # Weight of dark-region box prior in AML candidate ranking score.
+    AML_DARK_REGION_BOX_PRIOR_WEIGHT: 0.08
+
   blast_reference:
     # Directory containing blast-cell exemplar images.
     AML_BLAST_CELLS_ROOT: "./Selected_Tiles/blast_cells"
@@ -262,9 +303,9 @@ roi_ranker:
 context_injection:
   images:
     # Maximum image dimension (px) when encoding context images as JPEG data URLs.
-    CONTEXT_IMAGE_MAX_DIM: 512
+    CONTEXT_IMAGE_MAX_DIM: 1024
     # JPEG quality used when encoding context images.
-    CONTEXT_IMAGE_JPEG_QUALITY: 55
+    CONTEXT_IMAGE_JPEG_QUALITY: 100
     # Maximum number of inline images included per LLM request.
     CONTEXT_MAX_INLINE_IMAGES: 2
     # Maximum total base64 chars for all inline images per LLM request.

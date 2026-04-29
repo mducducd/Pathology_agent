@@ -228,7 +228,8 @@ def _prepare_messages_for_request(messages: List[Dict[str, Any]], *, minimal: bo
         include_overview=not minimal,
         include_previous_views=not minimal,
     )
-    if not minimal:
+    include_examples = not minimal and len(getattr(state, "_roi_marks", []) or []) == 0
+    if include_examples:
         msgs = _inject_example_rois(msgs, budget=budget)
         msgs = _inject_example_tiles(msgs, budget=budget)
     return _sanitize_messages_for_api(msgs)
@@ -411,15 +412,29 @@ def _inject_wsi_images(
     if current_view_part:
         fw = state._current_view.get("field_width_um")
         extra = _format_field_width_caption(fw)
-        text = (
-            f"CURRENT VIEW for navigation{extra}. "
-            "All coordinates for NEXT tool call must be chosen relative to THIS image."
-            "PRIORITY: Look for regions with high cellularity (dense packed nucleated cells) and clear blast visibility. "
-            "Once you find high-cellularity tissue with readable morphology, mark it with wsi_mark_roi_norm. "
-            "Do NOT select boxes centered on blank/white background; always place boxes tightly around tissue and high-cellularity areas. "
-            "Do not search indefinitely for marginal improvements. Mark if tissue is readable and diagnostic, even if not the single densest field. "
-            "Avoid panning to empty areas."
+        _aml_at_target = (
+            _agent_type() == "aml" and
+            len(state._roi_marks) >= min(
+                max(1, int(getattr(state, "MAX_ACCEPTED_ROIS", 10) or 10)),
+                max(1, int(getattr(state, "TARGET_ACCEPTED_ROIS", 5) or 5)),
+            )
         )
+        if _aml_at_target:
+            text = (
+                f"CURRENT VIEW{extra}. "
+                "ROI target is reached — do NOT call any more navigation or marking tools. "
+                "Write the final JSON output now based on the kept ROIs shown above."
+            )
+        else:
+            text = (
+                f"CURRENT VIEW for navigation{extra}. "
+                "All coordinates for NEXT tool call must be chosen relative to THIS image. "
+                "PRIORITY: Look for regions with high cellularity (dense packed nucleated cells) and clear blast visibility. "
+                "Once you find high-cellularity tissue with readable morphology, mark it with wsi_mark_roi_norm. "
+                "Do NOT select boxes centered on blank/white background; always place boxes tightly around tissue and high-cellularity areas. "
+                "Do not search indefinitely for marginal improvements. Mark if tissue is readable and diagnostic, even if not the single densest field. "
+                "Avoid panning to empty areas."
+            )
 
         current_view_msg = {
             "role": "user",
@@ -459,6 +474,29 @@ def _inject_wsi_images(
             _tag_context_message({"role": "user", "content": [{"type": "text", "text": "\n".join(aml_stop_lines)}]}, "aml_guidance"),
         )
         insert_pos += 1
+
+        # Inject all kept ROI images only on the turn the target is first reached
+        # (i.e., when the last tool call was wsi_mark_roi_norm and we just hit the target).
+        if tool_name == "wsi_mark_roi_norm" and kept_roi_count >= target_roi_count and state._roi_marks:
+            all_roi_parts: List[Dict[str, Any]] = [
+                {"type": "text", "text": (
+                    "Target ROI count reached. Review ALL kept ROIs below and write the final JSON output. "
+                    "Assign a distinct blast_range per ROI based on each image."
+                )}
+            ]
+            for roi in state._roi_marks:
+                r_id = roi.get("roi_id", "?")
+                r_label = roi.get("label", "")
+                all_roi_parts.append({"type": "text", "text": f"ROI #{r_id}: {r_label}"})
+                img_part = _make_image_part(roi.get("debug_path", ""), budget)
+                if img_part:
+                    all_roi_parts.append(img_part)
+            if len(all_roi_parts) > 1:
+                new_messages.insert(
+                    insert_pos,
+                    _tag_context_message({"role": "user", "content": all_roi_parts}, "aml_all_rois_review"),
+                )
+                insert_pos += 1
 
     latest_roi_debug_path = ""
     if state._roi_marks:

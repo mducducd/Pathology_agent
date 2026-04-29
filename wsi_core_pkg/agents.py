@@ -1,9 +1,9 @@
-import os
-from typing import Optional
+import json
+from typing import Any, Optional
 
-from agents import Agent, ModelSettings
+from agents import Agent, ModelSettings, OpenAIChatCompletionsModel
 
-from .config import MODEL_NAME
+from .config import ENABLE_THINKING, MODEL_NAME, WSI_AGENT_TEMPERATURE, client_async
 from .prompts import DEFAULT_AML_PROMPT, DEFAULT_TILE_PROMPT
 from .tools import (
     wsi_discard_last_roi,
@@ -19,8 +19,35 @@ from .tools import (
     wsi_zoom_full_norm,
 )
 
-WSI_AGENT_TEMPERATURE = float(os.getenv("WSI_AGENT_TEMPERATURE", "0.0"))
-_MODEL_SETTINGS = ModelSettings(temperature=WSI_AGENT_TEMPERATURE)
+class _GLMChatCompletionsModel(OpenAIChatCompletionsModel):
+    """Normalises GLM tool calls where function.name contains a raw JSON payload."""
+
+    async def _fetch_response(self, *args: Any, **kwargs: Any) -> Any:  # type: ignore[override]
+        result = await super()._fetch_response(*args, **kwargs)
+        if hasattr(result, "choices"):
+            for choice in result.choices:
+                for tc in getattr(getattr(choice, "message", None), "tool_calls", None) or []:
+                    fn = getattr(tc, "function", None)
+                    name = getattr(fn, "name", "") or ""
+                    if not name.startswith("{"):
+                        continue
+                    try:
+                        parsed = json.loads(name)
+                    except json.JSONDecodeError:
+                        continue
+                    real_name = parsed.get("name", "")
+                    real_args = parsed.get("arguments", parsed.get("parameters", {}))
+                    if real_name:
+                        fn.name = real_name
+                        if not getattr(fn, "arguments", None):
+                            fn.arguments = real_args if isinstance(real_args, str) else json.dumps(real_args)
+        return result
+
+
+_MODEL_SETTINGS = ModelSettings(
+    temperature=WSI_AGENT_TEMPERATURE,
+    extra_body={"chat_template_kwargs": {"enable_thinking": True}} if ENABLE_THINKING else None,
+)
 
 WSIPathologyAgent = Agent(
     name="WSIPathologyAgent",
@@ -201,9 +228,14 @@ WSIAmlDetectorAgent = Agent(
 
 def _agent_with_model(base_agent: Agent, model_name: Optional[str]) -> Agent:
     selected_model = model_name or MODEL_NAME
+    model = (
+        _GLMChatCompletionsModel(selected_model, client_async)
+        if "glm" in selected_model.lower()
+        else selected_model
+    )
     return Agent(
         name=base_agent.name,
-        model=selected_model,
+        model=model,
         model_settings=base_agent.model_settings,
         instructions=base_agent.instructions,
         tools=list(base_agent.tools),
