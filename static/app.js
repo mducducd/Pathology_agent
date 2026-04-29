@@ -464,6 +464,7 @@
   let explorerSelectedFilePath = "";
   let explorerSelectedFileName = "";
   let explorerBusy = false;
+  let explorerFilterText = "";
   let currentRunId = null;
   let currentModelName = null;
   let pollingTimer = null;
@@ -1555,11 +1556,15 @@
   function renderExplorerList() {
     if (!explorerList) return;
     explorerList.innerHTML = "";
+    const filter = explorerFilterText.toLowerCase();
+    const visible = filter
+      ? explorerEntries.filter((e) => (e.name || "").toLowerCase().includes(filter))
+      : explorerEntries;
     if (explorerEmpty) {
-      explorerEmpty.hidden = explorerEntries.length > 0;
+      explorerEmpty.hidden = visible.length > 0;
     }
 
-    for (const entry of explorerEntries) {
+    for (const entry of visible) {
       const li = document.createElement("li");
       li.className = "explorer-entry";
       if (entry.kind === "file" && entry.path === explorerSelectedFilePath) {
@@ -1723,7 +1728,7 @@
         explorerSelectedFileName = "";
       }
       if (explorerCurrentPath) {
-        explorerCurrentPath.textContent = explorerCurrentPathValue;
+        explorerCurrentPath.value = explorerCurrentPathValue;
       }
       if (explorerRootSelect && data.root_path) {
         explorerRootSelect.value = data.root_path;
@@ -3462,6 +3467,31 @@
     explorerRefreshBtn.addEventListener("click", () => {
       if (explorerCurrentPathValue) {
         loadExplorerPath(explorerCurrentPathValue);
+      }
+    });
+  }
+  if (explorerCurrentPath) {
+    function navigateToTypedPath() {
+      const typed = explorerCurrentPath.value.trim();
+      if (typed) {
+        explorerSelectedFilePath = "";
+        explorerSelectedFileName = "";
+        loadExplorerPath(typed);
+      }
+    }
+    explorerCurrentPath.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.keyCode === 13) {
+        e.preventDefault();
+        navigateToTypedPath();
+      } else if (e.key === "Escape") {
+        explorerCurrentPath.value = explorerCurrentPathValue;
+        explorerCurrentPath.blur();
+      }
+    });
+    explorerCurrentPath.addEventListener("blur", () => {
+      const typed = explorerCurrentPath.value.trim();
+      if (typed && typed !== explorerCurrentPathValue) {
+        navigateToTypedPath();
       }
     });
   }

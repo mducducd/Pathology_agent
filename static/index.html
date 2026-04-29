@@ -25,17 +25,41 @@
 </head>
 <body>
   <header class="topbar">
-    <div class="title brand-title">
-      <img class="brand-logo" src="/static/assets/logo.svg" alt="Pathology Agent logo" />
-      <div class="brand-copy">
-        <div class="brand-name">Pathology Agent</div>
-        <div class="brand-tagline">For Clinical WSI</div>
+    <div class="topbar-brand">
+      <img class="topbar-logo" src="/static/assets/logo.svg" alt="Pathology Agent" />
+      <div class="topbar-brand-text">
+        <span class="topbar-name">Pathology Agent</span>
+        <span class="topbar-tag">Clinical WSI</span>
       </div>
     </div>
-    <div class="topbar-actions">
-      <button id="theme-toggle" type="button" class="theme-toggle" aria-label="Switch color theme" aria-pressed="false">
-        <span class="theme-toggle-icon" aria-hidden="true"></span>
-        <span id="theme-toggle-label">Light</span>
+    <div class="topbar-center">
+      <div id="mode-pill" class="pill pill-idle">No files</div>
+    </div>
+    <div class="topbar-right">
+      <div id="status-pill" class="pill pill-idle" hidden>Idle</div>
+      <div id="run-loading" class="run-loading model-warn" hidden>
+        <span class="flag-dot" aria-hidden="true"></span>
+        <span id="run-state-text">Running</span>
+        <span class="spinner spinner-inline" aria-hidden="true"></span>
+      </div>
+      <div class="status-actions">
+        <button id="btn-actions" type="button" class="ghost tiny-btn actions-trigger" aria-label="Run actions" aria-haspopup="menu" aria-expanded="false">⋯</button>
+        <div id="status-actions-menu" class="status-actions-menu" role="menu" hidden>
+          <button id="btn-restart" type="button" class="ghost tiny-btn menu-item" role="menuitem" disabled>Restart</button>
+          <button id="btn-clear-outputs" type="button" class="ghost tiny-btn menu-item" role="menuitem" disabled>Clear outputs</button>
+          <button id="btn-terminate" type="button" class="ghost tiny-btn terminate-btn menu-item" role="menuitem" disabled>Terminate</button>
+        </div>
+      </div>
+      <button id="theme-toggle" type="button" class="theme-toggle-icon-btn" aria-label="Switch color theme" aria-pressed="false">
+        <svg class="icon-sun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/>
+          <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/>
+          <line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/>
+          <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>
+        </svg>
+        <svg class="icon-moon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+        </svg>
       </button>
     </div>
   </header>
@@ -43,12 +67,7 @@
   <main class="wrap">
     <section class="workbench">
       <aside class="panel panel-left">
-        <div class="card panel-card sticky-card">
-          <div class="card-head">
-            <h2>Input & Run</h2>
-            <div id="mode-pill" class="pill pill-idle">No files</div>
-          </div>
-
+        <div class="card panel-card sticky-card left-card-flex">
           <div id="dropzone" class="dropzone" tabindex="0" aria-label="Drop files here">
             <div class="dropzone-inner">
               <div class="dz-title">Upload a slide bundle or browse the HPC server</div>
@@ -260,6 +279,10 @@
                 <button id="btn-start" type="button" class="primary" disabled>Start run</button>
                 <div id="run-label" class="muted small"></div>
               </div>
+
+              <div class="run-footer muted small">
+                © 2026 Kather Lab · EKFZ for Digital Health, TU Dresden
+              </div>
             </div>
           </div>
 
@@ -269,11 +292,8 @@
       <div class="col-resizer" id="resizer-left-main" role="separator" aria-label="Resize upload and slide columns" aria-orientation="vertical" tabindex="0"></div>
 
       <section class="panel panel-main">
-        <div class="card panel-card">
-          <div class="card-head">
-            <h2>Slide Viewer</h2>
-          </div>
-
+        <div class="card panel-card sticky-card">
+          <div class="sticky-card-body viewer-grid-wrap">
           <div class="viewer-grid">
             <div class="viewer-col viewer-main-left">
               <div class="overview-head">
@@ -305,6 +325,7 @@
               <ul id="rois" class="loglist viewer-rois"></ul>
             </div>
           </div>
+          </div><!-- end sticky-card-body -->
         </div>
       </section>
 
@@ -312,26 +333,7 @@
 
       <aside class="panel panel-right">
         <div class="card panel-card sticky-card">
-          <div class="card-head">
-            <h2>Run Status</h2>
-            <div class="status-head-right">
-              <div id="status-pill" class="pill pill-idle" hidden>Idle</div>
-              <div id="run-loading" class="run-loading model-warn" hidden>
-                <span class="flag-dot" aria-hidden="true"></span>
-                <span id="run-state-text">Running</span>
-                <span class="spinner spinner-inline" aria-hidden="true"></span>
-              </div>
-              <div class="status-actions">
-                <button id="btn-actions" type="button" class="ghost tiny-btn actions-trigger" aria-label="Run actions" aria-haspopup="menu" aria-expanded="false">⋯</button>
-                <div id="status-actions-menu" class="status-actions-menu" role="menu" hidden>
-                  <button id="btn-restart" type="button" class="ghost tiny-btn menu-item" role="menuitem" disabled>Restart</button>
-                  <button id="btn-clear-outputs" type="button" class="ghost tiny-btn menu-item" role="menuitem" disabled>Clear outputs</button>
-                  <button id="btn-terminate" type="button" class="ghost tiny-btn terminate-btn menu-item" role="menuitem" disabled>Terminate</button>
-                </div>
-              </div>
-            </div>
-          </div>
-
+          <div class="sticky-card-body">
           <div class="status-row">
             <div><span class="muted">Run ID:</span> <span id="run-id">—</span></div>
             <div><span class="muted">Slide:</span> <span id="slide-name">—</span></div>
@@ -356,15 +358,11 @@
             <h3>Navigation steps</h3>
             <ul id="steps" class="loglist steps-log"></ul>
           </div>
+          </div><!-- end sticky-card-body -->
         </div>
       </aside>
     </section>
   </main>
-
-  <footer class="site-footer">
-    <span>&copy; 2026 Kather Lab &middot; EKFZ for Digital Health, TU Dresden</span>
-    <span>Clinical WSI AI workspace</span>
-  </footer>
 
   <div id="explorer-modal" class="modal-shell" hidden>
     <div id="explorer-backdrop" class="modal-backdrop" aria-hidden="true"></div>
@@ -389,7 +387,7 @@
       </div>
 
       <div id="explorer-breadcrumbs" class="explorer-breadcrumbs"></div>
-      <div id="explorer-current-path" class="explorer-current-path"></div>
+      <input id="explorer-current-path" class="explorer-current-path" type="text" autocomplete="off" spellcheck="false" aria-label="Current path" />
 
       <div id="explorer-error" class="explorer-error" hidden></div>
       <div id="explorer-empty" class="empty-state explorer-empty" hidden>No entries yet.</div>
@@ -405,6 +403,6 @@
     </section>
   </div>
 
-  <script src="/static/app.js?v=97"></script>
+  <script src="/static/app.js?v=106"></script>
 </body>
 </html>
