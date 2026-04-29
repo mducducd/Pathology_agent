@@ -29,7 +29,6 @@ def _copy_image_for_report(
     shutil.copy2(src_path, dst)
     rel = os.path.relpath(dst, run_dir)
     copied_map[src_path] = rel
-    print(f"[WSI][REPORT] Copied image {src_path} -> {dst}")
     return rel
 
 
@@ -239,5 +238,4 @@ def write_markdown_report(
         f.write("Final Report\n")
         f.write(final_text.strip() + "\n")
 
-    print(f"[WSI][REPORT] Wrote Markdown report to: {report_path}")
     return report_path

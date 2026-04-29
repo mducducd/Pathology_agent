@@ -228,7 +228,8 @@ def _prepare_messages_for_request(messages: List[Dict[str, Any]], *, minimal: bo
         include_overview=not minimal,
         include_previous_views=not minimal,
     )
-    if not minimal:
+    include_examples = not minimal and len(getattr(state, "_roi_marks", []) or []) == 0
+    if include_examples:
         msgs = _inject_example_rois(msgs, budget=budget)
         msgs = _inject_example_tiles(msgs, budget=budget)
     return _sanitize_messages_for_api(msgs)

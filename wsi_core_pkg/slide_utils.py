@@ -51,8 +51,6 @@ def _load_slide() -> openslide.AbstractSlide:
         print(
             f"[WSI] Slide loaded. "
             f"levels={state._slide.level_count}, "
-            f"level_dimensions={state._slide.level_dimensions}, "
-            f"level_downsamples={state._slide.level_downsamples}"
         )
     return state._slide
 
@@ -92,7 +90,6 @@ def _next_debug_filename(tag: str) -> str:
 def _save_debug_image(img: Image.Image, tag: str) -> str:
     path = _next_debug_filename(tag)
     img.save(path, format="JPEG", quality=90)
-    print(f"[WSI][DEBUG] Saved image to: {path}")
     return path
 
 
@@ -177,7 +174,6 @@ def _make_overview_with_current_box(
 
     path = _save_debug_image(region, tag=tag)
     state._last_overview_with_box_path = path
-    print(f"[WSI][OV_BOX] Saved overview image at {path} for base bbox=({vx0},{vy0},{vw},{vh})")
     return path
 
 

@@ -17,10 +17,6 @@ from .config import (
     MAX_BAD_TILES,
     MAX_GOOD_TILES,
     MAX_IMG_DIM,
-    OUTPUTS_ROOT_DIR,
-    ROI_TARGET_HEIGHT_UM,
-    ROI_TARGET_SIDE_PX,
-    ROI_TARGET_WIDTH_UM,
     SELECTED_TILES_ROOT,
     TILE_PX,
     TILE_SIZE_UM,
@@ -96,23 +92,22 @@ def _tools_str(key: str, section: str = "tools.cache", default: str = "") -> str
 
 
 ROI_CANDIDATE_TOP_K = _tools_int("ROI_CANDIDATE_TOP_K", "tools.candidates", 72)
-ROI_MARK_CANDIDATE_TOLERANCE_NORM = int(os.getenv("ROI_MARK_CANDIDATE_TOLERANCE_NORM", "170"))
-ROI_CANDIDATE_ALLOW_FALLBACK = os.getenv("ROI_CANDIDATE_ALLOW_FALLBACK", "1").strip().lower() in {"1", "true", "yes", "y"}
+ROI_MARK_CANDIDATE_TOLERANCE_NORM = _tools_int("ROI_MARK_CANDIDATE_TOLERANCE_NORM", "tools.candidates", 170)
+ROI_CANDIDATE_ALLOW_FALLBACK = _tools_bool("ROI_CANDIDATE_ALLOW_FALLBACK", "tools.candidates", True)
 # Hard cap on how many candidates the VLM sees in AML mode after raw retrieval ranking.
-ROI_CANDIDATE_TOP_K_AML = int(os.getenv("ROI_CANDIDATE_TOP_K_AML", "30"))
-ROI_RANKER_BATCH_SIZE = int(os.getenv("ROI_RANKER_BATCH_SIZE", "32"))
-ROI_RANKER_MAX_WORKERS = int(os.getenv("ROI_RANKER_MAX_WORKERS", "4"))
-ROI_COARSE_PREFILTER_TRIGGER_SUPERTILES = int(os.getenv("ROI_COARSE_PREFILTER_TRIGGER_SUPERTILES", "128"))
-ROI_COARSE_PREFILTER_KEEP_RATIO = float(os.getenv("ROI_COARSE_PREFILTER_KEEP_RATIO", "0.22"))
-ROI_COARSE_PREFILTER_MIN_KEEP_SUPERTILES = int(os.getenv("ROI_COARSE_PREFILTER_MIN_KEEP_SUPERTILES", "36"))
-ROI_COARSE_PREFILTER_MAX_KEEP_SUPERTILES = int(os.getenv("ROI_COARSE_PREFILTER_MAX_KEEP_SUPERTILES", "56"))
-ROI_QUALITY_PREFILTER_KEEP_RATIO = float(os.getenv("ROI_QUALITY_PREFILTER_KEEP_RATIO", "0.25"))
-ROI_QUALITY_PREFILTER_MIN_KEEP_TILES = int(os.getenv("ROI_QUALITY_PREFILTER_MIN_KEEP_TILES", "4"))
-ROI_QUALITY_PREFILTER_TRIGGER_TILES = int(os.getenv("ROI_QUALITY_PREFILTER_TRIGGER_TILES", "12"))
-ROI_QUALITY_PREFILTER_RANDOM_RESERVE_RATIO = float(os.getenv("ROI_QUALITY_PREFILTER_RANDOM_RESERVE_RATIO", "0.05"))
-CACHE_ROOT_DIR = os.getenv("CACHE_ROOT_DIR", "").strip()
-if not CACHE_ROOT_DIR:
-    CACHE_ROOT_DIR = os.path.abspath("./outputs/_cache")
+ROI_CANDIDATE_TOP_K_AML = _tools_int("ROI_CANDIDATE_TOP_K_AML", "tools.candidates", 30)
+ROI_RANKER_BATCH_SIZE = _tools_int("ROI_RANKER_BATCH_SIZE", "tools.candidates", 64)
+ROI_RANKER_MAX_WORKERS = _tools_int("ROI_RANKER_MAX_WORKERS", "tools.candidates", 8)
+ROI_COARSE_PREFILTER_TRIGGER_SUPERTILES = _tools_int("ROI_COARSE_PREFILTER_TRIGGER_SUPERTILES", "tools.prefilter.coarse", 128)
+ROI_COARSE_PREFILTER_KEEP_RATIO = _tools_float("ROI_COARSE_PREFILTER_KEEP_RATIO", "tools.prefilter.coarse", 0.22)
+ROI_COARSE_PREFILTER_MIN_KEEP_SUPERTILES = _tools_int("ROI_COARSE_PREFILTER_MIN_KEEP_SUPERTILES", "tools.prefilter.coarse", 36)
+ROI_COARSE_PREFILTER_MAX_KEEP_SUPERTILES = _tools_int("ROI_COARSE_PREFILTER_MAX_KEEP_SUPERTILES", "tools.prefilter.coarse", 56)
+ROI_QUALITY_PREFILTER_KEEP_RATIO = _tools_float("ROI_QUALITY_PREFILTER_KEEP_RATIO", "tools.prefilter.quality", 0.25)
+ROI_QUALITY_PREFILTER_MIN_KEEP_TILES = _tools_int("ROI_QUALITY_PREFILTER_MIN_KEEP_TILES", "tools.prefilter.quality", 2)
+ROI_QUALITY_PREFILTER_TRIGGER_TILES = _tools_int("ROI_QUALITY_PREFILTER_TRIGGER_TILES", "tools.prefilter.quality", 8)
+ROI_QUALITY_PREFILTER_RANDOM_RESERVE_RATIO = _tools_float("ROI_QUALITY_PREFILTER_RANDOM_RESERVE_RATIO", "tools.prefilter.quality", 0.05)
+_cache_root_from_config = _tools_str("CACHE_ROOT_DIR", "tools.cache", "")
+CACHE_ROOT_DIR = os.getenv("CACHE_ROOT_DIR", _cache_root_from_config).strip() or os.path.abspath("./outputs/_cache")
 
 ROI_TILE_CACHE_DIR = os.getenv("ROI_TILE_CACHE_DIR", "").strip()
 if not ROI_TILE_CACHE_DIR:
@@ -130,6 +125,12 @@ DEFAULT_MPP_FALLBACK_UM = float(tuning_value("tools.slide", "DEFAULT_MPP_UM"))
 DEFAULT_MAX_ACCEPTED_ROIS = int(tuning_value("tools.navigation", "MAX_ACCEPTED_ROIS"))
 DEFAULT_TARGET_ACCEPTED_ROIS = int(tuning_value("tools.navigation", "TARGET_ACCEPTED_ROIS"))
 DEFAULT_CANDIDATE_NAV_FIELD_UM = float(tuning_value("tools.navigation", "CANDIDATE_NAV_FIELD_UM"))
+LOW_TISSUE_THRESHOLD = _tools_float("LOW_TISSUE_THRESHOLD", "tools.navigation", 0.10)
+LOW_TISSUE_LOOKBACK_STEPS = _tools_int("LOW_TISSUE_LOOKBACK_STEPS", "tools.navigation", 1)
+LOW_TISSUE_WARNING_STEPS = _tools_int("LOW_TISSUE_WARNING_STEPS", "tools.navigation", 1)
+SAME_REGION_LOOKBACK_STEPS = _tools_int("SAME_REGION_LOOKBACK_STEPS", "tools.navigation", 0)
+SAME_REGION_RADIUS_MULTIPLIER = _tools_float("SAME_REGION_RADIUS_MULTIPLIER", "tools.navigation", 1.5)
+SAME_REGION_WARNING_STEPS = _tools_int("SAME_REGION_WARNING_STEPS", "tools.navigation", 1)
 
 
 def _selected_batch_size() -> int:
@@ -303,15 +304,7 @@ def _strip_candidate_payload_for_free_local_search(info: Dict[str, Any]) -> Dict
     for key in (
         "roi_candidates",
         "roi_candidate_count",
-        "roi_candidate_source",
         "roi_candidate_overlay_path",
-        "roi_candidate_warning",
-        "roi_candidate_guidance",
-        "recommended_action",
-        "local_roi_budget",
-        "selected_candidate_rank",
-        "selected_candidate_center_norm",
-        "selected_candidate_bbox_norm",
     ):
         info.pop(key, None)
     return info
@@ -347,6 +340,79 @@ def _effective_slide_mpp_um(slide) -> float:
 
 def _roi_cap_reached() -> bool:
     return len(getattr(state, "_roi_marks", []) or []) >= _selected_max_accepted_rois()
+
+
+def _roi_target_reached() -> bool:
+    return len(getattr(state, "_roi_marks", []) or []) >= _selected_target_accepted_rois()
+
+
+def _finalization_required_response() -> Dict[str, Any]:
+    kept = len(getattr(state, "_roi_marks", []) or [])
+    target = _selected_target_accepted_rois()
+    return {
+        "ok": False,
+        "reason": "finalization_required",
+        "message": (
+            f"You already have {kept}/{target} kept ROI(s). "
+            "No more tool calls are allowed. Output the final diagnosis JSON now."
+        ),
+    }
+
+
+def _aml_navigation_guard() -> Optional[Dict[str, Any]]:
+    if not _agent_is_aml():
+        return None
+    if _roi_cap_reached():
+        return _roi_cap_response()
+    if _roi_target_reached():
+        return _finalization_required_response()
+    return None
+
+
+def _recent_navigation_steps(limit: int = 12) -> int:
+    return sum(
+        1
+        for e in (state._step_log[-limit:] if state._step_log else [])
+        if e.get("tool") in {
+            "wsi_get_overview_view",
+            "wsi_zoom_current_norm",
+            "wsi_zoom_full_norm",
+            "wsi_pan_current",
+            "wsi_open_candidate",
+        }
+    )
+
+
+def _recent_steps_in_same_region(limit: int = 8) -> int:
+    if not state._step_log or not state._current_view:
+        return 0
+    cur_cx = state._current_view["x0"] + state._current_view["w"] / 2.0
+    cur_cy = state._current_view["y0"] + state._current_view["h"] / 2.0
+    radius_sq = (state._current_view["w"] * SAME_REGION_RADIUS_MULTIPLIER) ** 2
+    n = 0
+    for entry in reversed(state._step_log[-limit:]):
+        bbox = entry.get("view_bbox_level0")
+        if not bbox:
+            break
+        ecx = bbox[0] + bbox[2] / 2.0
+        ecy = bbox[1] + bbox[3] / 2.0
+        if (ecx - cur_cx) ** 2 + (ecy - cur_cy) ** 2 <= radius_sq:
+            n += 1
+        else:
+            break
+    return n
+
+
+def _local_budget_status() -> Dict[str, Any]:
+    nav_steps = _recent_navigation_steps(limit=12)
+    same_region_steps = _recent_steps_in_same_region(limit=max(1, SAME_REGION_LOOKBACK_STEPS) if SAME_REGION_LOOKBACK_STEPS > 0 else 8)
+    roi_count = len(getattr(state, "_roi_marks", []) or [])
+    return {
+        "navigation_steps": nav_steps,
+        "same_region_steps": same_region_steps,
+        "rois_marked": roi_count,
+        "over_budget": nav_steps >= 6 or same_region_steps >= SAME_REGION_WARNING_STEPS,
+    }
 
 
 def _roi_cap_response() -> Dict[str, Any]:
@@ -646,7 +712,7 @@ def _try_load_cached_roi_index(
         try:
             with open(index_cache_file, "rb") as f:
                 cached_index = pickle.load(f)
-            print(f"[WSI][CACHE] Loaded cached ROI index from {index_cache_file}")
+            # print(f"[WSI][CACHE] Loaded cached ROI index from {index_cache_file}")
             return cached_index
         except Exception as e:
             print(f"[WSI][CACHE] Failed to load cached index: {e}")
@@ -900,7 +966,7 @@ def _ensure_unsupervised_roi_index():
 
             with open(index_cache_file, "wb") as f:
                 pickle.dump(index, f)
-            print(f"[WSI][CACHE] Saved ROI index to {index_cache_file}")
+            # print(f"[WSI][CACHE] Saved ROI index to {index_cache_file}")
         except Exception as e:
             print(f"[WSI][CACHE] Failed to save index to CACHE_ROOT_DIR: {e}")
         _set_roi_candidate_prep(
@@ -1383,21 +1449,25 @@ def _attach_roi_candidates(info: Dict[str, Any], top_k: int = ROI_CANDIDATE_TOP_
 
     # Exploration budget counter - shows VLM how many steps it has used
     total_steps = len(state._step_log) if state._step_log else 0
-    navigation_steps = sum(1 for e in (state._step_log[-12:] if state._step_log else [])
-                          if e.get("tool") in ("wsi_get_overview_view", "wsi_zoom_current_norm", "wsi_zoom_full_norm", "wsi_pan_current"))
     roi_steps = len(state._roi_marks)
+    budget = _local_budget_status()
+    navigation_steps = budget["navigation_steps"]
     info["exploration_budget"] = {
+        **budget,
         "total_steps": total_steps,
-        "navigation_steps": navigation_steps,
-        "rois_marked": roi_steps,
-        "recommended_max_steps": 12,
-        "status": "OVER_BUDGET" if navigation_steps > 4 else ("WARNING" if navigation_steps >= 3 else "OK"),
-        "message": (
-            f"Used {total_steps} steps ({navigation_steps} navigation, {roi_steps} ROIs). "
-            f"Recommended max ~12 steps total. "
-            "If navigation_steps > 2, stop wandering between views: search within a strong opened region and mark once you find a representative interpretable high-power ROI."
-        ),
+        "recommended_max_navigation_steps": 6,
     }
+    if aml_mode and budget["over_budget"] and roi_steps == 0:
+        next_rank_hint = _next_unattempted_candidate_rank()
+        info["recommended_action"] = {
+            "tool": "wsi_open_candidate" if next_rank_hint is not None else "wsi_get_overview_view",
+            "urgency": "CRITICAL",
+            "reason": (
+                "Navigation budget exceeded with no ROI marked. "
+                "Stop local wandering and jump to a different strong region now."
+            ),
+            "params": {"rank": int(next_rank_hint)} if next_rank_hint is not None else {},
+        }
 
     if aml_mode:
         kept_roi_count = len(state._roi_marks)
@@ -1432,26 +1502,9 @@ def _attach_roi_candidates(info: Dict[str, Any], top_k: int = ROI_CANDIDATE_TOP_
                 f"You have {kept_roi_count} kept ROI(s). Continue toward the soft target of {target_accepted_rois} representative AML ROIs across distinct slide regions unless additional informative ROIs cannot be found."
             )
 
-    # Detect how many consecutive recent steps have stayed in the same slide region.
-    # Uses level-0 view centers from the step log; if the last N centers all cluster
-    # within 1.5× the current view width of each other, the agent is stuck.
-    same_region_steps = 0
-    if state._step_log and state._current_view:
-        cur_cx = state._current_view["x0"] + state._current_view["w"] / 2.0
-        cur_cy = state._current_view["y0"] + state._current_view["h"] / 2.0
-        radius_sq = (state._current_view["w"] * 1.5) ** 2
-        for entry in reversed(state._step_log[-8:]):
-            bbox = entry.get("view_bbox_level0")
-            if not bbox:
-                break
-            ecx = bbox[0] + bbox[2] / 2.0
-            ecy = bbox[1] + bbox[3] / 2.0
-            if (ecx - cur_cx) ** 2 + (ecy - cur_cy) ** 2 <= radius_sq:
-                same_region_steps += 1
-            else:
-                break
+    same_region_steps = budget["same_region_steps"]
     info["same_region_steps"] = same_region_steps
-    if same_region_steps >= 3:
+    if same_region_steps >= SAME_REGION_WARNING_STEPS:
         next_rank_hint = _next_unattempted_candidate_rank() if aml_mode else None
         info["region_loop_warning"] = (
             f"You have taken {same_region_steps} consecutive steps in the same slide region. "
@@ -1464,17 +1517,15 @@ def _attach_roi_candidates(info: Dict[str, Any], top_k: int = ROI_CANDIDATE_TOP_
         )
 
     # Count consecutive recent steps with very low tissue content (white/background views).
-    # If the agent has been stuck in empty/background territory for 2+ steps, force an escape.
-    _LOW_TISSUE_THRESHOLD = 0.10
     low_tissue_steps = 0
-    for entry in reversed(state._step_log[-6:]):
+    for entry in reversed(state._step_log[-max(1, LOW_TISSUE_LOOKBACK_STEPS):]):
         tf = entry.get("tissue_fraction")
-        if tf is not None and float(tf) < _LOW_TISSUE_THRESHOLD:
+        if tf is not None and float(tf) < LOW_TISSUE_THRESHOLD:
             low_tissue_steps += 1
         else:
             break
     info["low_tissue_steps"] = low_tissue_steps
-    if low_tissue_steps >= 2:
+    if low_tissue_steps >= LOW_TISSUE_WARNING_STEPS:
         next_rank_hint = _next_unattempted_candidate_rank() if aml_mode else None
         low_tissue_action = (
             f"You MUST call wsi_open_candidate(rank={next_rank_hint}) RIGHT NOW to jump back to a candidate region with visible tissue."
@@ -1485,7 +1536,7 @@ def _attach_roi_candidates(info: Dict[str, Any], top_k: int = ROI_CANDIDATE_TOP_
         )
         info["low_tissue_loop_warning"] = (
             f"ALERT: {low_tissue_steps} consecutive views have been mostly empty background "
-            "(tissue_fraction < 0.10). You are zoomed into empty glass. "
+            f"(tissue_fraction < {LOW_TISSUE_THRESHOLD}). You are zoomed into empty glass. "
             + low_tissue_action
         )
 
@@ -1667,6 +1718,7 @@ def _mark_roi_from_candidate(
     importance: int,
     nav_reason: str,
     requested_center_norm: Optional[List[int]] = None,
+    requested_bbox_norm: Optional[List[int]] = None,
 ) -> Dict[str, Any]:
     if not state._current_view:
         raise RuntimeError("ROI marking called before wsi_get_overview_view.")
@@ -1691,13 +1743,47 @@ def _mark_roi_from_candidate(
     cx_999 = float((chosen.get("center_norm") or [0, 0])[0])
     cy_999 = float((chosen.get("center_norm") or [0, 0])[1])
 
-    w_new, h_new = _target_roi_size_level0_px(slide)
+    cv_x0 = state._current_view["x0"]
+    cv_y0 = state._current_view["y0"]
+    cv_w = state._current_view["w"]
+    cv_h = state._current_view["h"]
 
-    x0_new = cx_base - w_new // 2
-    y0_new = cy_base - h_new // 2
+    if requested_bbox_norm is not None and len(requested_bbox_norm) == 4:
+        bx0_999, by0_999, bx1_999, by1_999 = [max(0, min(999, int(v))) for v in requested_bbox_norm]
+        bx0_rel = min(bx0_999, bx1_999) / 999.0
+        by0_rel = min(by0_999, by1_999) / 999.0
+        bx1_rel = max(bx0_999, bx1_999) / 999.0
+        by1_rel = max(by0_999, by1_999) / 999.0
 
-    x0_new = max(0, min(x0_new, slide_w0 - w_new))
-    y0_new = max(0, min(y0_new, slide_h0 - h_new))
+        req_x0 = cv_x0 + int(round(bx0_rel * cv_w))
+        req_y0 = cv_y0 + int(round(by0_rel * cv_h))
+        req_x1 = cv_x0 + int(round(bx1_rel * cv_w))
+        req_y1 = cv_y0 + int(round(by1_rel * cv_h))
+
+        req_w = max(1, req_x1 - req_x0)
+        req_h = max(1, req_y1 - req_y0)
+
+        w_new, h_new = _target_roi_size_level0_px(slide)
+        target_cx = req_x0 + req_w // 2
+        target_cy = req_y0 + req_h // 2
+
+        x0_new = target_cx - w_new // 2
+        y0_new = target_cy - h_new // 2
+
+        # Keep requested box inside final ROI crop
+        x0_new = min(x0_new, req_x0)
+        y0_new = min(y0_new, req_y0)
+        x0_new = max(x0_new, req_x1 - w_new)
+        y0_new = max(y0_new, req_y1 - h_new)
+
+        x0_new = max(0, min(x0_new, slide_w0 - w_new))
+        y0_new = max(0, min(y0_new, slide_h0 - h_new))
+    else:
+        w_new, h_new = _target_roi_size_level0_px(slide)
+        x0_new = cx_base - w_new // 2
+        y0_new = cy_base - h_new // 2
+        x0_new = max(0, min(x0_new, slide_w0 - w_new))
+        y0_new = max(0, min(y0_new, slide_h0 - h_new))
 
     new_cx = x0_new + w_new // 2
     new_cy = y0_new + h_new // 2
@@ -1763,7 +1849,7 @@ def _mark_roi_from_candidate(
             flood_frac = _dark_blue_flood_fraction(Image.open(roi_img_path)) if roi_img_path else 0.0
         except Exception:
             flood_frac = 0.0
-        if flood_frac > 0.35:
+        if flood_frac > 0.30:
             return {
                 "ok": False,
                 "reason": "dark_blue_flood_rejected",
@@ -1802,6 +1888,7 @@ def _mark_roi_from_candidate(
             int(round(requested_cx)),
             int(round(requested_cy)),
         ],
+        "requested_bbox_norm": list(requested_bbox_norm) if requested_bbox_norm is not None else None,
     }
 
     state._roi_marks.append(roi)
@@ -1863,8 +1950,9 @@ def _open_candidate_by_rank(
     nav_reason: str,
     max_dim: int,
 ) -> Dict[str, Any]:
-    if _roi_cap_reached():
-        return _roi_cap_response()
+    guard = _aml_navigation_guard()
+    if guard is not None:
+        return guard
     if not state._current_view and not getattr(state, "_overview_roi_candidates", None):
         raise RuntimeError("wsi_open_candidate called before wsi_get_overview_view.")
 
@@ -1941,9 +2029,13 @@ def wsi_get_overview_view(
     nav_reason: str = "Initial overview of the whole slide",
     max_dim: int = MAX_IMG_DIM,
 ) -> str:
+    """Get a thumbnail overview of the entire whole-slide image. Always call this first.
+    Returns roi_candidates ranked by quality — use wsi_open_candidate(rank) to navigate into them.
+    Response includes marked_roi_count and target_accepted_rois to track collection progress."""
     def _inner(nav_reason: str, max_dim: int) -> Dict[str, Any]:
-        if _roi_cap_reached():
-            return _roi_cap_response()
+        guard = _aml_navigation_guard()
+        if guard is not None:
+            return guard
         slide = _load_slide()
         base_w0, base_h0 = slide.level_dimensions[0]
 
@@ -1990,6 +2082,9 @@ def wsi_zoom_current_norm(
     nav_reason: str = "",
     max_dim: int = MAX_IMG_DIM,
     ) -> str:
+    """Zoom into a sub-region of the CURRENT VIEW using normalized [0–999] coordinates.
+    Use to inspect a specific area within the current field before marking or abandoning.
+    Limit: at most 2 zoom/pan actions per candidate before deciding to mark or move on."""
     def _inner(
         x0_999: int,
         y0_999: int,
@@ -1998,8 +2093,9 @@ def wsi_zoom_current_norm(
         nav_reason: str,
         max_dim: int,
     ) -> Dict[str, Any]:
-        if _roi_cap_reached():
-            return _roi_cap_response()
+        guard = _aml_navigation_guard()
+        if guard is not None:
+            return guard
         if not state._current_view:
             raise RuntimeError("wsi_zoom_current_norm called before wsi_get_overview_view.")
 
@@ -2087,6 +2183,8 @@ def wsi_zoom_full_norm(
     nav_reason: str = "",
     max_dim: int = MAX_IMG_DIM,
     ) -> str:
+    """Zoom into a region using normalized [0–999] coordinates relative to the FULL SLIDE.
+    Use when you need to jump to an absolute position rather than a sub-region of the current view."""
     def _inner(
         x0_999: int,
         y0_999: int,
@@ -2095,8 +2193,9 @@ def wsi_zoom_full_norm(
         nav_reason: str,
         max_dim: int,
     ) -> Dict[str, Any]:
-        if _roi_cap_reached():
-            return _roi_cap_response()
+        guard = _aml_navigation_guard()
+        if guard is not None:
+            return guard
         slide = _load_slide()
         slide_w0, slide_h0 = slide.level_dimensions[0]
         print(f"[WSI][ZOOM_FULL] norm_box=({x0_999},{y0_999},{x1_999},{y1_999}) on full slide")
@@ -2170,14 +2269,17 @@ def wsi_pan_current(
     nav_reason: str = "",
     max_dim: int = MAX_IMG_DIM,
     ) -> str:
+    """Pan the current view by a relative offset in normalized [−999, +999] units.
+    Positive dx moves right, positive dy moves down. Keeps the same zoom level."""
     def _inner(
         dx_999: int,
         dy_999: int,
         nav_reason: str,
         max_dim: int,
     ) -> Dict[str, Any]:
-        if _roi_cap_reached():
-            return _roi_cap_response()
+        guard = _aml_navigation_guard()
+        if guard is not None:
+            return guard
         if not state._current_view:
             raise RuntimeError("wsi_pan_current called before wsi_get_overview_view.")
 
@@ -2226,7 +2328,12 @@ def wsi_pan_current(
 
 @function_tool
 def wsi_get_view_info(nav_reason: str = "Get current view info") -> str:
+    """Get metadata for the current view (magnification, field size in µm, tissue_fraction, roi_candidates).
+    Use sparingly — do NOT call this after target_accepted_rois is reached."""
     def _inner(nav_reason: str) -> Dict[str, Any]:
+        guard = _aml_navigation_guard()
+        if guard is not None:
+            return guard
         slide = _load_slide()
         if not state._current_view:
             raise RuntimeError("No current view. Call wsi_get_overview_view first.")
@@ -2280,6 +2387,9 @@ def wsi_mark_roi_norm(
     importance: int = 1,
     nav_reason: str = "Mark ROI in current view",
     ) -> str:
+    """Mark a region of interest in the CURRENT VIEW using normalized [0–999] coordinates.
+    The system crops the ROI at native resolution for diagnosis. Response includes marked_roi_count
+    and target_accepted_rois — stop all tool calls once marked_roi_count >= target_accepted_rois."""
     def _inner(
         x0_999: int,
         y0_999: int,
@@ -2327,6 +2437,12 @@ def wsi_mark_roi_norm(
                 int(round(requested_cx_999)),
                 int(round(requested_cy_999)),
             ],
+            requested_bbox_norm=[
+                int(x0_999_cl),
+                int(y0_999_cl),
+                int(x1_999_cl),
+                int(y1_999_cl),
+            ],
         )
 
     return _safe(
@@ -2348,6 +2464,9 @@ def wsi_open_candidate(
     nav_reason: str = "Open ROI candidate by rank",
     max_dim: int = MAX_IMG_DIM,
 ) -> str:
+    """Navigate to a ranked ROI candidate from the current roi_candidates list (rank starts at 1).
+    Always inspect inside the candidate before opening another. Use wsi_mark_candidate or
+    wsi_mark_roi_norm to accept, or call wsi_open_candidate again to abandon and move on."""
     def _inner(rank: int, nav_reason: str, max_dim: int) -> Dict[str, Any]:
         return _open_candidate_by_rank(
             rank=int(rank),
@@ -2371,6 +2490,8 @@ def wsi_mark_candidate(
     importance: int = 1,
     nav_reason: str = "Mark ROI candidate by rank",
 ) -> str:
+    """Mark a candidate from the roi_candidates list directly by rank without navigating to it first.
+    Faster than wsi_open_candidate + wsi_mark_roi_norm when the candidate location is already known."""
     def _inner(
         rank: int,
         label: str,
@@ -2418,6 +2539,9 @@ def wsi_save_tile_norm(
     quality: str = "good",
     nav_reason: str = "Save a diagnostic tile",
 ) -> str:
+    """Save a tile from the current view for later analysis (tile agent only, not AML/WSI agents).
+    quality='good' for diagnostically useful tiles, 'bad' for negative examples.
+    Stop after 60 good tiles or when no more good regions are visible."""
     def _inner(
         x0_999: int,
         y0_999: int,
@@ -2544,6 +2668,9 @@ def wsi_save_tile_norm(
 def wsi_discard_last_roi(
     nav_reason: str = "Discard last ROI if not useful",
 ) -> str:
+    """Discard the most recently marked ROI if it is background, artifact, or not diagnostic.
+    Blocked when kept ROI count is near target to prevent over-discarding. Check the ROI image
+    immediately after marking and discard only if clearly unusable."""
     def _inner(nav_reason: str) -> Dict[str, Any]:
         if not state._roi_marks:
             return {"ok": False, "message": "No ROI to discard."}
