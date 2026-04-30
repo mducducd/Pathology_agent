@@ -63,6 +63,7 @@
   const darkCanvas = document.getElementById("dark-canvas");
   const darkEmpty = document.getElementById("dark-empty");
   const btnDarkToggle = document.getElementById("btn-dark-toggle");
+  const finalSection = document.getElementById("final-section");
   const finalText = document.getElementById("final-text");
   const reasoningSection = document.getElementById("reasoning-section");
   const reasoningText = document.getElementById("reasoning-text");
@@ -464,6 +465,7 @@
   let explorerSelectedFilePath = "";
   let explorerSelectedFileName = "";
   let explorerBusy = false;
+  let explorerFilterText = "";
   let currentRunId = null;
   let currentModelName = null;
   let pollingTimer = null;
@@ -983,9 +985,11 @@
     const source = String(markdownText || "").trim();
     if (!source) {
       finalText.innerHTML = "";
+      if (finalSection) finalSection.hidden = true;
       return;
     }
     finalText.innerHTML = markdownToHtml(source);
+    if (finalSection) finalSection.hidden = waiting;
   }
 
   function setReasoningContent(text) {
@@ -1050,9 +1054,7 @@
   }
 
   function setOverviewEmptyState(message) {
-    const text = String(message || "").trim();
-    overviewEmpty.textContent = text;
-    overviewEmpty.hidden = !text;
+    overviewEmpty.hidden = !String(message || "").trim();
   }
 
   function setDarkEmptyState(message) {
@@ -1099,6 +1101,8 @@
       btnDarkToggle.setAttribute("aria-pressed", darkRegionsEnabled ? "true" : "false");
       btnDarkToggle.setAttribute("aria-label", darkRegionsEnabled ? "Hide dark regions" : "Show dark regions");
       btnDarkToggle.classList.toggle("is-active", darkRegionsEnabled);
+      const labelEl = btnDarkToggle.querySelector("#dark-toggle-label");
+      if (labelEl) labelEl.textContent = darkRegionsEnabled ? "Hide" : "Show";
     }
     if (!darkRegionsEnabled) {
       darkRegionsLoaded = false;
@@ -1349,17 +1353,13 @@
 
       const sub = document.createElement("div");
       sub.className = "filesub";
-      sub.textContent = `${serverSelection.selectionLabel || "Server selection"} · ${serverSelection.slideFilename || ""}`;
+      sub.textContent = `${serverSelection.selectionLabel || "Server selection"} · ${serverSelection.slideFilename || ""} · server`;
 
       left.appendChild(name);
       left.appendChild(sub);
 
       const right = document.createElement("div");
       right.className = "fileright";
-
-      const tag = document.createElement("span");
-      tag.className = "tag";
-      tag.textContent = "server";
 
       const rm = document.createElement("button");
       rm.className = "remove icon-btn icon-remove";
@@ -1373,7 +1373,6 @@
       `;
       rm.addEventListener("click", clearSelection);
 
-      right.appendChild(tag);
       right.appendChild(rm);
       li.appendChild(left);
       li.appendChild(right);
@@ -1393,20 +1392,16 @@
         name.className = "filename";
         name.textContent = it.relPath || it.file.name;
 
+        const e = extOf(it.relPath || it.file.name);
         const sub = document.createElement("div");
         sub.className = "filesub";
-        sub.textContent = `${bytesToHuman(it.file.size || 0)} · ${it.file.type || "application/octet-stream"}`;
+        sub.textContent = `${bytesToHuman(it.file.size || 0)} · ${e || "file"}`;
 
         left.appendChild(name);
         left.appendChild(sub);
 
         const right = document.createElement("div");
         right.className = "fileright";
-
-        const e = extOf(it.relPath || it.file.name);
-        const tag = document.createElement("span");
-        tag.className = "tag";
-        tag.textContent = e || "file";
 
         const rm = document.createElement("button");
         rm.className = "remove icon-btn icon-remove";
@@ -1420,7 +1415,6 @@
         `;
         rm.addEventListener("click", () => removeItem(it.id));
 
-        right.appendChild(tag);
         right.appendChild(rm);
 
         li.appendChild(left);
@@ -1555,11 +1549,15 @@
   function renderExplorerList() {
     if (!explorerList) return;
     explorerList.innerHTML = "";
+    const filter = explorerFilterText.toLowerCase();
+    const visible = filter
+      ? explorerEntries.filter((e) => (e.name || "").toLowerCase().includes(filter))
+      : explorerEntries;
     if (explorerEmpty) {
-      explorerEmpty.hidden = explorerEntries.length > 0;
+      explorerEmpty.hidden = visible.length > 0;
     }
 
-    for (const entry of explorerEntries) {
+    for (const entry of visible) {
       const li = document.createElement("li");
       li.className = "explorer-entry";
       if (entry.kind === "file" && entry.path === explorerSelectedFilePath) {
@@ -1723,7 +1721,7 @@
         explorerSelectedFileName = "";
       }
       if (explorerCurrentPath) {
-        explorerCurrentPath.textContent = explorerCurrentPathValue;
+        explorerCurrentPath.value = explorerCurrentPathValue;
       }
       if (explorerRootSelect && data.root_path) {
         explorerRootSelect.value = data.root_path;
@@ -1794,6 +1792,8 @@
     explorerModal.addEventListener("transitionend", onEnd, { once: true });
   }
 
+  const stepLiveBar = document.getElementById("step-live-bar");
+
   function upsertLiveStep(stepId, title, subText) {
     if (!stepsEl) return;
     const existing = document.getElementById(stepId);
@@ -1808,7 +1808,7 @@
       li.id = stepId;
     }
     // Re-apply class every update so stale DOM from older versions still gets LIVE styling.
-    li.className = "logitem live-step-item";
+    li.className = "logitem live-step-item" + (existing ? "" : " is-revealing");
     // Inline fallback so LIVE remains orange even if CSS is cached/stale.
     li.style.borderLeft = "4px solid #ff7a00";
     li.style.background = "var(--bg)";
@@ -1829,7 +1829,10 @@
       li.appendChild(s);
     }
 
-    stepsEl.appendChild(li);
+    const target = stepLiveBar || stepsEl;
+    target.appendChild(li);
+    // scroll steps list so latest step is visible (LIVE bar stays pinned by CSS)
+    requestAnimationFrame(() => { if (stepsEl) stepsEl.scrollTop = stepsEl.scrollHeight; });
   }
 
   function upsertLiveStatusStep(title, subText) {
@@ -1876,11 +1879,13 @@
 
     clearDarkRegions();
 
-    renderFinalReportMarkdown("Waiting for model output…", true);
+    if (finalSection) finalSection.hidden = true;
+    renderFinalReportMarkdown("", false);
     setReasoningContent("");
     reportLink.textContent = "";
-    // Don't clear stepsEl here - keep live status visible during initialization
+    if (stepsEl) stepsEl.innerHTML = "";
     roisEl.innerHTML = "";
+    roiListPinnedToBottom = true;
 
     lastRenderedStep = 0;
     lastRenderedRoi = 0;
@@ -1893,7 +1898,7 @@
 
   function appendLogItem(listEl, title, subText, imgUrl) {
     const li = document.createElement("li");
-    li.className = "logitem";
+    li.className = "logitem is-revealing";
 
     const t = document.createElement("div");
     t.className = "logtitle";
@@ -1924,7 +1929,9 @@
       badge = document.createElement("span");
       badge.className = "roi-loading-badge";
       badge.setAttribute("aria-hidden", "true");
-      li.appendChild(badge);
+      const title = li.querySelector(".logtitle");
+      if (title) title.appendChild(badge);
+      else li.appendChild(badge);
     }
     return badge;
   }
@@ -2015,7 +2022,7 @@
 
   function appendRoiItem(roi, title, subText, imgUrl) {
     const li = document.createElement("li");
-    li.className = "logitem roi-item";
+    li.className = "logitem roi-item is-revealing";
     li.dataset.roiId = String(roi.roi_id);
     li.dataset.roiKey = `${roi.roi_id}:${String(roi.debug_path || "")}`;
     const roiColor = roiColorForId(roi.roi_id);
@@ -2398,9 +2405,10 @@
     if (!li) {
       li = document.createElement("li");
       li.id = "roi-live-item";
-      li.className = "logitem live-roi-item";
+      li.className = "logitem live-roi-item is-revealing";
     }
     li.classList.toggle("roi-searching", !isMarkedRoiView);
+    li.classList.toggle("roi-inspecting", isMarkedRoiView);
     // Keep the live preview as the active/latest ROI slot.
     roisEl.appendChild(li);
 
@@ -2410,7 +2418,10 @@
       t.className = "logtitle";
       li.appendChild(t);
     }
+    const existingBadge = t.querySelector(".roi-loading-badge");
     t.textContent = title;
+    if (existingBadge) t.appendChild(existingBadge);
+    else _ensureRoiLoadingBadge(li);
 
     if (subText) {
       let s = li.querySelector(".logsub");
@@ -3462,6 +3473,31 @@
     explorerRefreshBtn.addEventListener("click", () => {
       if (explorerCurrentPathValue) {
         loadExplorerPath(explorerCurrentPathValue);
+      }
+    });
+  }
+  if (explorerCurrentPath) {
+    function navigateToTypedPath() {
+      const typed = explorerCurrentPath.value.trim();
+      if (typed) {
+        explorerSelectedFilePath = "";
+        explorerSelectedFileName = "";
+        loadExplorerPath(typed);
+      }
+    }
+    explorerCurrentPath.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.keyCode === 13) {
+        e.preventDefault();
+        navigateToTypedPath();
+      } else if (e.key === "Escape") {
+        explorerCurrentPath.value = explorerCurrentPathValue;
+        explorerCurrentPath.blur();
+      }
+    });
+    explorerCurrentPath.addEventListener("blur", () => {
+      const typed = explorerCurrentPath.value.trim();
+      if (typed && typed !== explorerCurrentPathValue) {
+        navigateToTypedPath();
       }
     });
   }

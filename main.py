@@ -44,6 +44,7 @@ MODEL_OPTIONS = [
     "GPT-OSS-120B",
     "gpt-oss-20b",
     "GLM-4.6V-FP8",
+    "GLM-4.5-Air-FP8",
     "Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled",
     "qwen3.5-35b-a3b",
     "qwen3.6-35b-a3b",
