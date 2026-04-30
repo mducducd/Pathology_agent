@@ -21,7 +21,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" />
-  <link rel="stylesheet" href="/static/styles.css?v=66" />
+  <link rel="stylesheet" href="/static/styles.css?v=82" />
 </head>
 <body>
   <header class="topbar">
@@ -33,7 +33,6 @@
       </div>
     </div>
     <div class="topbar-center">
-      <div id="mode-pill" class="pill pill-idle">No files</div>
     </div>
     <div class="topbar-right">
       <div id="status-pill" class="pill pill-idle" hidden>Idle</div>
@@ -126,6 +125,7 @@
                   <option value="GPT-OSS-120B" selected>GPT-OSS-120B</option>
                   <option value="gpt-oss-20b">gpt-oss-20b</option>
                   <option value="GLM-4.6V-FP8">GLM-4.6V-FP8</option>
+                  <option value="GLM-4.5-Air-FP8">GLM-4.5-Air-FP8</option>
                   <option value="Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled">Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled</option>
                   <option value="qwen3.5-35b-a3b">qwen3.5-35b-a3b</option>
                   <option value="qwen3.6-35b-a3b">qwen3.6-35b-a3b</option>
@@ -297,21 +297,24 @@
           <div class="viewer-grid">
             <div class="viewer-col viewer-main-left">
               <div class="overview-head">
-                <h3>Overview</h3>
-                <button id="btn-dark-toggle" type="button" class="dark-toggle-btn icon-btn" aria-label="Show dark regions" aria-pressed="false" title="Toggle dark regions">
-                  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                <button id="btn-dark-toggle" type="button" class="dark-toggle-pill" aria-label="Toggle dark regions" aria-pressed="false" title="Toggle dark regions">
+                  <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
                     <circle cx="8" cy="8" r="5.5" stroke="currentColor" stroke-width="1.5"/>
                     <path d="M8 2.5A5.5 5.5 0 0 0 8 13.5V2.5Z" fill="currentColor"/>
                   </svg>
+                  <span id="dark-toggle-label">Show</span>
                 </button>
               </div>
-              <div class="muted small">Darker orange dashed box = live search. Finished ROIs stay on overview with different colors.</div>
               <div class="img-stack">
                 <img id="overview-img" class="img" alt="Overview" hidden />
                 <canvas id="overview-canvas" class="overlay-canvas" aria-hidden="true"></canvas>
               </div>
-              <div id="overview-empty" class="empty-state">No overview yet. Upload a slide and start a run.</div>
-              <div id="dark-empty" class="empty-state" hidden>Click Show to run dark-region detection.</div>
+              <div id="overview-empty" class="overview-placeholder">
+                <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" class="overview-placeholder-icon">
+                  <rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/>
+                </svg>
+                <div>Load a slide to see overview</div>
+              </div>
               <div class="img-stack">
                 <img id="dark-img" class="img" alt="Dark regions overview" hidden />
                 <canvas id="dark-canvas" class="overlay-canvas" aria-hidden="true"></canvas>
@@ -321,8 +324,9 @@
             <div class="subcol-resizer" id="resizer-viewer-split" role="separator" aria-label="Resize overview and ROIs" aria-orientation="vertical" tabindex="0"></div>
 
             <div class="viewer-col viewer-main-right">
-              <h3>ROIs</h3>
-              <ul id="rois" class="loglist viewer-rois"></ul>
+              <ul id="rois" class="viewer-rois">
+                <li class="rois-empty-hint" id="rois-empty-hint">Regions of Interest will show up here</li>
+              </ul>
             </div>
           </div>
           </div><!-- end sticky-card-body -->
@@ -344,19 +348,22 @@
             <pre id="error-text"></pre>
           </div>
 
-          <h3>Final report</h3>
-          <div id="final-text" class="pre markdown-report"></div>
+          <div id="final-section" class="final-section" hidden>
+            <h3>Final report</h3>
+            <div id="final-text" class="pre markdown-report"></div>
 
-          <div id="reasoning-section" hidden>
-            <h3>Reasoning</h3>
-            <pre id="reasoning-text" class="pre"></pre>
+            <div id="reasoning-section" hidden>
+              <h3>Reasoning</h3>
+              <pre id="reasoning-text" class="pre"></pre>
+            </div>
+
+            <div id="report-link" class="muted small"></div>
           </div>
-
-          <div id="report-link" class="muted small"></div>
 
           <div class="steps-dock">
             <h3>Navigation steps</h3>
             <ul id="steps" class="loglist steps-log"></ul>
+            <div id="step-live-bar" class="step-live-bar"></div>
           </div>
           </div><!-- end sticky-card-body -->
         </div>
@@ -403,6 +410,6 @@
     </section>
   </div>
 
-  <script src="/static/app.js?v=106"></script>
+  <script src="/static/app.js?v=117"></script>
 </body>
 </html>
