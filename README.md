@@ -171,13 +171,13 @@ bash evaluate/run_batch_aml_suite.sh \
 
 Notes:
 
-- `--extractors` filters the run specs by extractor key.
+- `--extractors` accepts a comma-separated list of extractor keys and filters the `RUNS` array to only those matching entries.
 - The suite script forwards into `evaluate/run_batch_aml.sh` for each selected run.
-- Edit the `RUNS` array in [evaluate/run_batch_aml_suite.sh](/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/evaluate/run_batch_aml_suite.sh) to choose which model/extractor combinations are launched.
-- Edit `tools.slide` in [configs/config.yaml](/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/configs/config.yaml) to change the suite defaults for `TILE_FILTER`, `TILE_SIZE_PX`, `BATCH_SIZE`, `ROI_SIZE_PX`, and `AGENT`.
+- Edit the `RUNS` array in [evaluate/run_batch_aml_suite.sh](evaluate/run_batch_aml_suite.sh) to choose which model/extractor combinations are launched.
+- Edit `tools.slide` in [configs/config.yaml](configs/config.yaml) to change the suite defaults for `TILE_FILTER`, `TILE_SIZE_PX`, `BATCH_SIZE`, `ROI_SIZE_PX`, and `AGENT`. These can also be overridden per-invocation with `--tile-filter`, `--roi-size-px`, and `--default-mpp-um`.
 - Each `RUNS` entry has the form `"MODEL|EXTRACTOR|OUTPUT_DIR_NAME"`.
 - `MODEL` is passed to `--model`, `EXTRACTOR` is passed to `--extractor`, and `OUTPUT_DIR_NAME` becomes the subdirectory created under `--output-parent/--experiment-name` or `--base-output-root`.
-- The current checked-in `RUNS` array launches `GPT-OSS-120B + uni2` and `GPT-OSS-120B + dinobloom_giant`.
+- The current checked-in `RUNS` array launches `GLM-4.6V-FP8` paired with `uni2`, `virchow2`, `h_optimus_1`, and `dinobloom_giant`.
 
 ## Workbench
 
