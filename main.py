@@ -41,8 +41,6 @@ SUPPORTED_PRIMARY_EXTS = {".svs", ".tif", ".tiff", ".ndpi", ".mrxs", ".mrsx"}
 MIRAX_EXTS = {".mrxs", ".mrsx"}
 STD_EXTS = {".svs", ".tif", ".tiff", ".ndpi"}
 MODEL_OPTIONS = [
-    "GPT-OSS-120B",
-    "gpt-oss-20b",
     "GLM-4.6V-FP8",
     "GLM-4.5-Air-FP8",
     "Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled",
@@ -51,6 +49,7 @@ MODEL_OPTIONS = [
     "qwen3-vl-32b-thinking-fp8",
     "Qwen3.5-397B-A17B-FP8",
     "gemma-4-31B-it",
+    "DeepSeek-V4-Flash",
 ]
 ALLOWED_MODEL_NAMES = set(MODEL_OPTIONS)
 DEFAULT_WEB_MODEL_NAME = MODEL_NAME if MODEL_NAME in ALLOWED_MODEL_NAMES else MODEL_OPTIONS[0]
@@ -60,7 +59,6 @@ EMBEDDING_EXTRACTOR_OPTIONS = [
         "label": embedding_extractor_display_name(name),
     }
     for name in available_embedding_extractors()
-    if not str(name).endswith("_onnx")
 ]
 ALLOWED_EMBEDDING_EXTRACTORS = {item["name"] for item in EMBEDDING_EXTRACTOR_OPTIONS}
 DEFAULT_EMBEDDING_EXTRACTOR = "uni2"

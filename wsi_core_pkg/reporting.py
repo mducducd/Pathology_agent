@@ -1,7 +1,8 @@
 import os
 import shutil
+from collections import Counter
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from . import state
 from .config import REPORT_ROOT_DIR
@@ -32,29 +33,56 @@ def _copy_image_for_report(
     return rel
 
 
-def write_markdown_report(
+def _as_dict(value: Any) -> Optional[Dict[str, Any]]:
+    return value if isinstance(value, dict) else None
+
+
+def _field(
+    lines: List[str],
+    label: str,
+    value: Any,
+    fmt: Callable[[Any], str] = str,
+) -> None:
+    if value is not None:
+        lines.append(f"- **{label}**: {fmt(value)}")
+
+
+def _append_debug_image(
+    lines: List[str],
+    debug_path: Optional[str],
+    images_dir: str,
+    run_dir: str,
+    copied_paths: Dict[str, str],
+    alt: str,
+) -> None:
+    if not debug_path:
+        return
+    rel_img = _copy_image_for_report(debug_path, images_dir, run_dir, copied_paths)
+    if rel_img:
+        lines.append("")
+        lines.append(f"![{alt}]({rel_img})")
+
+
+def _render_view_metadata(lines: List[str], obj: Dict[str, Any]) -> None:
+    _field(lines, "View level", obj.get("view_level"))
+    bbox = obj.get("view_bbox_level0")
+    if bbox is not None:
+        x0, y0, w, h = bbox
+        lines.append(f"- **BBox (level 0)**: x={x0}, y={y0}, w={w}, h={h}")
+    field_w = obj.get("field_width_um")
+    field_h = obj.get("field_height_um")
+    if field_w is not None and field_h is not None:
+        lines.append(f"- **Approx field size**: ~{field_w:.0f} × {field_h:.0f} µm")
+    _field(lines, "Tissue fraction", obj.get("tissue_fraction"), lambda v: f"{v:.2f}")
+
+
+def _render_header(
+    lines: List[str],
+    ts: str,
     run_prompt: str,
     final_text: str,
-    run_id: Optional[str] = None,
-    reasoning_content: Optional[str] = None,
-) -> str:
-    if run_id is None:
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    else:
-        ts = run_id
-
-    run_dir = os.path.join(REPORT_ROOT_DIR, ts, "wsi_reports")
-    os.makedirs(run_dir, exist_ok=True)
-
-    images_dir = os.path.join(run_dir, "images")
-    os.makedirs(images_dir, exist_ok=True)
-
-    report_path = os.path.join(run_dir, "report.md")
-    text_report_path = os.path.join(run_dir, "report.txt")
-
-    copied_paths: Dict[str, str] = {}
-    lines: List[str] = []
-
+    reasoning_content: Optional[str],
+) -> None:
     lines.append(f"# WSI Agent Report ({ts})\n")
 
     lines.append("## Prompt\n")
@@ -74,168 +102,178 @@ def write_markdown_report(
         lines.append("```")
         lines.append("")
 
+
+def _render_aml_summary(lines: List[str], rois: List[Dict[str, Any]]) -> None:
+    if str(getattr(state, "AGENT_TYPE", "") or "").lower() != "aml":
+        return
+
+    counts: Counter = Counter()
+    for roi in rois:
+        ref = _as_dict(roi.get("aml_reference_evidence"))
+        counts[ref.get("match_label") if ref else None] += 1
+
+    closer_to_bad = counts.get("closer_to_bad", 0)
+    closer_to_good = counts.get("closer_to_good", 0)
+    uncertain = len(rois) - closer_to_bad - closer_to_good
+
+    lines.append("### AML Retrieval Summary\n")
+    lines.append(f"- **ROIs closer to bad-quality ROI examples**: {closer_to_bad}")
+    lines.append(f"- **ROIs closer to good-quality ROI examples**: {closer_to_good}")
+    lines.append(f"- **Uncertain ROIs**: {uncertain}")
+    lines.append("")
+
+
+def _render_aml_reference(lines: List[str], aml_ref: Dict[str, Any]) -> None:
+    match_label = aml_ref.get("match_label")
+    if match_label:
+        lines.append(f"- **AML reference match**: {str(match_label).replace('_', ' ')}")
+    _field(lines, "AML reference summary", aml_ref.get("summary") or None)
+    _field(lines, "Retrieval score", aml_ref.get("retrieval_score"), lambda v: f"{float(v):.3f}")
+    _field(lines, "Nearest bad similarity", aml_ref.get("bad_top1_similarity"), lambda v: f"{float(v):.3f}")
+    _field(lines, "Nearest good similarity", aml_ref.get("good_top1_similarity"), lambda v: f"{float(v):.3f}")
+
+    nearest_bad = _as_dict(aml_ref.get("nearest_bad_ref"))
+    if nearest_bad and nearest_bad.get("name"):
+        lines.append(f"- **Nearest bad exemplar**: {nearest_bad['name']}")
+    nearest_good = _as_dict(aml_ref.get("nearest_good_ref"))
+    if nearest_good and nearest_good.get("name"):
+        lines.append(f"- **Nearest good exemplar**: {nearest_good['name']}")
+
+
+def _render_roi(
+    lines: List[str],
+    roi: Dict[str, Any],
+    images_dir: str,
+    run_dir: str,
+    copied_paths: Dict[str, str],
+) -> None:
+    rid = roi["roi_id"]
+    lines.append(f"### ROI {rid}: {roi['label']}\n")
+    lines.append(f"- **Importance**: {roi.get('importance', 1)}")
+    _field(lines, "Note", roi.get("note") or None)
+    _render_view_metadata(lines, roi)
+    _field(
+        lines,
+        "Effective magnification (approx)",
+        roi.get("effective_magnification"),
+        lambda v: f"~{v:.1f}x",
+    )
+
+    aml_ref = _as_dict(roi.get("aml_reference_evidence"))
+    if aml_ref:
+        _render_aml_reference(lines, aml_ref)
+
+    _append_debug_image(
+        lines, roi.get("debug_path"), images_dir, run_dir, copied_paths, f"ROI {rid}"
+    )
+    lines.append("")
+
+
+def _render_rois(
+    lines: List[str],
+    images_dir: str,
+    run_dir: str,
+    copied_paths: Dict[str, str],
+) -> None:
     lines.append("## Regions of Interest (ROIs)\n")
     if not state._roi_marks:
         lines.append("_No ROIs were kept in this run._\n")
-    else:
-        sorted_rois = sorted(
-            state._roi_marks,
-            key=lambda r: (-int(r.get("importance", 1)), r["roi_id"]),
-        )
-        if str(getattr(state, "AGENT_TYPE", "") or "").lower() == "aml":
-            closer_to_bad = sum(
-                1
-                for roi in sorted_rois
-                if isinstance(roi.get("aml_reference_evidence"), dict)
-                and roi["aml_reference_evidence"].get("match_label") == "closer_to_bad"
+        return
+
+    sorted_rois = sorted(
+        state._roi_marks,
+        key=lambda r: (-int(r.get("importance", 1)), r["roi_id"]),
+    )
+    _render_aml_summary(lines, sorted_rois)
+    for roi in sorted_rois:
+        _render_roi(lines, roi, images_dir, run_dir, copied_paths)
+
+
+def _render_step(
+    lines: List[str],
+    step: Dict[str, Any],
+    images_dir: str,
+    run_dir: str,
+    copied_paths: Dict[str, str],
+) -> None:
+    idx = step["step_index"]
+    lines.append(f"### Step {idx}: `{step['tool']}`\n")
+    lines.append(f"- **Reason**: {step['nav_reason'] or '(no reason provided)'}")
+
+    _render_view_metadata(lines, step)
+    _field(lines, "ROI candidate stage", step.get("roi_candidate_stage") or None)
+    _field(lines, "ROI candidate pipeline", step.get("roi_candidate_pipeline") or None)
+    _field(lines, "Top-K candidates in this view", step.get("roi_candidate_count"))
+    _field(lines, "Candidate source", step.get("roi_candidate_source") or None)
+    _field(lines, "Candidate warning", step.get("roi_candidate_warning") or None)
+
+    index_meta = _as_dict(step.get("roi_candidate_index_meta"))
+    if index_meta:
+        nt = index_meta.get("num_tiles")
+        fd = index_meta.get("feature_dim")
+        ex = index_meta.get("extractor_id")
+        if nt is not None or fd is not None or ex:
+            lines.append(
+                f"- **Candidate index meta**: extractor={ex}, tiles={nt}, feature_dim={fd}"
             )
-            closer_to_good = sum(
-                1
-                for roi in sorted_rois
-                if isinstance(roi.get("aml_reference_evidence"), dict)
-                and roi["aml_reference_evidence"].get("match_label") == "closer_to_good"
-            )
-            uncertain = len(sorted_rois) - closer_to_bad - closer_to_good
-            lines.append("### AML Retrieval Summary\n")
-            lines.append(f"- **ROIs closer to bad-quality ROI examples**: {closer_to_bad}")
-            lines.append(f"- **ROIs closer to good-quality ROI examples**: {closer_to_good}")
-            lines.append(f"- **Uncertain ROIs**: {uncertain}")
-            lines.append("")
-        for roi in sorted_rois:
-            rid = roi["roi_id"]
-            label = roi["label"]
-            note = roi.get("note", "")
-            importance = roi.get("importance", 1)
-            bbox0 = roi.get("view_bbox_level0")
-            level = roi.get("view_level")
-            eff_mag = roi.get("effective_magnification")
-            field_w = roi.get("field_width_um")
-            field_h = roi.get("field_height_um")
-            tf = roi.get("tissue_fraction")
-            debug_path = roi.get("debug_path")
-            aml_ref = roi.get("aml_reference_evidence") if isinstance(roi.get("aml_reference_evidence"), dict) else None
 
-            lines.append(f"### ROI {rid}: {label}\n")
-            lines.append(f"- **Importance**: {importance}")
-            if note:
-                lines.append(f"- **Note**: {note}")
-            if level is not None:
-                lines.append(f"- **View level**: {level}")
-            if bbox0 is not None:
-                x0, y0, w, h = bbox0
-                lines.append(f"- **BBox (level 0)**: x={x0}, y={y0}, w={w}, h={h}")
-            if field_w is not None and field_h is not None:
-                lines.append(
-                    f"- **Approx field size**: ~{field_w:.0f} × {field_h:.0f} µm"
-                )
-            if tf is not None:
-                lines.append(f"- **Tissue fraction**: {tf:.2f}")
-            if eff_mag is not None:
-                lines.append(f"- **Effective magnification (approx)**: ~{eff_mag:.1f}x")
-            if aml_ref:
-                match_label = aml_ref.get("match_label")
-                summary = aml_ref.get("summary")
-                bad_top1 = aml_ref.get("bad_top1_similarity")
-                good_top1 = aml_ref.get("good_top1_similarity")
-                retrieval_score = aml_ref.get("retrieval_score")
-                nearest_bad = aml_ref.get("nearest_bad_ref") if isinstance(aml_ref.get("nearest_bad_ref"), dict) else None
-                nearest_good = aml_ref.get("nearest_good_ref") if isinstance(aml_ref.get("nearest_good_ref"), dict) else None
-                if match_label:
-                    lines.append(f"- **AML reference match**: {str(match_label).replace('_', ' ')}")
-                if summary:
-                    lines.append(f"- **AML reference summary**: {summary}")
-                if retrieval_score is not None:
-                    lines.append(f"- **Retrieval score**: {float(retrieval_score):.3f}")
-                if bad_top1 is not None:
-                    lines.append(f"- **Nearest bad similarity**: {float(bad_top1):.3f}")
-                if good_top1 is not None:
-                    lines.append(f"- **Nearest good similarity**: {float(good_top1):.3f}")
-                if nearest_bad and nearest_bad.get("name"):
-                    lines.append(f"- **Nearest bad exemplar**: {nearest_bad['name']}")
-                if nearest_good and nearest_good.get("name"):
-                    lines.append(f"- **Nearest good exemplar**: {nearest_good['name']}")
+    dims = step.get("view_image_dims")
+    if dims is not None:
+        lines.append(f"- **View image size**: {dims[0]}×{dims[1]} px")
 
-            if debug_path:
-                rel_img = _copy_image_for_report(
-                    debug_path, images_dir, run_dir, copied_paths
-                )
-                if rel_img:
-                    lines.append("")
-                    lines.append(f"![ROI {rid}]({rel_img})")
-            lines.append("")
+    _append_debug_image(
+        lines, step.get("debug_path"), images_dir, run_dir, copied_paths, f"Step {idx}"
+    )
+    lines.append("")
 
+
+def _render_steps(
+    lines: List[str],
+    images_dir: str,
+    run_dir: str,
+    copied_paths: Dict[str, str],
+) -> None:
     lines.append("## Navigation Steps\n")
     if not state._step_log:
         lines.append("_No navigation steps recorded._\n")
-    else:
-        for step in state._step_log:
-            idx = step["step_index"]
-            tool = step["tool"]
-            nav_reason = step["nav_reason"] or "(no reason provided)"
-            bbox = step.get("view_bbox_level0")
-            view_level = step.get("view_level")
-            dims = step.get("view_image_dims")
-            debug_path = step.get("debug_path")
-            field_w = step.get("field_width_um")
-            field_h = step.get("field_height_um")
-            tf = step.get("tissue_fraction")
-            roi_candidate_count = step.get("roi_candidate_count")
-            roi_candidate_source = step.get("roi_candidate_source")
-            roi_candidate_warning = step.get("roi_candidate_warning")
-            roi_candidate_stage = step.get("roi_candidate_stage")
-            roi_candidate_pipeline = step.get("roi_candidate_pipeline")
-            roi_candidate_index_meta = step.get("roi_candidate_index_meta")
+        return
+    for step in state._step_log:
+        _render_step(lines, step, images_dir, run_dir, copied_paths)
 
-            lines.append(f"### Step {idx}: `{tool}`\n")
-            lines.append(f"- **Reason**: {nav_reason}")
-            if view_level is not None:
-                lines.append(f"- **View level**: {view_level}")
-            if bbox is not None:
-                x0, y0, w, h = bbox
-                lines.append(f"- **BBox (level 0)**: x={x0}, y={y0}, w={w}, h={h}")
-            if field_w is not None and field_h is not None:
-                lines.append(
-                    f"- **Approx field size**: ~{field_w:.0f} × {field_h:.0f} µm"
-                )
-            if tf is not None:
-                lines.append(f"- **Tissue fraction**: {tf:.2f}")
-            if roi_candidate_stage:
-                lines.append(f"- **ROI candidate stage**: {roi_candidate_stage}")
-            if roi_candidate_pipeline:
-                lines.append(f"- **ROI candidate pipeline**: {roi_candidate_pipeline}")
-            if roi_candidate_count is not None:
-                lines.append(f"- **Top-K candidates in this view**: {roi_candidate_count}")
-            if roi_candidate_source:
-                lines.append(f"- **Candidate source**: {roi_candidate_source}")
-            if roi_candidate_warning:
-                lines.append(f"- **Candidate warning**: {roi_candidate_warning}")
-            if isinstance(roi_candidate_index_meta, dict):
-                nt = roi_candidate_index_meta.get("num_tiles")
-                fd = roi_candidate_index_meta.get("feature_dim")
-                ex = roi_candidate_index_meta.get("extractor_id")
-                if nt is not None or fd is not None or ex:
-                    lines.append(
-                        f"- **Candidate index meta**: extractor={ex}, tiles={nt}, feature_dim={fd}"
-                    )
-            if dims is not None:
-                lines.append(f"- **View image size**: {dims[0]}×{dims[1]} px")
 
-            if debug_path:
-                rel_img = _copy_image_for_report(
-                    debug_path, images_dir, run_dir, copied_paths
-                )
-                if rel_img:
-                    lines.append("")
-                    lines.append(f"![Step {idx}]({rel_img})")
-            lines.append("")
-
-    with open(report_path, "w") as f:
-        f.write("\n".join(lines))
-
-    with open(text_report_path, "w") as f:
+def _write_text_report(path: str, run_prompt: str, final_text: str) -> None:
+    with open(path, "w") as f:
         f.write("Prompt\n")
         f.write(run_prompt.strip() + "\n\n")
         f.write("Final Report\n")
         f.write(final_text.strip() + "\n")
+
+
+def write_markdown_report(
+    run_prompt: str,
+    final_text: str,
+    run_id: Optional[str] = None,
+    reasoning_content: Optional[str] = None,
+) -> str:
+    ts = run_id if run_id is not None else datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    run_dir = os.path.join(REPORT_ROOT_DIR, ts, "wsi_reports")
+    images_dir = os.path.join(run_dir, "images")
+    os.makedirs(images_dir, exist_ok=True)
+
+    report_path = os.path.join(run_dir, "report.md")
+    text_report_path = os.path.join(run_dir, "report.txt")
+
+    copied_paths: Dict[str, str] = {}
+    lines: List[str] = []
+
+    _render_header(lines, ts, run_prompt, final_text, reasoning_content)
+    _render_rois(lines, images_dir, run_dir, copied_paths)
+    _render_steps(lines, images_dir, run_dir, copied_paths)
+
+    with open(report_path, "w") as f:
+        f.write("\n".join(lines))
+
+    _write_text_report(text_report_path, run_prompt, final_text)
 
     return report_path

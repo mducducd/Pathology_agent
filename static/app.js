@@ -8,7 +8,6 @@
   const uploadActionOptions = Array.from(document.querySelectorAll(".upload-action-option"));
   const uploadActionTip = document.getElementById("upload-action-tip");
   const themeToggle = document.getElementById("theme-toggle");
-  const themeToggleLabel = document.getElementById("theme-toggle-label");
 
   const btnClear = document.getElementById("btn-clear");
   const btnStart = document.getElementById("btn-start");
@@ -16,7 +15,6 @@
   const filelist = document.getElementById("filelist");
   const filelistMeta = document.getElementById("filelist-meta");
   const validationEl = document.getElementById("validation");
-  const modePill = document.getElementById("mode-pill");
 
   const promptEl = document.getElementById("prompt");
   const agentSelect = document.getElementById("agent-select");
@@ -61,7 +59,6 @@
   const overviewEmpty = document.getElementById("overview-empty");
   const darkImg = document.getElementById("dark-img");
   const darkCanvas = document.getElementById("dark-canvas");
-  const darkEmpty = document.getElementById("dark-empty");
   const btnDarkToggle = document.getElementById("btn-dark-toggle");
   const finalSection = document.getElementById("final-section");
   const finalText = document.getElementById("final-text");
@@ -225,9 +222,6 @@
   function applyTheme(theme, persist = false) {
     const nextTheme = normalizedTheme(theme) || "light";
     document.documentElement.dataset.theme = nextTheme;
-    if (themeToggleLabel) {
-      themeToggleLabel.textContent = nextTheme === "dark" ? "Dark" : "Light";
-    }
     if (themeToggle) {
       const nextLabel = nextTheme === "dark" ? "Switch to light theme" : "Switch to dark theme";
       themeToggle.setAttribute("aria-label", nextLabel);
@@ -521,8 +515,6 @@
     viewerRightMin: 260,
   };
   const OVERVIEW_EMPTY_TEXT = "No overview yet. Upload a slide and start a run.";
-  const DARK_EMPTY_OFF_TEXT = "Click Show to run dark-region detection.";
-  const DARK_EMPTY_LOADING_TEXT = "Preparing dark-region view…";
   let layoutResizeRaf = null;
 
   function isCompactLayout() {
@@ -981,6 +973,7 @@
   }
 
   function renderFinalReportMarkdown(markdownText, waiting = false) {
+    if (!finalText) return;
     finalText.classList.toggle("waiting", !!waiting);
     const source = String(markdownText || "").trim();
     if (!source) {
@@ -1023,6 +1016,31 @@
     }
   }
 
+  function reportHrefFromPath(reportPath) {
+    const relPath = String(reportPath || "")
+      .replace(/.*outputs[\\/]/, "")
+      .split(/[\\/]+/)
+      .filter(Boolean)
+      .map(encodeURIComponent)
+      .join("/");
+    return relPath ? `/reports/${relPath}` : "";
+  }
+
+  function setReportLink(href) {
+    if (!reportLink) return;
+    reportLink.textContent = "";
+    if (!href) return;
+
+    const label = document.createTextNode("Report: ");
+    const anchor = document.createElement("a");
+    anchor.href = href;
+    anchor.target = "_blank";
+    anchor.rel = "noreferrer";
+    anchor.textContent = "open Markdown report";
+    reportLink.appendChild(label);
+    reportLink.appendChild(anchor);
+  }
+
   function extOf(name) {
     const i = name.lastIndexOf(".");
     if (i < 0) return "";
@@ -1057,13 +1075,6 @@
     overviewEmpty.hidden = !String(message || "").trim();
   }
 
-  function setDarkEmptyState(message) {
-    if (!darkEmpty) return;
-    const text = String(message || "").trim();
-    darkEmpty.textContent = text;
-    darkEmpty.hidden = !text;
-  }
-
   function applyOverviewDisplaySource() {
     const nextSrc = baseOverviewImageUrl || "";
 
@@ -1088,7 +1099,6 @@
     darkImg.hidden = true;
     darkImg.src = "";
     darkMaskMode = false;
-    setDarkEmptyState(darkRegionsEnabled ? DARK_EMPTY_LOADING_TEXT : DARK_EMPTY_OFF_TEXT);
     darkBoxes = [];
     const ctx = darkCanvas.getContext("2d");
     ctx.clearRect(0, 0, darkCanvas.width, darkCanvas.height);
@@ -1330,8 +1340,8 @@
     const v = validation || computeModeAndValidation();
     if (btnStart) {
       btnStart.textContent = v.startLabel || "Start run";
+      btnStart.disabled = !v.ok || isRunBusyStatus(activeRunStatus);
     }
-    btnStart.disabled = !v.ok || isRunBusyStatus(activeRunStatus);
     syncStatusPillVisibility(activeRunStatus || "idle");
     syncTerminateButtonState();
   }
@@ -1424,7 +1434,6 @@
     }
 
     const v = computeModeAndValidation();
-    setPill(modePill, v.level === "idle" ? "idle" : v.level, v.mode);
     validationEl.className = "validation " + (v.level === "good" ? "ok" : v.level === "warn" ? "warn" : v.level === "idle" ? "" : "bad");
     validationEl.textContent = v.msg;
 
@@ -2765,15 +2774,16 @@
       else setReasoningContent("");
 
       if (run.report_path) {
-        const relPath = run.report_path.replace(/.*outputs[\\/]/, "");
-        const href = `/reports/${relPath}`;
-        reportLink.innerHTML = `Report: <a href="${href}" target="_blank" rel="noreferrer">open Markdown report</a>`;
-        if (href !== currentReportHref) {
+        const href = reportHrefFromPath(run.report_path);
+        setReportLink(href);
+        if (href && href !== currentReportHref) {
           currentReportHref = href;
           fetchAndRenderReport(href, run.final_output || "");
+        } else if (!href) {
+          currentReportHref = null;
         }
       } else {
-        reportLink.textContent = "";
+        setReportLink("");
         currentReportHref = null;
       }
 
@@ -2946,14 +2956,12 @@
         renderOverviewRoiOverlay();
       };
       darkImg.src = overlayUrl;
-      setDarkEmptyState(darkMaskMode ? "Showing refined mask in Overview." : "Showing coarse boxes in Overview.");
       applyOverviewDisplaySource();
     } catch (e) {
       darkRegionsLoaded = false;
       darkImg.hidden = true;
       darkImg.src = "";
       darkMaskMode = false;
-      setDarkEmptyState(String(e && e.message ? e.message : e));
       applyOverviewDisplaySource();
     }
   }

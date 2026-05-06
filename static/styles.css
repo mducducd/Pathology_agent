@@ -390,35 +390,15 @@ body.is-resizing *{
   transition: border-color .2s ease, box-shadow .2s ease;
 }
 
-.panel-card > *:not(.card-head),
+.panel-card > *,
 .panel-card > .sticky-card-body > *:not(.viewer-grid){
   padding-left: 6px;
   padding-right: 6px;
 }
 
-.panel-card > .card-head + *,
-.panel-card > .card-head + .sticky-card-body > *:first-child{
-  padding-top: 8px;
-}
-
 .card.is-running{
   border-color: transparent;
   box-shadow: inset 3px 0 0 var(--accent);
-}
-
-.card-head{
-  display:flex;
-  align-items:center;
-  justify-content:space-between;
-  gap:10px;
-  padding: 9px 6px;
-  border-bottom:1px solid var(--hairline);
-  position: sticky;
-  top: 0;
-  z-index: 4;
-  background: inherit;
-  will-change: transform;
-  transform: translateZ(0);
 }
 
 h2{
@@ -1211,12 +1191,6 @@ textarea:focus{
   gap:12px;
 }
 
-.left-card-flex{
-  /* no special flex needed — sticky-card handles scroll */
-}
-.left-card-scroll{
-  /* no special flex needed */
-}
 .run-actions{
   position: sticky;
   bottom: -6px;
@@ -1254,12 +1228,6 @@ textarea:focus{
   margin-right: -6px;
   padding-left: 6px;
   padding-right: 6px;
-}
-
-.status-head-right{
-  display:flex;
-  align-items:center;
-  gap:8px;
 }
 
 .status-actions{
@@ -1857,10 +1825,6 @@ textarea:focus{
   animation: fade-up .24s ease;
 }
 
-.topbar-copy{
-  display: none;
-}
-
 @media (max-width: 1420px){
   .workbench{
     --left-col: 285px;
@@ -1877,12 +1841,6 @@ textarea:focus{
 @media (max-width: 1160px){
   .topbar{
     padding:10px 12px;
-  }
-  .brand-tagline{
-    display:none;
-  }
-  .theme-toggle{
-    min-width:0;
   }
   .workbench{
     grid-template-columns: 1fr;
@@ -1945,7 +1903,6 @@ textarea:focus{
   .explorer-entry-actions{
     flex-direction: column;
   }
-  .topbar-copy{ display:none; }
 }
 
 @media (prefers-reduced-motion: reduce){

@@ -5,7 +5,7 @@ Usage:
     python evaluate/run_single_slide.py \
         --slide /path/to/patient.mrxs \
         --output-dir ./batch_outputs \
-        [--model GPT-OSS-120B] \
+        [--model GLM-4.6V-FP8] \
         [--extractor uni2] \
         [--experiment-root ./batch_outputs] \
         [--tile-filter hybrid]
@@ -590,7 +590,7 @@ def main() -> int:
         default=None,
         help="Set CUDA_VISIBLE_DEVICES for this run, e.g. 1",
     )
-    parser.add_argument("--model", default="GPT-OSS-120B", help="VLM model name")
+    parser.add_argument("--model", default="GLM-4.6V-FP8", help="VLM model name")
     parser.add_argument("--extractor", default="uni2", help="Feature extractor key")
     parser.add_argument("--tile-filter", default="hybrid", help="Tile prefilter method")
     parser.add_argument("--agent", default="aml", help="Agent mode (e.g. aml, wsi)")

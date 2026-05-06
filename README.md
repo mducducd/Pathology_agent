@@ -79,7 +79,7 @@ Run one slide without the web UI:
 .venv/bin/python evaluate/run_single_slide.py \
     --slide /path/to/patient.mrxs \
     --output-dir ./batch_outputs \
-    --model GPT-OSS-120B \
+    --model GLM-4.6V-FP8 \
     --extractor reddino_large \
     --tile-filter hybrid \
     --tile-size-px 224 \
@@ -89,7 +89,7 @@ Run one slide without the web UI:
 
 Useful flags:
 
-- `--model`: VLM name, for example `GPT-OSS-120B`, `gemma-4-31B-it`, `Qwen3.5-397B-A17B-FP8`, `GLM-4.6V-FP8`
+- `--model`: VLM name, for example `GLM-4.6V-FP8`, `gemma-4-31B-it`, `Qwen3.5-397B-A17B-FP8`
 - `--extractor`: embedding extractor key such as `uni2`, `h_optimus_1`, `virchow2`, `dinobloom`, `dinobloom_giant`, `reddino`, `reddino_base`, `reddino_large`
 - `--tile-filter`: one of `hybrid`, `quality`, `coarse`, `none`
 - `--experiment-root`: shared cache/output root for repeated runs

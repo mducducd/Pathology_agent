@@ -58,9 +58,6 @@ _EMBEDDING_EXTRACTOR_DISPLAY_NAMES = {
     "reddino": "RedDino-Small",
     "reddino_base": "RedDino-base",
     "reddino_large": "RedDino-large",
-    "uni2_onnx": "UNI2-h (ONNX)",
-    "dinobloom_onnx": "DinoBloom-S (ONNX)",
-    "reddino_onnx": "RedDino-Small (ONNX)",
 }
 _EMBEDDING_EXTRACTOR_DEFAULT_IDENTIFIERS = {
     "uni2": "UNI2-h",
@@ -73,37 +70,15 @@ _EMBEDDING_EXTRACTOR_DEFAULT_IDENTIFIERS = {
     "reddino": "RedDino-Small",
     "reddino_base": "RedDino-base",
     "reddino_large": "RedDino-large",
-    "uni2_onnx": "ONNX-uni2",
-    "dinobloom_onnx": "ONNX-dinobloom",
-    "reddino_onnx": "ONNX-reddino",
 }
-
-# ONNX Runtime extractors (lazy loaded to avoid dependency if not used)
-def _get_onnx_extractors() -> dict[str, Callable[[], Any]]:
-    """Lazy load ONNX extractors if onnxruntime is available."""
-    try:
-        from .extractors.onnx_runtime import dinobloom_onnx, reddino_onnx, uni2_onnx
-        return {
-            "uni2_onnx": uni2_onnx,
-            "dinobloom_onnx": dinobloom_onnx,
-            "reddino_onnx": reddino_onnx,
-        }
-    except ImportError:
-        return {}
 
 
 def available_embedding_extractors() -> tuple[str, ...]:
-    """Return list of available extractor names including ONNX variants."""
-    base_extractors = tuple(_EMBEDDING_EXTRACTOR_BUILDERS.keys())
-    onnx_extractors = tuple(_get_onnx_extractors().keys())
-    return base_extractors + onnx_extractors
+    return tuple(_EMBEDDING_EXTRACTOR_BUILDERS.keys())
 
 
 def normalize_embedding_extractor_name(name: str | None) -> str:
     key = (name or DEFAULT_EMBEDDING_EXTRACTOR).strip().lower()
-    if key.endswith("_onnx"):
-        if key in _get_onnx_extractors():
-            return key
     if key not in _EMBEDDING_EXTRACTOR_BUILDERS:
         raise ValueError(
             "extractor_name must be one of: " + ", ".join(sorted(available_embedding_extractors()))
@@ -113,17 +88,6 @@ def normalize_embedding_extractor_name(name: str | None) -> str:
 
 def get_embedding_extractor(name: str | None) -> Any:
     key = normalize_embedding_extractor_name(name)
-
-    # Handle ONNX variants
-    if key.endswith("_onnx"):
-        onnx_extractors = _get_onnx_extractors()
-        if key not in onnx_extractors:
-            raise RuntimeError(
-                f"ONNX extractor '{key}' requested but onnxruntime not available. "
-                "Install with: pip install onnxruntime-gpu"
-            )
-        return onnx_extractors[key]()
-
     return _EMBEDDING_EXTRACTOR_BUILDERS[key]()
 
 

@@ -439,10 +439,6 @@ tiles for the embedding extractor.
 The first pass builds one thumbnail cell per supertile. A supertile is
 foreground when:
 
-```text
-thumbnail_gray < ROI_INDEX_BUILD_BRIGHTNESS_CUTOFF
-```
-
 OpenSlide non-empty bounds, when present, further restrict the grid.
 
 When coarse or hybrid filtering is enabled, each foreground supertile receives a

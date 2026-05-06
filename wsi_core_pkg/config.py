@@ -1,7 +1,7 @@
 import os
+from typing import Callable, TypeVar
 
 from dotenv import load_dotenv
-from .tuning_config import tuning_value
 from openai import AsyncOpenAI, OpenAI
 
 from agents import (
@@ -11,29 +11,26 @@ from agents import (
     set_tracing_disabled,
 )
 
-# ---------------------------------------------------------------------
-# CONFIG
-# ---------------------------------------------------------------------
+from .tuning_config import tuning_value
 
 load_dotenv()
 
-DEFAULT_SLIDE_PATH = os.path.abspath(os.getenv("DEFAULT_SLIDE_PATH") or str(tuning_value("agent", "DEFAULT_SLIDE_PATH") or "341476.svs"))
-MODEL_NAME = os.getenv("MODEL_NAME") or str(tuning_value("agent", "MODEL_NAME") or "GPT-OSS-120B")
+# ---------- helpers ----------
 
-_api_key = os.getenv("OPENAI_API_KEY") or str(tuning_value("agent", "OPENAI_API_KEY") or "local")
-_api_base = os.getenv("OPENAI_API_BASE") or str(tuning_value("agent", "OPENAI_API_BASE") or "http://pluto/v1")
+T = TypeVar("T")
 
-client_async = AsyncOpenAI(api_key=_api_key, base_url=_api_base)
-client_sync = OpenAI(api_key=_api_key, base_url=_api_base)
 
-set_default_openai_client(client_async)
-set_default_openai_api("chat_completions")
-set_tracing_disabled(True)
+def _cfg(key: str, section: str, default: T, cast: Callable[[object], T] = str) -> T:  # type: ignore[assignment]
+    env = os.getenv(key)
+    if env is not None and env != "":
+        return cast(env)
+    tv = tuning_value(section, key)
+    if tv is not None and tv != "":
+        return cast(tv)
+    return cast(default)
 
-MAX_IMG_DIM = int(os.getenv("MAX_IMG_DIM", "") or tuning_value("agent", "MAX_IMG_DIM") or 1024)
-MAX_NATIVE_VIEW_DIM = int(os.getenv("MAX_NATIVE_VIEW_DIM", "") or tuning_value("agent", "MAX_NATIVE_VIEW_DIM") or 4096)
-MAX_TURNS = int(os.getenv("MAX_TURNS", "") or tuning_value("agent", "MAX_TURNS") or 140)
-def _tv_bool(section: str, key: str, default: bool) -> bool:
+
+def _cfg_bool(section: str, key: str, default: bool) -> bool:
     try:
         v = tuning_value(section, key)
         if isinstance(v, bool):
@@ -42,48 +39,64 @@ def _tv_bool(section: str, key: str, default: bool) -> bool:
     except Exception:
         return default
 
-WSI_AGENT_TEMPERATURE = float(os.getenv("WSI_AGENT_TEMPERATURE") or tuning_value("agent", "WSI_AGENT_TEMPERATURE") or 0.9)
-ENABLE_THINKING = _tv_bool("agent", "ENABLE_THINKING", False)
 
-TILE_SIZE_UM = float(os.getenv("TILE_SIZE_UM", "") or tuning_value("agent", "TILE_SIZE_UM") or 256.0)
-TILE_PX = int(os.getenv("TILE_PX", "") or tuning_value("agent", "TILE_PX") or 224)
-MAX_GOOD_TILES = int(os.getenv("MAX_GOOD_TILES", "") or tuning_value("agent", "MAX_GOOD_TILES") or 200)
-MAX_BAD_TILES = int(os.getenv("MAX_BAD_TILES", "") or tuning_value("agent", "MAX_BAD_TILES") or 50)
+def _path_cfg(key: str, section: str, default: str) -> str:
+    return os.path.abspath(_cfg(key, section, default))
+
+
+# ---------- model / API ----------
+
+DEFAULT_SLIDE_PATH = _path_cfg("DEFAULT_SLIDE_PATH", "agent", "341476.svs")
+MODEL_NAME = _cfg("MODEL_NAME", "agent", "GLM-4.6V-FP8")
+
+_api_key = _cfg("OPENAI_API_KEY", "agent", "local")
+_api_base = _cfg("OPENAI_API_BASE", "agent", "http://pluto/v1")
+
+client_async = AsyncOpenAI(api_key=_api_key, base_url=_api_base)
+client_sync = OpenAI(api_key=_api_key, base_url=_api_base)
+
+set_default_openai_client(client_async)
+set_default_openai_api("chat_completions")
+set_tracing_disabled(True)
+
+# ---------- agent tuning ----------
+
+MAX_IMG_DIM = _cfg("MAX_IMG_DIM", "agent", 1024, int)
+MAX_NATIVE_VIEW_DIM = _cfg("MAX_NATIVE_VIEW_DIM", "agent", 4096, int)
+MAX_TURNS = _cfg("MAX_TURNS", "agent", 140, int)
+WSI_AGENT_TEMPERATURE = _cfg("WSI_AGENT_TEMPERATURE", "agent", 0.9, float)
+ENABLE_THINKING = _cfg_bool("agent", "ENABLE_THINKING", False)
+
+# ---------- tile / embedding ----------
+
+TILE_SIZE_UM = _cfg("TILE_SIZE_UM", "agent", 256.0, float)
+TILE_PX = _cfg("TILE_PX", "agent", 224, int)
+MAX_GOOD_TILES = _cfg("MAX_GOOD_TILES", "agent", 200, int)
+MAX_BAD_TILES = _cfg("MAX_BAD_TILES", "agent", 50, int)
 DEFAULT_MPP_UM = float(tuning_value("tools.slide", "DEFAULT_MPP_UM"))
 
-OUTPUTS_ROOT_DIR = os.path.abspath(os.getenv("OUTPUTS_ROOT_DIR") or str(tuning_value("agent", "OUTPUTS_ROOT_DIR") or "./outputs"))
+# ---------- output directories ----------
+
+OUTPUTS_ROOT_DIR = _path_cfg("OUTPUTS_ROOT_DIR", "agent", "./outputs")
 os.makedirs(OUTPUTS_ROOT_DIR, exist_ok=True)
 
 DEBUG_ROOT_DIR = OUTPUTS_ROOT_DIR
-os.makedirs(DEBUG_ROOT_DIR, exist_ok=True)
-
 REPORT_ROOT_DIR = OUTPUTS_ROOT_DIR
-os.makedirs(REPORT_ROOT_DIR, exist_ok=True)
-
 SELECTED_TILES_ROOT = OUTPUTS_ROOT_DIR
-os.makedirs(SELECTED_TILES_ROOT, exist_ok=True)
 
-EXAMPLE_TILES_ROOT = os.path.abspath(os.getenv("EXAMPLE_TILES_ROOT") or str(tuning_value("agent", "EXAMPLE_TILES_ROOT") or "./Selected_Tiles"))
+# ---------- example tiles / ROIs ----------
+
+EXAMPLE_TILES_ROOT = _path_cfg("EXAMPLE_TILES_ROOT", "agent", "./Selected_Tiles")
 EXAMPLE_TILES_GOOD_DIR = os.path.join(EXAMPLE_TILES_ROOT, "Good_Tiles")
 EXAMPLE_TILES_BAD_DIR = os.path.join(EXAMPLE_TILES_ROOT, "Bad_Tiles")
-EXAMPLE_TILES_MAX_PER_CLASS = int(os.getenv("EXAMPLE_TILES_MAX_PER_CLASS") or tuning_value("agent", "EXAMPLE_TILES_MAX_PER_CLASS") or 2)
+EXAMPLE_TILES_MAX_PER_CLASS = _cfg("EXAMPLE_TILES_MAX_PER_CLASS", "agent", 2, int)
 
-_example_rois_root = os.path.abspath(os.getenv("EXAMPLE_ROIS_ROOT") or str(tuning_value("agent", "EXAMPLE_ROIS_ROOT") or "./Example_ROIs"))
+_example_rois_root = _path_cfg("EXAMPLE_ROIS_ROOT", "agent", "./Example_ROIs")
 EXAMPLE_ROIS_POS_DIR = os.path.join(_example_rois_root, "ROI")
 EXAMPLE_ROIS_NEG_DIR = os.path.join(_example_rois_root, "Non_ROI")
-EXAMPLE_ROIS_MAX_PER_CLASS = int(os.getenv("EXAMPLE_ROIS_MAX_PER_CLASS") or tuning_value("agent", "EXAMPLE_ROIS_MAX_PER_CLASS") or 2)
+EXAMPLE_ROIS_MAX_PER_CLASS = _cfg("EXAMPLE_ROIS_MAX_PER_CLASS", "agent", 2, int)
 
-def _tv_int(section: str, key: str, default: int) -> int:
-    env = os.getenv(key)
-    if env is not None:
-        try:
-            return int(env)
-        except Exception:
-            pass
-    try:
-        return int(tuning_value(section, key))
-    except Exception:
-        return default
+# ---------- context injection ----------
 
-CONTEXT_PREVIOUS_VIEWS_MAX = _tv_int("context_injection.candidates", "CONTEXT_PREVIOUS_VIEWS_MAX", 0)
-CONTEXT_ROI_CANDIDATE_LINES_MAX = _tv_int("context_injection.candidates", "CONTEXT_ROI_CANDIDATE_LINES_MAX", 8)
+CONTEXT_PREVIOUS_VIEWS_MAX = _cfg("CONTEXT_PREVIOUS_VIEWS_MAX", "context_injection.candidates", 0, int)
+CONTEXT_ROI_CANDIDATE_LINES_MAX = _cfg("CONTEXT_ROI_CANDIDATE_LINES_MAX", "context_injection.candidates", 8, int)

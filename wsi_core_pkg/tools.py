@@ -109,10 +109,6 @@ ROI_QUALITY_PREFILTER_RANDOM_RESERVE_RATIO = _tools_float("ROI_QUALITY_PREFILTER
 _cache_root_from_config = _tools_str("CACHE_ROOT_DIR", "tools.cache", "")
 CACHE_ROOT_DIR = os.getenv("CACHE_ROOT_DIR", _cache_root_from_config).strip() or os.path.abspath("./outputs/_cache")
 
-ROI_TILE_CACHE_DIR = os.getenv("ROI_TILE_CACHE_DIR", "").strip()
-if not ROI_TILE_CACHE_DIR:
-    ROI_TILE_CACHE_DIR = os.path.join(CACHE_ROOT_DIR, "feature_cache")
-
 ROI_FEATURE_CACHE_DIR = os.getenv("ROI_FEATURE_CACHE_DIR", "").strip()
 if not ROI_FEATURE_CACHE_DIR:
     ROI_FEATURE_CACHE_DIR = os.path.join(CACHE_ROOT_DIR, "feature_cache")

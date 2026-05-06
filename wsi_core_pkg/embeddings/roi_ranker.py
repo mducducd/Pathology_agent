@@ -42,7 +42,7 @@ AML_REFERENCE_HNSW_EF_CONSTRUCTION = int(ROI_RANKER_REFERENCE_HNSW_CFG["AML_REFE
 AML_REFERENCE_HNSW_EF_SEARCH = int(ROI_RANKER_REFERENCE_HNSW_CFG["AML_REFERENCE_HNSW_EF_SEARCH"])
 AML_REFERENCE_USE_HNSW = bool(ROI_RANKER_REFERENCE_HNSW_CFG["AML_REFERENCE_USE_HNSW"])
 AML_REFERENCE_EMBEDDING_CACHE = bool(ROI_RANKER_REFERENCE_HNSW_CFG["AML_REFERENCE_EMBEDDING_CACHE"])
-AML_REFERENCE_CACHE_DIR = str(ROI_RANKER_REFERENCE_HNSW_CFG["AML_REFERENCE_CACHE_DIR"])
+AML_REFERENCE_CACHE_DIR = str(ROI_RANKER_REFERENCE_HNSW_CFG.get("AML_REFERENCE_CACHE_DIR", ""))
 
 # Module-level cache for HNSW reference index
 _reference_hnsw_index: hnswlib.Index | None = None
@@ -87,7 +87,6 @@ AML_QUALITY_REJECT_MARGIN = float(ROI_RANKER_REFERENCE_SCORING_CFG["AML_QUALITY_
 AML_BLAST_CELLS_ROOT = str(ROI_RANKER_BLAST_CFG["AML_BLAST_CELLS_ROOT"])
 AML_BLAST_SIMILARITY_WEIGHT = float(ROI_RANKER_BLAST_CFG["AML_BLAST_SIMILARITY_WEIGHT"])
 AML_BLAST_TOP_K = int(ROI_RANKER_BLAST_CFG["AML_BLAST_TOP_K"])
-AML_ENABLE_BLAST_REFERENCES = bool(ROI_RANKER_BLAST_CFG["AML_ENABLE_BLAST_REFERENCES"])
 
 # Cache for blast cell embeddings
 _blast_features: npt.NDArray[np.float32] | None = None
@@ -98,7 +97,6 @@ _blast_extractor_id: str | None = None
 # These filters remove low-quality, out-of-domain candidates EARLY to reduce VLM token count
 VLLM_PREFILTER_ENABLED = bool(ROI_RANKER_VLLM_CFG["VLLM_PREFILTER_ENABLED"])
 VLLM_MAX_CANDIDATES = int(ROI_RANKER_VLLM_CFG["VLLM_MAX_CANDIDATES"])
-VLLM_MIN_DARK_SCORE = float(ROI_RANKER_VLLM_CFG["VLLM_MIN_DARK_SCORE"])
 VLLM_BAD_LIKE_REJECT = bool(ROI_RANKER_VLLM_CFG["VLLM_BAD_LIKE_REJECT"])
 AML_VLLM_GOOD_SUPPORT_EXEMPTION_TOP1_MIN = float(ROI_RANKER_VLLM_CFG["AML_VLLM_GOOD_SUPPORT_EXEMPTION_TOP1_MIN"])
 AML_SUPPORT_GOOD_TOP1_FLOOR = float(SHARED_AML_SUPPORT_CFG["AML_SUPPORT_GOOD_TOP1_FLOOR"])
@@ -1932,20 +1930,17 @@ def _prefilter_candidates_for_vllm(
     candidates: list[dict[str, Any]],
     *,
     max_candidates: int = VLLM_MAX_CANDIDATES,
-    min_dark_score: float = VLLM_MIN_DARK_SCORE,
     reject_bad_like: bool = VLLM_BAD_LIKE_REJECT,
 ) -> list[dict[str, Any]]:
     """Pre-filter ROI candidates before sending to VLM.
 
     This reduces token count and prevents VLM confusion from:
-    - Low-cellularity tiles (acellular debris, empty background)
     - Bad-like tiles (already classified as non-diagnostic)
     - Redundant overlapping candidates
 
     Args:
         candidates: Raw ranked candidate list from select_topk_candidates_for_view
         max_candidates: Maximum number of candidates to send to VLM
-        min_dark_score: Minimum dark_roi_score (cellularity) threshold
         reject_bad_like: Whether to reject candidates with quality_hint='bad_like'
 
     Returns:
@@ -1959,13 +1954,6 @@ def _prefilter_candidates_for_vllm(
         # HARD REJECT: bad_like tiles are non-diagnostic
         if reject_bad_like and cand.get("quality_hint") == "bad_like":
             continue
-
-        # HARD REJECT: low cellularity tiles (acellular/background)
-        dark_score = cand.get("dark_roi_score")
-        if dark_score is not None and dark_score < min_dark_score:
-            # Exception: keep if good_support evidence exists
-            if cand.get("good_top1_similarity", 0.0) < AML_VLLM_GOOD_SUPPORT_EXEMPTION_TOP1_MIN:
-                continue
 
         filtered.append(cand)
 
@@ -2305,6 +2293,5 @@ __all__ = [
     # VLLM optimization config
     "VLLM_PREFILTER_ENABLED",
     "VLLM_MAX_CANDIDATES",
-    "VLLM_MIN_DARK_SCORE",
     "VLLM_BAD_LIKE_REJECT",
 ]

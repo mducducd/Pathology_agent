@@ -8,7 +8,7 @@ agent:
   # API key — for local LLMs any non-empty string works.
   OPENAI_API_KEY: "local"
   # Default model name used by the agent.
-  MODEL_NAME: "GPT-OSS-120B"
+  MODEL_NAME: "GLM-4.6V-FP8"
   # Default slide path used when running standalone (not batch).
   DEFAULT_SLIDE_PATH: "341476.svs"
   # Output root directory for all run artifacts.
@@ -72,14 +72,8 @@ tools:
   candidates:
     # Raw ROI candidates kept per view before view-level post-processing.
     ROI_CANDIDATE_TOP_K: 72
-    # Minimum center spacing between final ROI candidates in level-0 pixels.
-    ROI_CANDIDATE_MIN_SEPARATION_PX: 0
-    # Safety floor for candidate spacing even if the main separation value is lower.
-    ROI_CANDIDATE_MIN_SEPARATION_FLOOR_PX: 0
     # Normalized-distance tolerance used when checking proximity to already marked ROIs.
     ROI_MARK_CANDIDATE_TOLERANCE_NORM: 170
-    # Fraction of current view width used to suppress candidates too close to kept ROI marks.
-    ROI_MARKED_CENTER_EXCLUSION_RATIO: 0.30
     # Allow a heuristic fallback candidate set when the learned index returns nothing useful.
     ROI_CANDIDATE_ALLOW_FALLBACK: true
     # Hard cap on AML candidates after AML-specific ranking.
@@ -88,14 +82,6 @@ tools:
     ROI_RANKER_BATCH_SIZE: 64
     # Worker count used while extracting tile embeddings for the ROI index.
     ROI_RANKER_MAX_WORKERS: 8
-
-  index_build:
-    # Brightness cutoff for rejecting washed-out tiles during ROI index building.
-    ROI_INDEX_BUILD_BRIGHTNESS_CUTOFF: 240
-    # Edge-density cutoff for filtering overly blank tiles during ROI index building.
-    ROI_INDEX_BUILD_CANNY_CUTOFF: 0.02
-    # Neighbor count used for unsupervised novelty scoring in the ROI index.
-    ROI_INDEX_BUILD_K_NEIGHBORS: 20
 
   prefilter:
     coarse:
@@ -118,30 +104,6 @@ tools:
       # Random reserve fraction kept to preserve diversity during quality prefiltering.
       ROI_QUALITY_PREFILTER_RANDOM_RESERVE_RATIO: 0.05
 
-  dark_regions:
-    # Dark-region threshold percentile used to seed AML dark-field search boxes.
-    DARK_REGION_THRESHOLD_PCT: 85
-    # Minimum dark-region area in pixels on the downsampled mask.
-    DARK_REGION_MIN_AREA: 800
-    # Maximum number of dark regions retained for gating.
-    DARK_REGION_MAX_REGIONS: 30
-    # Maximum thumbnail dimension used when detecting dark regions.
-    DARK_REGION_MAX_DIM: 1024
-
-  aml_filter:
-    # Minimum dark score needed to treat an AML tile as clearly cellular.
-    AML_ACELLULAR_DARK_SCORE_THRESHOLD: 0.16
-    # Rescue dark-score floor for lighter-but-still-plausible AML candidates.
-    AML_RESCUE_DARK_SCORE_FLOOR: 0.10
-
-  post_rank_vllm:
-    # Maximum AML candidates passed from post-ranking into the VLM-facing prefilter.
-    AML_POST_RANK_VLLM_MAX_CANDIDATES: 12
-    # Minimum dark score required by the post-ranking VLM prefilter. (0 = disabled)
-    AML_POST_RANK_VLLM_MIN_DARK_SCORE: 0
-    # Reject `bad_like` candidates in the post-ranking VLM prefilter.
-    AML_POST_RANK_VLLM_REJECT_BAD_LIKE: true
-
   navigation:
     # Hard cap on kept ROIs; once reached, navigation should stop immediately.
     MAX_ACCEPTED_ROIS: 5
@@ -150,7 +112,7 @@ tools:
     # Default field width used for the first candidate-inspection jump before ROI marking.
     CANDIDATE_NAV_FIELD_UM: 600.0
     # Number of recent view steps checked for repeated movement in the same slide region.
-    SAME_REGION_LOOKBACK_STEPS: 0
+    SAME_REGION_LOOKBACK_STEPS: 8
     # Radius multiplier that defines "same region" relative to current view width.
     SAME_REGION_RADIUS_MULTIPLIER: 1.5
     # Consecutive same-region steps required before warning about local loops.
@@ -179,17 +141,13 @@ roi_ranker:
     # HNSW `M` value used for AML reference-tile indexing.
     AML_REFERENCE_HNSW_M: 32
     # HNSW construction breadth used for AML reference-tile indexing.
-    AML_REFERENCE_HNSW_EF_CONSTRUCTION: 200
+    AML_REFERENCE_HNSW_EF_CONSTRUCTION: 100
     # HNSW search breadth used for AML reference-tile lookup.
     AML_REFERENCE_HNSW_EF_SEARCH: 100
     # Use HNSW acceleration for AML reference lookup when available.
     AML_REFERENCE_USE_HNSW: true
     # Cache AML reference embeddings / indices on disk.
     AML_REFERENCE_EMBEDDING_CACHE: true
-    # Directory used for AML reference embedding and HNSW cache files.
-    # If empty, uses CACHE_ROOT_DIR/reference_hnsw
-    AML_REFERENCE_CACHE_DIR: ""
-
   reference_scoring:
     # Number of nearest AML reference tiles considered per query tile.
     AML_REFERENCE_TOP_K: 7
@@ -204,7 +162,7 @@ roi_ranker:
     # Ignore bad AML references when forming retrieval-based tile judgments.
     AML_DISABLE_BAD_REFERENCES: false
     # Hard reject threshold on top-1 bad-reference similarity.
-    AML_BAD_TOP1_REJECT_THRESHOLD: 1.0
+    AML_BAD_TOP1_REJECT_THRESHOLD: 0.9
     # Ambiguous bad-reference similarity threshold that still needs a good/bad gap check.
     AML_BAD_TOP1_AMBIGUOUS_THRESHOLD: 0.78
     # Minimum good-minus-bad top-1 similarity gap to avoid ambiguous rejection.
@@ -247,16 +205,12 @@ roi_ranker:
     AML_BLAST_SIMILARITY_WEIGHT: 0.25
     # Number of nearest blast exemplars considered per tile.
     AML_BLAST_TOP_K: 3
-    # Enable blast-reference similarity in AML ranking.
-    AML_ENABLE_BLAST_REFERENCES: false
 
   vllm:
     # Enable candidate prefiltering before handing ROI candidates to the VLM.
     VLLM_PREFILTER_ENABLED: true
     # Maximum candidates sent to the VLM prefilter output.
     VLLM_MAX_CANDIDATES: 18
-    # Minimum dark score required to keep a candidate for the VLM. (0 = disabled)
-    VLLM_MIN_DARK_SCORE: 0
     # Drop candidates already labeled as `bad_like` before VLM inference.
     VLLM_BAD_LIKE_REJECT: false
     # Good-reference similarity needed to exempt a low-dark candidate from VLM rejection.
@@ -264,7 +218,7 @@ roi_ranker:
 
   knn_graph:
     # HNSW construction breadth used for slide-level novelty KNN search.
-    ROI_KNN_HNSW_EF_CONSTRUCTION: 200
+    ROI_KNN_HNSW_EF_CONSTRUCTION: 100
     # HNSW `M` value used for slide-level novelty KNN search.
     ROI_KNN_HNSW_M: 32
     # Minimum HNSW search breadth used for slide-level novelty KNN search.
@@ -305,7 +259,7 @@ context_injection:
     # Maximum image dimension (px) when encoding context images as JPEG data URLs.
     CONTEXT_IMAGE_MAX_DIM: 1024
     # JPEG quality used when encoding context images.
-    CONTEXT_IMAGE_JPEG_QUALITY: 100
+    CONTEXT_IMAGE_JPEG_QUALITY: 55
     # Maximum number of inline images included per LLM request.
     CONTEXT_MAX_INLINE_IMAGES: 2
     # Maximum total base64 chars for all inline images per LLM request.
