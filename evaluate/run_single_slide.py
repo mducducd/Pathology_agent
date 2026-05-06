@@ -18,6 +18,7 @@ import re
 import shutil
 import sys
 import time
+import uuid
 from datetime import datetime
 from pathlib import Path
 from xml.dom import minidom
@@ -47,8 +48,7 @@ except Exception:
 
 def _make_run_id(patient_name: str) -> str:
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    safe = patient_name.replace("/", "_").replace(" ", "_")[:60]
-    return f"{ts}_{safe}"
+    return f"{ts}_{uuid.uuid4().hex[:8]}"
 
 
 def _read_slide_mpp_um(slide_path: str) -> tuple[float | None, str | None]:

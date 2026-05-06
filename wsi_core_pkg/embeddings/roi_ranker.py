@@ -31,8 +31,6 @@ SHARED_AML_SUPPORT_CFG = tuning_section("shared.aml_quality_support")
 ROI_RANKER_CORE_CFG = tuning_section("roi_ranker.core")
 ROI_RANKER_REFERENCE_HNSW_CFG = tuning_section("roi_ranker.reference_hnsw")
 ROI_RANKER_REFERENCE_SCORING_CFG = tuning_section("roi_ranker.reference_scoring")
-ROI_RANKER_BLAST_CFG = tuning_section("roi_ranker.blast_reference")
-ROI_RANKER_VLLM_CFG = tuning_section("roi_ranker.vllm")
 ROI_RANKER_KNN_GRAPH_CFG = tuning_section("roi_ranker.knn_graph")
 ROI_RANKER_QUALITY_CFG = tuning_section("roi_ranker.quality_scoring")
 
@@ -51,7 +49,6 @@ _reference_labels: npt.NDArray[np.str_] | None = None
 _reference_paths: tuple[str, ...] | None = None
 
 ROI_KNN_RANDOM_SEED = int(ROI_RANKER_CORE_CFG["ROI_KNN_RANDOM_SEED"])
-ROI_CANDIDATE_MAX_IOU = float(ROI_RANKER_CORE_CFG["ROI_CANDIDATE_MAX_IOU"])
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".tif", ".tiff"}
 
 # Scoring weights for generic WSI mode: score = w_nov*z(novelty) + w_cen*z(centroid_dist)
@@ -77,28 +74,9 @@ AML_GOOD_LIKE_TOP1_GAP = float(ROI_RANKER_REFERENCE_SCORING_CFG["AML_GOOD_LIKE_T
 AML_BORDERLINE_BAD_LIKELIHOOD = float(ROI_RANKER_REFERENCE_SCORING_CFG["AML_BORDERLINE_BAD_LIKELIHOOD"])
 AML_BORDERLINE_BAD_MARGIN_MAX = float(ROI_RANKER_REFERENCE_SCORING_CFG["AML_BORDERLINE_BAD_MARGIN_MAX"])
 AML_BORDERLINE_BAD_TOP1_GAP = float(ROI_RANKER_REFERENCE_SCORING_CFG["AML_BORDERLINE_BAD_TOP1_GAP"])
-AML_DARK_VIEW_PERCENTILE = float(ROI_RANKER_REFERENCE_SCORING_CFG["AML_DARK_VIEW_PERCENTILE"])
-AML_DARK_VIEW_MIN_TILES = int(ROI_RANKER_REFERENCE_SCORING_CFG["AML_DARK_VIEW_MIN_TILES"])
 AML_REFERENCE_AGGREGATION = str(ROI_RANKER_REFERENCE_SCORING_CFG["AML_REFERENCE_AGGREGATION"])
-AML_MIN_DARK_SCORE_PERCENTILE = float(ROI_RANKER_REFERENCE_SCORING_CFG["AML_MIN_DARK_SCORE_PERCENTILE"])
 AML_QUALITY_REJECT_MARGIN = float(ROI_RANKER_REFERENCE_SCORING_CFG["AML_QUALITY_REJECT_MARGIN"])
 
-# Blast cell reference configuration
-AML_BLAST_CELLS_ROOT = str(ROI_RANKER_BLAST_CFG["AML_BLAST_CELLS_ROOT"])
-AML_BLAST_SIMILARITY_WEIGHT = float(ROI_RANKER_BLAST_CFG["AML_BLAST_SIMILARITY_WEIGHT"])
-AML_BLAST_TOP_K = int(ROI_RANKER_BLAST_CFG["AML_BLAST_TOP_K"])
-
-# Cache for blast cell embeddings
-_blast_features: npt.NDArray[np.float32] | None = None
-_blast_paths: tuple[str, ...] | None = None
-_blast_extractor_id: str | None = None
-
-# VLLM optimization: pre-filter candidates before sending to VLM
-# These filters remove low-quality, out-of-domain candidates EARLY to reduce VLM token count
-VLLM_PREFILTER_ENABLED = bool(ROI_RANKER_VLLM_CFG["VLLM_PREFILTER_ENABLED"])
-VLLM_MAX_CANDIDATES = int(ROI_RANKER_VLLM_CFG["VLLM_MAX_CANDIDATES"])
-VLLM_BAD_LIKE_REJECT = bool(ROI_RANKER_VLLM_CFG["VLLM_BAD_LIKE_REJECT"])
-AML_VLLM_GOOD_SUPPORT_EXEMPTION_TOP1_MIN = float(ROI_RANKER_VLLM_CFG["AML_VLLM_GOOD_SUPPORT_EXEMPTION_TOP1_MIN"])
 AML_SUPPORT_GOOD_TOP1_FLOOR = float(SHARED_AML_SUPPORT_CFG["AML_SUPPORT_GOOD_TOP1_FLOOR"])
 AML_SUPPORT_BAD_TOP1_CEILING = float(SHARED_AML_SUPPORT_CFG["AML_SUPPORT_BAD_TOP1_CEILING"])
 AML_SUPPORT_BAD_LIKE_CEILING = float(SHARED_AML_SUPPORT_CFG["AML_SUPPORT_BAD_LIKE_CEILING"])
@@ -123,213 +101,6 @@ ROI_RANKER_DARK_REGION_CFG = tuning_section("roi_ranker.dark_region")
 AML_DARK_REGION_BOX_PRIOR_WEIGHT = float(ROI_RANKER_DARK_REGION_CFG["AML_DARK_REGION_BOX_PRIOR_WEIGHT"])
 
 
-def _discover_blast_cell_paths(blast_cells_root: str | Path) -> tuple[str, ...]:
-    blast_path = Path(blast_cells_root)
-    if not blast_path.exists():
-        return ()
-
-    blast_images: list[Path] = []
-    seen: set[Path] = set()
-    for ext in sorted(IMAGE_EXTS):
-        for path in sorted(blast_path.rglob(f"*{ext}")):
-            resolved = path.resolve()
-            if resolved in seen:
-                continue
-            seen.add(resolved)
-            blast_images.append(resolved)
-    return tuple(str(path) for path in blast_images)
-
-
-def _find_matching_blast_embedding_cache(
-    cache_dir: Path,
-    *,
-    blast_paths: tuple[str, ...],
-    extractor_id: str,
-) -> tuple[Path, Path] | None:
-    expected_paths = list(blast_paths)
-    for meta_path in sorted(cache_dir.glob(f"{extractor_id}_blast_*_meta.json")):
-        try:
-            import json
-
-            meta = json.loads(meta_path.read_text())
-        except Exception:
-            continue
-        if str(meta.get("extractor_id") or "") != str(extractor_id):
-            continue
-        if list(meta.get("paths") or []) != expected_paths:
-            continue
-
-        stem = meta_path.name.removesuffix("_meta.json")
-        features_path = cache_dir / f"{stem}_features.npy"
-        if features_path.exists():
-            return features_path, meta_path
-    return None
-
-
-def _load_blast_embeddings_from_cache(
-    blast_paths: tuple[str, ...],
-    extractor_id: str,
-) -> tuple[npt.NDArray[np.float32], tuple[str, ...]] | None:
-    global _blast_features, _blast_paths, _blast_extractor_id
-
-    if (
-        _blast_features is not None
-        and _blast_extractor_id == extractor_id
-        and _blast_paths == blast_paths
-    ):
-        return _blast_features, blast_paths
-
-    if not blast_paths:
-        return None
-
-    try:
-        cache_dir = _get_persistent_cache_dir()
-        fingerprint = _compute_reference_fingerprint(blast_paths)
-        cache_name = f"{extractor_id}_blast_{fingerprint}"
-
-        features_path = cache_dir / f"{cache_name}_features.npy"
-        meta_path = cache_dir / f"{cache_name}_meta.json"
-
-        if not (features_path.exists() and meta_path.exists()):
-            matched = _find_matching_blast_embedding_cache(
-                cache_dir,
-                blast_paths=blast_paths,
-                extractor_id=extractor_id,
-            )
-            if matched is None:
-                return None
-            features_path, meta_path = matched
-
-        import json
-
-        meta = json.loads(meta_path.read_text())
-        meta_paths = tuple(str(path) for path in meta.get("paths") or ())
-        if meta_paths != blast_paths:
-            return None
-        if str(meta.get("extractor_id") or "") != str(extractor_id):
-            return None
-
-        features_l2 = np.load(str(features_path), allow_pickle=False)
-        if features_l2.ndim != 2 or features_l2.shape[0] != len(blast_paths):
-            return None
-
-        _blast_features = features_l2
-        _blast_paths = blast_paths
-        _blast_extractor_id = str(extractor_id)
-        return features_l2, blast_paths
-    except Exception:
-        return None
-
-
-def _save_blast_embeddings_to_cache(
-    blast_features_l2: npt.NDArray[np.float32],
-    blast_paths: tuple[str, ...],
-    extractor_id: str,
-) -> Path | None:
-    global _blast_features, _blast_paths, _blast_extractor_id
-
-    try:
-        cache_dir = _get_persistent_cache_dir()
-        fingerprint = _compute_reference_fingerprint(blast_paths)
-        cache_name = f"{extractor_id}_blast_{fingerprint}"
-
-        features_path = cache_dir / f"{cache_name}_features.npy"
-        meta_path = cache_dir / f"{cache_name}_meta.json"
-
-        np.save(str(features_path), blast_features_l2, allow_pickle=False)
-
-        import json
-
-        meta = {
-            "extractor_id": extractor_id,
-            "count": len(blast_paths),
-            "dim": int(blast_features_l2.shape[1]) if blast_features_l2.ndim == 2 else 0,
-            "fingerprint": fingerprint,
-            "paths": blast_paths,
-            "created_at": __import__("datetime").datetime.now().isoformat(),
-        }
-        meta_path.write_text(json.dumps(meta, indent=2))
-
-        _blast_features = blast_features_l2
-        _blast_paths = blast_paths
-        _blast_extractor_id = str(extractor_id)
-        return cache_dir
-    except Exception:
-        return None
-
-
-def _load_blast_cell_embeddings(
-    blast_cells_root: str | Path,
-    *,
-    extractor_id: str,
-    extractor_loader: Callable[[], Any] | None = None,
-    device: torch.device | None = None,
-    batch_size: int = 32,
-) -> tuple[npt.NDArray[np.float32], tuple[str, ...]] | None:
-    """Load and embed blast cell images for similarity scoring.
-
-    Args:
-        blast_cells_root: Path to directory containing blast cell images
-        extractor_id: Feature extractor identifier
-        extractor_loader: Lazy loader for the feature extractor
-        device: Torch device
-        batch_size: Batch size for embedding
-
-    Returns:
-        Tuple of (features_l2, paths) or None if no blast cells found
-    """
-    blast_paths = _discover_blast_cell_paths(blast_cells_root)
-    if not blast_paths:
-        return None
-
-    cached = _load_blast_embeddings_from_cache(blast_paths, extractor_id)
-    if cached is not None:
-        return cached
-
-    if extractor_loader is None or device is None:
-        return None
-
-    extractor = extractor_loader()
-    model = extractor.model.to(device)
-    model.eval()
-
-    batch_tensors: list[torch.Tensor] = []
-    feature_chunks: list[torch.Tensor] = []
-    paths: list[str] = []
-
-    for raw_path in blast_paths:
-        img_path = Path(raw_path)
-        try:
-            with Image.open(img_path) as im:
-                rgb = im.convert("RGB")
-                batch_tensors.append(_prepare_input_tensor(rgb, extractor.transform))
-                paths.append(str(img_path))
-        except Exception:
-            continue
-
-        if len(batch_tensors) >= batch_size:
-            x = torch.stack(batch_tensors, dim=0).to(device, non_blocking=True)
-            with torch.no_grad():
-                y = model(x)
-            feature_chunks.append(_normalize_feature_output(y).detach().cpu())
-            batch_tensors.clear()
-
-    if batch_tensors:
-        x = torch.stack(batch_tensors, dim=0).to(device, non_blocking=True)
-        with torch.no_grad():
-            y = model(x)
-        feature_chunks.append(_normalize_feature_output(y).detach().cpu())
-
-    if not feature_chunks:
-        return None
-
-    features = torch.cat(feature_chunks, dim=0).numpy().astype(np.float32, copy=False)
-    features_l2 = _l2_normalize_rows(features)
-
-    _save_blast_embeddings_to_cache(features_l2, tuple(paths), extractor_id)
-
-    return features_l2, tuple(paths)
-
 @dataclass(frozen=True)
 class UnsupervisedROIIndex:
     slide_path: str
@@ -342,7 +113,6 @@ class UnsupervisedROIIndex:
     dark_roi_scores: npt.NDArray[np.float32]
     num_tiles: int
     feature_dim: int
-    blast_scores: npt.NDArray[np.float32] = field(default_factory=lambda: np.empty((0,), dtype=np.float32))
     bad_margin: npt.NDArray[np.float32] = field(default_factory=lambda: np.empty((0,), dtype=np.float32))
     bad_likelihood: npt.NDArray[np.float32] = field(default_factory=lambda: np.empty((0,), dtype=np.float32))
     reference_mode: str = "none"
@@ -355,10 +125,6 @@ class UnsupervisedROIIndex:
     reference_tile_labels: tuple[str, ...] = field(default_factory=tuple)
     reference_neighbor_k: int = 0
     reference_candidate_mask: npt.NDArray[np.bool_] = field(default_factory=lambda: np.empty((0,), dtype=np.bool_))
-    blast_neighbor_indices: npt.NDArray[np.int32] = field(default_factory=lambda: np.empty((0, 0), dtype=np.int32))
-    blast_neighbor_sims: npt.NDArray[np.float32] = field(default_factory=lambda: np.empty((0, 0), dtype=np.float32))
-    blast_reference_paths: tuple[str, ...] = field(default_factory=tuple)
-    blast_neighbor_k: int = 0
     quality_method: str = "embedding"  # "embedding" or "hybrid"
 
 
@@ -389,31 +155,6 @@ def _zscore(x: npt.NDArray[np.float32]) -> npt.NDArray[np.float32]:
     if sigma < 1e-12:
         return np.zeros_like(x, dtype=np.float32)
     return ((x - mu) / sigma).astype(np.float32, copy=False)
-
-
-def _bad_reference_reject_mask(
-    *,
-    bad_top1: npt.NDArray[np.float32],
-    good_top1: npt.NDArray[np.float32] | None = None,
-    bad_like: npt.NDArray[np.float32] | None = None,
-    bad_margin: npt.NDArray[np.float32] | None = None,
-) -> npt.NDArray[np.bool_]:
-    rows = int(bad_top1.shape[0]) if bad_top1.ndim == 1 else 0
-    reject = np.zeros((rows,), dtype=np.bool_)
-    if rows == 0:
-        return reject
-
-    reject |= bad_top1 >= AML_BAD_TOP1_REJECT_THRESHOLD
-    if good_top1 is not None and good_top1.ndim == 1 and good_top1.shape == bad_top1.shape:
-        reject |= (
-            (bad_top1 >= AML_BAD_TOP1_AMBIGUOUS_THRESHOLD)
-            & ((good_top1 - bad_top1) <= AML_GOOD_BAD_TOP1_MIN_GAP)
-        )
-    if bad_like is not None and bad_like.ndim == 1 and bad_like.shape == bad_top1.shape:
-        reject |= bad_like >= AML_BAD_LIKE_REJECT_THRESHOLD
-    if bad_margin is not None and bad_margin.ndim == 1 and bad_margin.shape == bad_top1.shape:
-        reject |= bad_margin <= AML_BAD_MARGIN_REJECT_THRESHOLD
-    return reject
 
 
 def _bad_reference_is_rejected(
@@ -736,81 +477,6 @@ def _aggregate_knn_similarities(
 
     # Default: mean aggregation
     return np.mean(sims, axis=1).astype(np.float32, copy=False)
-
-
-def _aggregate_masked_knn_similarities(
-    sims: npt.NDArray[np.float32],
-    *,
-    valid_mask: npt.NDArray[np.bool_],
-    method: str = "mean",
-) -> npt.NDArray[np.float32]:
-    rows = int(sims.shape[0]) if sims.ndim == 2 else 0
-    if rows == 0 or valid_mask.ndim != 2 or valid_mask.shape != sims.shape:
-        return np.zeros((rows,), dtype=np.float32)
-
-    out = np.zeros((rows,), dtype=np.float32)
-    for row_idx in range(rows):
-        vals = sims[row_idx][valid_mask[row_idx]]
-        if vals.size == 0:
-            continue
-        if method == "max":
-            out[row_idx] = float(np.max(vals))
-            continue
-        if method == "weighted":
-            weights = np.exp(-np.arange(vals.size) / 3.0).astype(np.float32)
-            weights = weights / np.maximum(weights.sum(), 1e-6)
-            out[row_idx] = float(np.sum(vals * weights))
-            continue
-        out[row_idx] = float(np.mean(vals))
-    return out.astype(np.float32, copy=False)
-
-
-def _invert_reference_nominations(
-    *,
-    num_tiles: int,
-    ref_indices: npt.NDArray[np.int32],
-    tile_indices_by_ref: npt.NDArray[np.int32],
-    tile_sims_by_ref: npt.NDArray[np.float32],
-    max_refs_per_tile: int,
-) -> tuple[npt.NDArray[np.int32], npt.NDArray[np.float32], npt.NDArray[np.bool_], npt.NDArray[np.int32]]:
-    if num_tiles <= 0 or ref_indices.size == 0 or tile_indices_by_ref.size == 0 or max_refs_per_tile <= 0:
-        empty_idx = np.empty((max(0, num_tiles), 0), dtype=np.int32)
-        empty_sims = np.empty((max(0, num_tiles), 0), dtype=np.float32)
-        return (
-            empty_idx,
-            empty_sims,
-            np.zeros((max(0, num_tiles),), dtype=np.bool_),
-            np.zeros((max(0, num_tiles),), dtype=np.int32),
-        )
-
-    per_tile_support: list[list[tuple[float, int]]] = [[] for _ in range(num_tiles)]
-    nomination_counts = np.zeros((num_tiles,), dtype=np.int32)
-
-    for ref_row, ref_idx in enumerate(ref_indices.tolist()):
-        if ref_row >= tile_indices_by_ref.shape[0] or ref_row >= tile_sims_by_ref.shape[0]:
-            break
-        for tile_idx_raw, sim_raw in zip(tile_indices_by_ref[ref_row], tile_sims_by_ref[ref_row]):
-            tile_idx = int(tile_idx_raw)
-            if tile_idx < 0 or tile_idx >= num_tiles:
-                continue
-            nomination_counts[tile_idx] += 1
-            per_tile_support[tile_idx].append((float(sim_raw), int(ref_idx)))
-
-    neighbor_indices = np.full((num_tiles, max_refs_per_tile), -1, dtype=np.int32)
-    neighbor_sims = np.zeros((num_tiles, max_refs_per_tile), dtype=np.float32)
-    candidate_mask = nomination_counts > 0
-
-    for tile_idx, supports in enumerate(per_tile_support):
-        if not supports:
-            continue
-        supports.sort(key=lambda item: item[0], reverse=True)
-        limit = min(max_refs_per_tile, len(supports))
-        for pos in range(limit):
-            sim, ref_idx = supports[pos]
-            neighbor_indices[tile_idx, pos] = ref_idx
-            neighbor_sims[tile_idx, pos] = sim
-
-    return neighbor_indices, neighbor_sims, candidate_mask, nomination_counts
 
 
 def _ensure_reference_hnsw_index(
@@ -1377,32 +1043,6 @@ def _compute_reference_knn_scores(
     )
 
 
-def _compute_blast_reference_scores(
-    *,
-    features_l2: npt.NDArray[np.float32],
-    blast_features_l2: npt.NDArray[np.float32],
-    top_k: int,
-    row_block_size: int,
-) -> tuple[npt.NDArray[np.float32], npt.NDArray[np.int32], npt.NDArray[np.float32], npt.NDArray[np.float32]]:
-    rows = int(features_l2.shape[0]) if features_l2.ndim == 2 else 0
-    empty_scores = np.zeros((rows,), dtype=np.float32)
-    empty_idx = np.empty((rows, 0), dtype=np.int32)
-    empty_sims = np.empty((rows, 0), dtype=np.float32)
-    if features_l2.size == 0 or blast_features_l2.size == 0:
-        return empty_scores, empty_idx, empty_sims, empty_scores
-
-    local_idx, neighbor_sims = _exact_topk_reference_matches(
-        features_l2=features_l2,
-        ref_features_l2=blast_features_l2,
-        k=max(1, int(top_k)),
-        row_block_size=max(1, int(row_block_size)),
-    )
-    neighbor_indices = local_idx.astype(np.int32, copy=False) if local_idx.size else empty_idx
-    scores = _aggregate_knn_similarities(neighbor_sims, method=AML_REFERENCE_AGGREGATION).astype(np.float32, copy=False)
-    top1 = _top1_sims(neighbor_sims, rows=rows)
-    return scores, neighbor_indices, neighbor_sims, top1
-
-
 def _suppress_artifact_outliers(
     novelty: npt.NDArray[np.float32],
     *,
@@ -1639,7 +1279,6 @@ def build_unsupervised_roi_index(
             coordinates_level0_xy=np.empty((0, 2), dtype=np.float32),
             scores=np.empty((0,), dtype=np.float32),
             dark_roi_scores=np.empty((0,), dtype=np.float32),
-            blast_scores=np.empty((0,), dtype=np.float32),
             num_tiles=0,
             feature_dim=feature_dim,
             bad_margin=np.empty((0,), dtype=np.float32),
@@ -1654,10 +1293,6 @@ def build_unsupervised_roi_index(
             reference_tile_labels=(),
             reference_neighbor_k=0,
             reference_candidate_mask=np.empty((0,), dtype=np.bool_),
-            blast_neighbor_indices=np.empty((0, 0), dtype=np.int32),
-            blast_neighbor_sims=np.empty((0, 0), dtype=np.float32),
-            blast_reference_paths=(),
-            blast_neighbor_k=0,
             quality_method=quality_method,
         )
 
@@ -1926,48 +1561,6 @@ def _reference_matches_for_tile(
     return bad_refs, good_refs, bad_top1, good_top1
 
 
-def _prefilter_candidates_for_vllm(
-    candidates: list[dict[str, Any]],
-    *,
-    max_candidates: int = VLLM_MAX_CANDIDATES,
-    reject_bad_like: bool = VLLM_BAD_LIKE_REJECT,
-) -> list[dict[str, Any]]:
-    """Pre-filter ROI candidates before sending to VLM.
-
-    This reduces token count and prevents VLM confusion from:
-    - Bad-like tiles (already classified as non-diagnostic)
-    - Redundant overlapping candidates
-
-    Args:
-        candidates: Raw ranked candidate list from select_topk_candidates_for_view
-        max_candidates: Maximum number of candidates to send to VLM
-        reject_bad_like: Whether to reject candidates with quality_hint='bad_like'
-
-    Returns:
-        Filtered candidate list optimized for VLM processing
-    """
-    if not VLLM_PREFILTER_ENABLED or not candidates:
-        return candidates[:max_candidates]
-
-    filtered = []
-    for cand in candidates:
-        # HARD REJECT: bad_like tiles are non-diagnostic
-        if reject_bad_like and cand.get("quality_hint") == "bad_like":
-            continue
-
-        filtered.append(cand)
-
-        # Stop once we have enough candidates
-        if len(filtered) >= max_candidates:
-            break
-
-    # If filtering removed everything, fall back to top candidates
-    if not filtered:
-        filtered = candidates[:max_candidates]
-
-    return filtered
-
-
 def select_topk_candidates_for_view(
     *,
     index: UnsupervisedROIIndex,
@@ -2112,8 +1705,6 @@ def select_topk_candidates_for_view(
         if index.dark_roi_scores.size == index.num_tiles
         else None
     )
-    # When disabled, allow nearby top-k candidates to coexist and rely on the
-    # overlap guard below instead of center-distance suppression.
     if min_center_separation_px > 0:
         adaptive_min_sep_px = max(
             int(max(1, min_center_separation_px)),
@@ -2123,45 +1714,13 @@ def select_topk_candidates_for_view(
     else:
         min_sep_sq = 0.0
 
-    def _bbox_iou(
-        ax0: float,
-        ay0: float,
-        ax1: float,
-        ay1: float,
-        bx0: float,
-        by0: float,
-        bx1: float,
-        by1: float,
-    ) -> float:
-        inter_x0 = max(ax0, bx0)
-        inter_y0 = max(ay0, by0)
-        inter_x1 = min(ax1, bx1)
-        inter_y1 = min(ay1, by1)
-        iw = max(0.0, inter_x1 - inter_x0)
-        ih = max(0.0, inter_y1 - inter_y0)
-        inter = iw * ih
-        if inter <= 0.0:
-            return 0.0
-        area_a = max(0.0, (ax1 - ax0)) * max(0.0, (ay1 - ay0))
-        area_b = max(0.0, (bx1 - bx0)) * max(0.0, (by1 - by0))
-        union = area_a + area_b - inter
-        if union <= 0.0:
-            return 0.0
-        return float(inter / union)
-
     selected: list[tuple[int, float, float | None]] = []
-    selected_bboxes: list[tuple[float, float, float, float]] = []
     for pos, tile_idx in enumerate(order):
         cxi = float(cx[tile_idx])
         cyi = float(cy[tile_idx])
-        half_tile = float(index.tile_size_level0_px) / 2.0
-        tx0 = cxi - half_tile
-        ty0 = cyi - half_tile
-        tx1 = cxi + half_tile
-        ty1 = cyi + half_tile
         if selected:
             too_close = False
-            for prev_idx, prev_bbox in zip(selected, selected_bboxes):
+            for prev_idx in selected:
                 prev_tile_idx = prev_idx[0]
                 dx = cxi - float(cx[prev_tile_idx])
                 dy = cyi - float(cy[prev_tile_idx])
@@ -2172,7 +1731,6 @@ def select_topk_candidates_for_view(
                 continue
         dark_score = float(ordered_dark_scores[pos]) if ordered_dark_scores is not None else None
         selected.append((int(tile_idx), float(ordered_rank_scores[pos]), dark_score))
-        selected_bboxes.append((tx0, ty0, tx1, ty1))
         if len(selected) >= top_k:
             break
 
@@ -2272,8 +1830,8 @@ def select_topk_candidates_for_view(
             "quality_hint": quality_hint,
             "reference_mode": index.reference_mode,
             "reference_neighbor_k": index.reference_neighbor_k,
-            "retrieved_bad_refs": bad_refs[:3] if bad_refs else [],
-            "retrieved_good_refs": good_refs[:3] if good_refs else [],
+            "retrieved_bad_refs": bad_refs,
+            "retrieved_good_refs": good_refs,
             "center_norm": [cx_norm, cy_norm],
             "bbox_norm": [bx0n, by0n, bx1n, by1n],
             "center_level0": [cxi, cyi],
@@ -2288,10 +1846,5 @@ __all__ = [
     "UnsupervisedROIIndex",
     "build_unsupervised_roi_index",
     "select_topk_candidates_for_view",
-    "_prefilter_candidates_for_vllm",
     "clear_all_reference_caches",
-    # VLLM optimization config
-    "VLLM_PREFILTER_ENABLED",
-    "VLLM_MAX_CANDIDATES",
-    "VLLM_BAD_LIKE_REJECT",
 ]

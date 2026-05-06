@@ -42,13 +42,14 @@ MIRAX_EXTS = {".mrxs", ".mrsx"}
 STD_EXTS = {".svs", ".tif", ".tiff", ".ndpi"}
 MODEL_OPTIONS = [
     "GLM-4.6V-FP8",
+    "GLM-4.6V-Flash",
     "GLM-4.5-Air-FP8",
-    "Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled",
     "qwen3.5-35b-a3b",
     "qwen3.6-35b-a3b",
     "qwen3-vl-32b-thinking-fp8",
     "Qwen3.5-397B-A17B-FP8",
     "gemma-4-31B-it",
+    "medgemma-27b-it",
     "DeepSeek-V4-Flash",
 ]
 ALLOWED_MODEL_NAMES = set(MODEL_OPTIONS)

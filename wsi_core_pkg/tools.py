@@ -92,11 +92,9 @@ def _tools_str(key: str, section: str = "tools.cache", default: str = "") -> str
 
 
 ROI_CANDIDATE_TOP_K = _tools_int("ROI_CANDIDATE_TOP_K", "tools.candidates", 72)
-ROI_MARK_CANDIDATE_TOLERANCE_NORM = _tools_int("ROI_MARK_CANDIDATE_TOLERANCE_NORM", "tools.candidates", 170)
 ROI_CANDIDATE_ALLOW_FALLBACK = _tools_bool("ROI_CANDIDATE_ALLOW_FALLBACK", "tools.candidates", True)
 # Hard cap on how many candidates the VLM sees in AML mode after raw retrieval ranking.
 ROI_CANDIDATE_TOP_K_AML = _tools_int("ROI_CANDIDATE_TOP_K_AML", "tools.candidates", 30)
-ROI_RANKER_BATCH_SIZE = _tools_int("ROI_RANKER_BATCH_SIZE", "tools.candidates", 64)
 ROI_RANKER_MAX_WORKERS = _tools_int("ROI_RANKER_MAX_WORKERS", "tools.candidates", 8)
 ROI_COARSE_PREFILTER_TRIGGER_SUPERTILES = _tools_int("ROI_COARSE_PREFILTER_TRIGGER_SUPERTILES", "tools.prefilter.coarse", 128)
 ROI_COARSE_PREFILTER_KEEP_RATIO = _tools_float("ROI_COARSE_PREFILTER_KEEP_RATIO", "tools.prefilter.coarse", 0.22)
@@ -129,13 +127,6 @@ SAME_REGION_RADIUS_MULTIPLIER = _tools_float("SAME_REGION_RADIUS_MULTIPLIER", "t
 SAME_REGION_WARNING_STEPS = _tools_int("SAME_REGION_WARNING_STEPS", "tools.navigation", 1)
 
 
-def _selected_batch_size() -> int:
-    try:
-        return max(1, int(getattr(state, "BATCH_SIZE", ROI_RANKER_BATCH_SIZE) or ROI_RANKER_BATCH_SIZE))
-    except Exception:
-        return int(ROI_RANKER_BATCH_SIZE)
-
-
 def _selected_extractor_label() -> str:
     return embedding_extractor_display_name(getattr(state, "EXTRACTOR_NAME", "uni2"))
 
@@ -162,13 +153,8 @@ def _selected_target_accepted_rois() -> int:
     return min(_selected_max_accepted_rois(), max(1, raw_target))
 
 
-def _is_weak_planner_model() -> bool:
-    name = str(getattr(state, "MODEL_NAME", "") or "").lower()
-    return "gpt-oss" in name
-
-
 def _allow_discard_last_roi(roi: Dict[str, Any]) -> tuple[bool, str]:
-    """Near the AML target ROI count, allow discard only for clearly bad ROIs. Weak planner models have looser criteria."""
+    """Near the AML target ROI count, allow discard only for clearly bad ROIs."""
     if not _agent_is_aml():
         return True, ""
 
@@ -176,10 +162,6 @@ def _allow_discard_last_roi(roi: Dict[str, Any]) -> tuple[bool, str]:
     target_accepted_rois = _selected_target_accepted_rois()
     tissue_fraction = roi.get("tissue_fraction")
     clearly_empty = isinstance(tissue_fraction, (int, float)) and float(tissue_fraction) < 0.15
-
-    # For weak planners, allow discards even near target
-    if d():
-        return True, ""
 
     if kept_roi_count >= max(1, target_accepted_rois - 1) and not clearly_empty:
         return (
@@ -369,7 +351,7 @@ def _aml_navigation_guard() -> Optional[Dict[str, Any]]:
         return None
     if _roi_cap_reached():
         return _roi_cap_response()
-    if _roi_target_reached() and not _is_weak_planner_model():
+    if _roi_target_reached():
         return _finalization_required_response()
     return None
 
@@ -519,16 +501,6 @@ def _use_coarse_prefilter(method: str | None = None) -> bool:
 
 def _use_quality_prefilter(method: str | None = None) -> bool:
     return (method or _selected_tile_prefilter_method()) in {"quality", "hybrid"}
-
-
-def _tile_prefilter_label(method: str | None = None) -> str:
-    value = method or _selected_tile_prefilter_method()
-    return {
-        "none": "No extra prefilter",
-        "coarse": "Thumbnail coarse-to-fine",
-        "quality": "Raw-tile quality score",
-        "hybrid": "Hybrid coarse + quality",
-    }.get(value, "Raw-tile quality score")
 
 
 def _selected_candidate_source(aml_mode: bool) -> str:
@@ -907,7 +879,7 @@ def _ensure_unsupervised_roi_index():
             extractor_name=state.EXTRACTOR_NAME,
             tile_size_um=state.TILE_SIZE_UM,
             tile_size_px=state.TILE_SIZE_PX,
-            batch_size=_selected_batch_size(),
+            batch_size=state.BATCH_SIZE,
             cache_dir=None,
             feature_cache_dir=feature_cache_dir,
             max_workers=ROI_RANKER_MAX_WORKERS,
@@ -1628,45 +1600,17 @@ def _attach_roi_candidates(info: Dict[str, Any], top_k: int = ROI_CANDIDATE_TOP_
             guidance_intro = (
                 "Treat roi_candidates as candidate blast-suspected ROIs selected from tissue, nucleated-cell, focus, RBC, and artifact heuristics across the current view. Prioritize deep dark blue-purple cellular fields; dark red-pink is only a rare fallback when clearly cellular, and gray-black low-chroma junk should be rejected. "
             )
-            if _is_weak_planner_model():
-                info["roi_candidate_guidance"] = (
-                    guidance_intro +
-                    "Follow a standard practical hierarchy: tissue first, then nucleated-cell-rich interpretable marrow over RBC-rich/empty areas, then blast-suspected morphology. "
-                    f"Collect as many accepted ROIs as feasible; stop as soon as you have enough evidence — even 1 ROI is acceptable if the slide yields no interpretable tissue. Hard cap is {_selected_max_accepted_rois()}. "
-                    "Use roi_candidates to jump into a promising region. Once inside a candidate, mark it immediately with wsi_mark_roi_norm if tissue is interpretable — do NOT zoom/pan first. "
-                    "Accept borderline ROIs rather than skipping them. Only discard if tissue is clearly unusable (background-only, severe artifact, or stain pool)."
-                )
-            else:
-                info["roi_candidate_guidance"] = (
-                    guidance_intro +
-                    "Follow a standard practical hierarchy: tissue first, then nucleated-cell-rich interpretable marrow over RBC-rich/empty areas, then blast-suspected morphology. Prefer ROIs with adequate nucleated cells, readable single-cell detail, acceptable focus, and limited artifact. Moderate cellularity is acceptable if morphology is still assessable; do not reject a usable ROI only because it is not the single densest field in the region. "
-                    f"A single ROI is screening evidence only. For AML, soft target is {_selected_target_accepted_rois()} kept ROIs from representative distinct slide regions when feasible; hard cap is {_selected_max_accepted_rois()}. "
-                    "Use roi_candidates only to jump into a promising region quickly. After opening a candidate region, search within that field by zooming/panning until you find a representative high-power ROI. Choose a nearby area with better readability or less artifact when available, but do not over-search indefinitely for a marginally denser patch. Then use wsi_mark_roi_norm."
-                )
+            info["roi_candidate_guidance"] = (
+                guidance_intro +
+                "Follow a standard practical hierarchy: tissue first, then nucleated-cell-rich interpretable marrow over RBC-rich/empty areas, then blast-suspected morphology. Prefer ROIs with adequate nucleated cells, readable single-cell detail, acceptable focus, and limited artifact. Moderate cellularity is acceptable if morphology is still assessable; do not reject a usable ROI only because it is not the single densest field in the region. "
+                f"A single ROI is screening evidence only. For AML, soft target is {_selected_target_accepted_rois()} kept ROIs from representative distinct slide regions when feasible; hard cap is {_selected_max_accepted_rois()}. "
+                "Use roi_candidates only to jump into a promising region quickly. After opening a candidate region, search within that field by zooming/panning until you find a representative high-power ROI. Choose a nearby area with better readability or less artifact when available, but do not over-search indefinitely for a marginally denser patch. Then use wsi_mark_roi_norm."
+            )
         else:
             info["roi_candidate_guidance"] = (
                 "Use roi_candidates as region-level guidance, then search locally within the opened field before choosing a final ROI with wsi_mark_roi_norm."
             )
     return info
-
-
-def _closest_candidate(
-    cx_999: float,
-    cy_999: float,
-) -> tuple[Optional[Dict[str, Any]], float]:
-    if not state._last_roi_candidates:
-        return None, float("inf")
-    best: Optional[Dict[str, Any]] = None
-    best_dist = float("inf")
-    for cand in state._last_roi_candidates:
-        cc = cand.get("center_norm") or [0, 0]
-        dx = float(cx_999) - float(cc[0])
-        dy = float(cy_999) - float(cc[1])
-        dist = float((dx * dx + dy * dy) ** 0.5)
-        if dist < best_dist:
-            best = cand
-            best_dist = dist
-    return best, best_dist
 
 
 def _candidate_by_rank(rank: int, *, top_k: int = ROI_CANDIDATE_TOP_K) -> Optional[Dict[str, Any]]:
@@ -1863,7 +1807,7 @@ def _mark_roi_from_candidate(
             flood_frac = _dark_blue_flood_fraction(Image.open(roi_img_path)) if roi_img_path else 0.0
         except Exception:
             flood_frac = 0.0
-        if flood_frac > 0.30:
+        if flood_frac > 0.40:
             return {
                 "ok": False,
                 "reason": "dark_blue_flood_rejected",

@@ -93,10 +93,34 @@ def _save_debug_image(img: Image.Image, tag: str) -> str:
     return path
 
 
+_PATH_KEYS_TO_STRIP = frozenset({
+    "debug_path",
+    "path",
+    "auto_saved_tile_path",
+    "out_dir",
+    "save_dir",
+    "output_path",
+    "overlay_path",
+    "candidate_overlay_path",
+    "overview_path",
+})
+
+
+def _strip_paths(obj: Any) -> Any:
+    """Recursively remove server-side filesystem path fields from tool response dicts."""
+    if isinstance(obj, dict):
+        return {k: _strip_paths(v) for k, v in obj.items() if k not in _PATH_KEYS_TO_STRIP}
+    if isinstance(obj, list):
+        return [_strip_paths(v) for v in obj]
+    return obj
+
+
 def _safe(fn, **kwargs) -> str:
     try:
         out = fn(**kwargs)
-        return out if isinstance(out, str) else json.dumps(out)
+        if isinstance(out, str):
+            return out
+        return json.dumps(_strip_paths(out))
     except Exception as e:
         if isinstance(e, (FileNotFoundError, openslide.OpenSlideError)):
             state.HAS_FATAL_ERROR = True

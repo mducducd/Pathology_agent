@@ -189,6 +189,26 @@ PY
     echo "      reason: no summary.json error and no retry log found"
 }
 
+next_log_path() {
+    local patient="$1"
+    local candidate="${LOG_DIR}/${patient}.log"
+    local retry_number=2
+
+    if [[ ! -e "$candidate" ]]; then
+        printf '%s\n' "$candidate"
+        return
+    fi
+
+    while true; do
+        candidate="${LOG_DIR}/${patient}.retry${retry_number}.log"
+        if [[ ! -e "$candidate" ]]; then
+            printf '%s\n' "$candidate"
+            return
+        fi
+        retry_number=$((retry_number + 1))
+    done
+}
+
 # ── Read patient list (skip header) ─────────────────────────────────
 mapfile -t PATIENTS < <(tail -n +2 "$CSV" | sed 's/\r//g' | grep -v '^$')
 TOTAL=${#PATIENTS[@]}
@@ -280,7 +300,10 @@ PY
     fi
 
     # ── Run (suppress all python output) ───────────────────────────
-    LOG="${LOG_DIR}/${PATIENT}.log"
+    LOG="$(next_log_path "$PATIENT")"
+    if [[ "$LOG" != "${LOG_DIR}/${PATIENT}.log" ]]; then
+        echo "[$IDX/$TOTAL] LOG   $PATIENT -> ${LOG}"
+    fi
     SLIDE_STARTED_EPOCH="$(date +%s)"
 
     RUN_CMD=(
@@ -311,8 +334,9 @@ PY
         SLIDE_ELAPSED_SECONDS=$(( $(date +%s) - SLIDE_STARTED_EPOCH ))
         echo "[$IDX/$TOTAL] OK    $PATIENT elapsed=$(format_elapsed "$SLIDE_ELAPSED_SECONDS")"
     else
-        RETRY_LOG="${LOG_DIR}/${PATIENT}.retry.log"
+        RETRY_LOG="$(next_log_path "$PATIENT")"
         echo "[$IDX/$TOTAL] RETRY $PATIENT — previous attempt returned error"
+        echo "[$IDX/$TOTAL] LOG   $PATIENT -> ${RETRY_LOG}"
         if "${RUN_CMD[@]}" \
             >"$RETRY_LOG" 2>&1; then
             PASSED=$((PASSED + 1))

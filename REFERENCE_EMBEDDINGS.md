@@ -118,9 +118,6 @@ export AML_REFERENCE_LOGIT_SCALE=4.0        # Sigmoid scale for bad_likelihood
 # Caching
 export AML_REFERENCE_CACHE_DIR=./outputs/cache/reference_hnsw
 
-# Tissue filtering
-export AML_MIN_DARK_SCORE_PERCENTILE=30.0   # Minimum cellularity threshold
-export AML_DARK_PRIOR_WEIGHT=0.55           # Weight on dark_roi_scores
 ```
 
 ## Extractor Comparison

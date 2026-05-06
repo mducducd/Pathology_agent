@@ -52,8 +52,8 @@ MODEL_NAME = _cfg("MODEL_NAME", "agent", "GLM-4.6V-FP8")
 _api_key = _cfg("OPENAI_API_KEY", "agent", "local")
 _api_base = _cfg("OPENAI_API_BASE", "agent", "http://pluto/v1")
 
-client_async = AsyncOpenAI(api_key=_api_key, base_url=_api_base)
-client_sync = OpenAI(api_key=_api_key, base_url=_api_base)
+client_async = AsyncOpenAI(api_key=_api_key, base_url=_api_base, max_retries=6, timeout=120.0)
+client_sync = OpenAI(api_key=_api_key, base_url=_api_base, max_retries=6, timeout=120.0)
 
 set_default_openai_client(client_async)
 set_default_openai_api("chat_completions")
