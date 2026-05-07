@@ -38,6 +38,7 @@ EXPERIMENT_ROOT=""
 CUDA_DEVICE=""
 MODEL="GLM-4.6V-FP8"
 EXTRACTOR="uni2"
+INCLUDE_MODEL_IN_OUTPUT_NAME=false
 TILE_FILTER="hybrid"
 TILE_SIZE_PX="224"
 BATCH_SIZE="512"
@@ -90,6 +91,7 @@ while [[ $# -gt 0 ]]; do
         --cuda-device)  CUDA_DEVICE="$2"; shift 2 ;;
         --model)        MODEL="$2";       shift 2 ;;
         --extractor)    EXTRACTOR="$2";   shift 2 ;;
+        --include-model-in-output-name) INCLUDE_MODEL_IN_OUTPUT_NAME=true; shift ;;
         --tile-filter)  TILE_FILTER="$2"; shift 2 ;;
         --tile-size-px) TILE_SIZE_PX="$2"; shift 2 ;;
         --batch-size)   BATCH_SIZE="$2";  shift 2 ;;
@@ -209,6 +211,26 @@ next_log_path() {
     done
 }
 
+output_patient_name() {
+    local patient="$1"
+    if ! $INCLUDE_MODEL_IN_OUTPUT_NAME; then
+        printf '%s\n' "$patient"
+        return
+    fi
+    "$PYTHON_BIN" - "$MODEL" "$patient" <<'PY'
+import re
+import sys
+
+def clean(value, default):
+    text = str(value or "").strip()
+    text = re.sub(r"[^\w.\-]+", "-", text)
+    text = text.strip(".-_")
+    return text or default
+
+print(f"{clean(sys.argv[1], 'model')}_{clean(sys.argv[2], 'slide')}")
+PY
+}
+
 # ── Read patient list (skip header) ─────────────────────────────────
 mapfile -t PATIENTS < <(tail -n +2 "$CSV" | sed 's/\r//g' | grep -v '^$')
 TOTAL=${#PATIENTS[@]}
@@ -221,6 +243,7 @@ echo " Base root:   $BASE_OUTPUT_ROOT"
 echo " Output dir:  $OUTPUT_DIR"
 echo " Agent:       $AGENT"
 echo " Model:       $MODEL   Extractor: $EXTRACTOR   Filter: $TILE_FILTER"
+echo " Output names include model: $INCLUDE_MODEL_IN_OUTPUT_NAME"
 echo " Tile size:   ${TILE_SIZE_PX}px"
 echo " Batch size:  $BATCH_SIZE"
 echo " ROI size:    ${ROI_SIZE_PX}px"
@@ -262,7 +285,8 @@ for i in "${!PATIENTS[@]}"; do
     fi
 
     # ── Resume: skip if already completed ───────────────────────────
-    SUMMARY="${OUTPUT_DIR}/${PATIENT}/summary.json"
+    OUTPUT_PATIENT="$(output_patient_name "$PATIENT")"
+    SUMMARY="${OUTPUT_DIR}/${OUTPUT_PATIENT}/summary.json"
     if $RESUME && [[ -f "$SUMMARY" ]]; then
         RESUME_STATE=$("$PYTHON_BIN" - "$SUMMARY" <<'PY'
 import json
@@ -320,6 +344,9 @@ PY
         --default-mpp-um "$DEFAULT_MPP_UM"
         --agent "$AGENT"
     )
+    if $INCLUDE_MODEL_IN_OUTPUT_NAME; then
+        RUN_CMD+=(--include-model-in-output-name)
+    fi
     if [[ -n "$CUDA_DEVICE" ]]; then
         RUN_CMD+=(--cuda-device "$CUDA_DEVICE")
     fi

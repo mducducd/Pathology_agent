@@ -46,9 +46,31 @@ except Exception:
     CONFIG_CACHE_ROOT_DIR = ""
 
 
-def _make_run_id(patient_name: str) -> str:
+def _sanitize_output_component(value: str, default: str = "run") -> str:
+    text = str(value or "").strip()
+    text = re.sub(r"[^\w.\-]+", "-", text)
+    text = text.strip(".-_")
+    return text or default
+
+
+def _make_run_id(patient_name: str, model_name: str = "", extractor_name: str = "", tile_size_px: int | str = "") -> str:
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    return f"{ts}_{uuid.uuid4().hex[:8]}"
+    run_parts = [ts, uuid.uuid4().hex[:8]]
+    if model_name:
+        run_parts.append(_sanitize_output_component(model_name, "model"))
+    if extractor_name:
+        run_parts.append(_sanitize_output_component(extractor_name, "extractor"))
+    if tile_size_px not in (None, ""):
+        run_parts.append(f"{_sanitize_output_component(str(tile_size_px), 'tile')}px")
+    return "_".join(run_parts)
+
+
+def _patient_output_name(patient_name: str, model_name: str, *, include_model: bool = False) -> str:
+    if not include_model:
+        return patient_name
+    model_tag = _sanitize_output_component(model_name, "model")
+    patient_tag = _sanitize_output_component(patient_name, "slide")
+    return f"{model_tag}_{patient_tag}"
 
 
 def _read_slide_mpp_um(slide_path: str) -> tuple[float | None, str | None]:
@@ -592,6 +614,11 @@ def main() -> int:
     )
     parser.add_argument("--model", default="GLM-4.6V-FP8", help="VLM model name")
     parser.add_argument("--extractor", default="uni2", help="Feature extractor key")
+    parser.add_argument(
+        "--include-model-in-output-name",
+        action="store_true",
+        help="Prefix the per-slide output folder with the model name.",
+    )
     parser.add_argument("--tile-filter", default="hybrid", help="Tile prefilter method")
     parser.add_argument("--agent", default="aml", help="Agent mode (e.g. aml, wsi)")
     parser.add_argument(
@@ -632,7 +659,17 @@ def main() -> int:
         return 1
 
     patient_name = Path(slide_path).stem
-    run_id = _make_run_id(patient_name)
+    patient_output_name = _patient_output_name(
+        patient_name,
+        args.model,
+        include_model=bool(args.include_model_in_output_name),
+    )
+    run_id = _make_run_id(
+        patient_name,
+        model_name=args.model,
+        extractor_name=args.extractor,
+        tile_size_px=args.tile_size_px,
+    )
     out_dir = Path(args.output_dir).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
     experiment_root = Path(args.experiment_root).resolve() if args.experiment_root else None
@@ -730,7 +767,7 @@ def main() -> int:
         )
         elapsed = time.time() - t0
 
-        patient_out = out_dir / patient_name
+        patient_out = out_dir / patient_output_name
         patient_out.mkdir(parents=True, exist_ok=True)
 
         for legacy_dir in ("artifacts", "images"):
@@ -802,7 +839,7 @@ def main() -> int:
         elapsed = time.time() - t0
         print(f"[FAIL]  {patient_name}  ({elapsed:.0f}s)  {exc}", file=sys.stderr)
 
-        patient_out = out_dir / patient_name
+        patient_out = out_dir / patient_output_name
         patient_out.mkdir(parents=True, exist_ok=True)
         _write_summary(
             patient_out,
