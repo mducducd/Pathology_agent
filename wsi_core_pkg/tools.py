@@ -746,7 +746,7 @@ def _ensure_unsupervised_roi_index():
             phase="ready",
             status="done",
             message="ROI candidates already prepared for this run.",
-            extra={"source": "cache", "candidate_source": candidate_source, "slide_path": state.SLIDE_PATH},
+            extra={"source": "cache", "candidate_source": candidate_source},
         )
         return cached
     if aml_mode:
@@ -785,7 +785,6 @@ def _ensure_unsupervised_roi_index():
         message="Preparing ROI candidates from slide tiles...",
         extra={
             "source": candidate_source,
-            "slide_path": state.SLIDE_PATH,
             "tile_prefilter_method": tile_prefilter_method,
         },
     )
@@ -969,7 +968,7 @@ def _ensure_unsupervised_roi_index():
             {
                 "roi_candidate_stage": "index_built",
                 "roi_candidate_pipeline": pipeline_desc,
-                "roi_candidate_index_meta": dict(state._roi_ranker_meta),
+                "roi_candidate_index_meta": {k: v for k, v in state._roi_ranker_meta.items() if k != "slide_path"},
                 "roi_candidate_count": 0,
             },
         )
@@ -996,7 +995,7 @@ def _ensure_unsupervised_roi_index():
                 {
                     "roi_candidate_stage": "index_failed",
                     "roi_candidate_pipeline": pipeline_desc,
-                    "roi_candidate_index_meta": dict(state._roi_ranker_meta),
+                    "roi_candidate_index_meta": {k: v for k, v in state._roi_ranker_meta.items() if k != "slide_path"},
                     "roi_candidate_warning": f"Candidate index build failed: {err_text}",
                     "roi_candidate_count": 0,
                 },
@@ -1541,7 +1540,7 @@ def _attach_roi_candidates(info: Dict[str, Any], top_k: int = ROI_CANDIDATE_TOP_
 
     info["roi_candidate_source"] = state._last_roi_candidate_source
     info["roi_candidate_prep"] = dict(state._roi_candidate_prep) if state._roi_candidate_prep else None
-    info["roi_candidate_overlay_path"] = state._last_roi_candidate_overlay_path
+    info["roi_candidate_overlay_path"] = None
     extractor_label = _selected_extractor_label()
     tile_prefilter_method = _selected_tile_prefilter_method()
 
@@ -1552,7 +1551,7 @@ def _attach_roi_candidates(info: Dict[str, Any], top_k: int = ROI_CANDIDATE_TOP_
     else:
         info["roi_candidate_pipeline"] = f"{extractor_label} tile embeddings -> kNN novelty ranking -> top-K per current view"
     if state._roi_ranker_meta:
-        info["roi_candidate_index_meta"] = dict(state._roi_ranker_meta)
+        info["roi_candidate_index_meta"] = {k: v for k, v in state._roi_ranker_meta.items() if k != "slide_path"}
         ref_stats = state._roi_ranker_meta.get("reference_stats")
         if aml_mode and isinstance(ref_stats, dict):
             info["aml_reference_stats"] = dict(ref_stats)
