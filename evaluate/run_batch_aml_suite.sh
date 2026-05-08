@@ -11,6 +11,7 @@
 # ─────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
+ORIGINAL_ARGS=("$@")
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 RUN_BATCH_SCRIPT="${SCRIPT_DIR}/run_batch_aml.sh"
@@ -33,6 +34,9 @@ MODELS_FILTER=""
 RESUME=false
 USE_TILE_CACHE=false
 PARALLEL_MODELS=false
+SLIDE_TIMEOUT=0
+AUTO_RESTART=3
+AUTO_RESTART_DELAY=30
 
 # Pull tile/agent defaults from configs/config.yaml
 eval "$(
@@ -70,10 +74,10 @@ RUNS=(
     "GLM-4.6V-Flash|virchow2|GLM-4.6V-Flash_Virchow2_224px"
     "GLM-4.6V-Flash|h_optimus_1|GLM-4.6V-Flash_H-optimus-1_224px"
     "GLM-4.6V-Flash|dinobloom_giant|GLM-4.6V-Flash_DinoBloom-G_224px"
-    "gemma-4-31B-it|uni2|gemma-4-31B-it_UNI2_224px"
-    "gemma-4-31B-it|virchow2|gemma-4-31B-it_Virchow2_224px"
-    "gemma-4-31B-it|h_optimus_1|gemma-4-31B-it_H-optimus-1_224px"
-    "gemma-4-31B-it|dinobloom_giant|gemma-4-31B-it_DinoBloom-G_224px"
+    "gemma-4-31B-it-h200|uni2|gemma-4-31B-it-h200_UNI2_224px"
+    "gemma-4-31B-it-h200|virchow2|gemma-4-31B-it-h200_Virchow2_224px"
+    "gemma-4-31B-it-h200|h_optimus_1|gemma-4-31B-it-h200_H-optimus-1_224px"
+    "gemma-4-31B-it-h200|dinobloom_giant|gemma-4-31B-it-h200_DinoBloom-G_224px"
     "medgemma-27b-it|uni2|medgemma-27b-it_UNI2_224px"
     "medgemma-27b-it|virchow2|medgemma-27b-it_Virchow2_224px"
     "medgemma-27b-it|h_optimus_1|medgemma-27b-it_H-optimus-1_224px"
@@ -82,6 +86,10 @@ RUNS=(
     "Qwen3.5-397B-A17B-FP8|virchow2|Qwen3.5-397B-A17B-FP8_Virchow2_224px"
     "Qwen3.5-397B-A17B-FP8|h_optimus_1|Qwen3.5-397B-A17B-FP8_H-optimus-1_224px"
     "Qwen3.5-397B-A17B-FP8|dinobloom_giant|Qwen3.5-397B-A17B-FP8_DinoBloom-G_224px"
+    "GPT-OSS-120B|uni2|GPT-OSS-120B_UNI2_224px"
+    "GPT-OSS-120B|virchow2|GPT-OSS-120B_Virchow2_224px"
+    "GPT-OSS-120B|h_optimus_1|GPT-OSS-120B_H-optimus-1_224px"
+    "GPT-OSS-120B|dinobloom_giant|GPT-OSS-120B_DinoBloom-G_224px"
 )
 
 # ── Helpers ──────────────────────────────────────────────────────────
@@ -149,6 +157,9 @@ while [[ $# -gt 0 ]]; do
         --tile-filter) TILE_FILTER="$2"; shift 2 ;;
         --roi-size-px) ROI_SIZE_PX="$2"; shift 2 ;;
         --default-mpp-um) DEFAULT_MPP_UM="$2"; shift 2 ;;
+        --slide-timeout) SLIDE_TIMEOUT="$2"; shift 2 ;;
+        --auto-restart) AUTO_RESTART="$2"; shift 2 ;;
+        --auto-restart-delay) AUTO_RESTART_DELAY="$2"; shift 2 ;;
         --use-tile-cache) USE_TILE_CACHE=true; shift ;;
         --resume) RESUME=true; shift ;;
         --parallel-models) PARALLEL_MODELS=true; shift ;;
@@ -181,6 +192,31 @@ if [[ ${#FILTERED_RUNS[@]} -eq 0 ]]; then
     echo "[ERROR] No runs matched models=${MODELS_FILTER:-*} extractors=${EXTRACTORS_FILTER:-*}"
     exit 1
 fi
+
+# ── Auto-restart on crash ────────────────────────────────────────────
+_maybe_restart() {
+    local rc="$1"
+    if (( AUTO_RESTART <= 0 )); then
+        echo " Auto-restart disabled, exiting (rc=${rc})"
+        exit "$rc"
+    fi
+    echo ""
+    echo " CRASH detected (rc=${rc}). Killing remaining children..."
+    pkill -TERM -P $$ 2>/dev/null || true
+    sleep 2
+    pkill -KILL -P $$ 2>/dev/null || true
+    echo " Restarting in ${AUTO_RESTART_DELAY}s... (restarts left: ${AUTO_RESTART})"
+    sleep "$AUTO_RESTART_DELAY"
+    # Strip --auto-restart from original args and re-exec with updated count
+    NEW_ARGS=()
+    skip_next=false
+    for arg in "${ORIGINAL_ARGS[@]}"; do
+        if $skip_next; then skip_next=false; continue; fi
+        if [[ "$arg" == "--auto-restart" ]]; then skip_next=true; continue; fi
+        NEW_ARGS+=("$arg")
+    done
+    exec "$0" "${NEW_ARGS[@]}" --resume --auto-restart $((AUTO_RESTART - 1))
+}
 
 # ── Banner ───────────────────────────────────────────────────────────
 echo "═══════════════════════════════════════════════════════════════"
@@ -219,9 +255,10 @@ _build_cmd() {
         --default-mpp-um "$DEFAULT_MPP_UM"
         --agent "$AGENT"
     )
-    [[ -n "$CUDA_DEVICE" ]] && cmd+=(--cuda-device "$CUDA_DEVICE")
-    $USE_TILE_CACHE && cmd+=(--use-tile-cache)
-    $RESUME         && cmd+=(--resume)
+    [[ -n "$CUDA_DEVICE" ]]    && cmd+=(--cuda-device "$CUDA_DEVICE")
+    (( SLIDE_TIMEOUT > 0 ))    && cmd+=(--slide-timeout "$SLIDE_TIMEOUT")
+    $USE_TILE_CACHE            && cmd+=(--use-tile-cache)
+    $RESUME                    && cmd+=(--resume)
     printf '%s\n' "${cmd[@]}"
 }
 
@@ -359,7 +396,7 @@ else
         else
             STATUS=${PIPESTATUS[0]}
             echo "    FAIL status=${STATUS}"
-            exit "$STATUS"
+            _maybe_restart "$STATUS"
         fi
     done
 fi

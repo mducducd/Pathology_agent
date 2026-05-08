@@ -13,7 +13,7 @@ An illustration of AML agent
 > **Info**
 >
 > Evaluation on a private dataset (50 AML, 50 normal marrow):  
-> [**Gemma-4-31B-it**](https://huggingface.co/google/gemma-4-31B-it) achieves the highest decision accuracy.
+> [**gemma-4-31B-it-h200**](https://huggingface.co/google/gemma-4-31B-it-h200) achieves the highest decision accuracy.
 > [**UNI-2**](https://github.com/mahmoodlab/UNI) provides the strongest visual embeddings, outperforming domain-specific blood cell DINO variants.
 > Benchmarks will come soon
 
@@ -89,7 +89,7 @@ Run one slide without the web UI:
 
 Useful flags:
 
-- `--model`: VLM name, for example `GLM-4.6V-FP8`, `gemma-4-31B-it`, `Qwen3.5-397B-A17B-FP8`
+- `--model`: VLM name, for example `GLM-4.6V-FP8`, `gemma-4-31B-it-h200`, `Qwen3.5-397B-A17B-FP8`
 - `--extractor`: embedding extractor key such as `uni2`, `h_optimus_1`, `virchow2`, `dinobloom`, `dinobloom_giant`, `reddino`, `reddino_base`, `reddino_large`
 - `--tile-filter`: one of `hybrid`, `quality`, `coarse`, `none`
 - `--experiment-root`: shared cache/output root for repeated runs

@@ -60,21 +60,68 @@ DEFAULT_AML_PROMPT = """You are performing morphology-only triage on a May–Gr�
 
 PRIMARY GOAL:
 - Select representative, high-quality high-power ROIs
-- Estimate blast % among interpretable nucleated hematopoietic cells
+- Assess marrow CELLULARITY first, then estimate blast % among interpretable nucleated hematopoietic cells
 
 SECONDARY GOAL (STRICTLY GATED):
-- ONLY IF morphology supports Acute leukemia (blasts >=20%), provide a morphology-based prediction of whether the AML is suggestive of NPM1 mutation
+- ONLY IF morphology supports Acute leukemia (blasts >=20% in a HYPERCELLULAR marrow), provide a morphology-based prediction of whether the AML is suggestive of NPM1 mutation
 
 Genetics, flow cytometry, cytogenetics, and lab data are not visible.
 WHO/ICC 2022 allow AML with <20% blasts when defining genetics are present, but your decision is strictly morphology-only.
 --------------------------------
+CORE PRINCIPLE — READ THIS FIRST
+--------------------------------
+AML is a disease of HYPERCELLULAR PACKED marrow with MONOTONOUS IMMATURE BLASTS:
+- AML marrow is PACKED. Fat is replaced. Nucleated cells touch/overlap edge-to-edge with no/minimal white space.
+- AML cells are MONOTONOUS — same size, same immature look (large nucleus, fine chromatin, prominent nucleoli, scant blue-purple cytoplasm).
+- Heterogeneous mature/maturing populations = NOT AML.
+- Sparse / scattered cells in ANY background (fat, RBCs, serum, edge) = NOT AML.
+
+DEFAULT = NORMAL MARROW. AML requires affirmative evidence on BOTH cellularity AND blast morphology.
+--------------------------------
+NON-DIAGNOSTIC PATTERNS (DEFAULT TO NORMAL / DOCUMENT LIMITATION)
+--------------------------------
+The following patterns are NOT AML — even when individual cells look "interesting":
+
+1) FATTY / HYPOCELLULAR
+   - Large white/pale ROUND or OVAL spaces inside tissue = adipocytes (fat cells).
+   - Many fat spaces + sparse cells = hypocellular marrow → "Normal marrow".
+   - Fat is real cells with empty cytoplasm — exclude from blast denominator; not background.
+
+2) RBC-DOMINANT / HEMODILUTE
+   - Field is dominated by SMALL UNIFORM PINK/RED DONUT-SHAPED cells with central pallor (RBCs / erythrocytes).
+   - Only a few scattered darker (purple/magenta) nucleated cells.
+   - This = hemodilute aspirate / peripheral blood / hemorrhagic field. NOT diagnostic of AML.
+   - Do NOT count nucleated cells against the RBC sea as "blast %"; the field is non-diagnostic.
+   - DISCARD or, if kept, report blast_range <5% with explicit RBC-dilution limitation.
+
+3) SMEAR EDGE / SERUM / POOR-STAIN
+   - Smooth tan/brown/pink homogeneous background (serum or stain wash) with sparse scattered cells, smear streaks, or smudged debris.
+   - Often has irregular white empty spaces (drying artifact, NOT fat).
+   - Cell morphology is unreliable here — focus, contrast, and packing all inadequate.
+   - DISCARD; do NOT report 20-50%+ blasts from such a field.
+
+4) SCATTERED CELLS ON ANY BACKGROUND
+   - If you see isolated cells separated by white/red/tan space, you are NOT looking at marrow tissue worthy of an AML call.
+   - AML fields are SOLID SHEETS of packed monotonous cells. No exceptions.
+
+5) RBC-RICH BUT MORPHOLOGICALLY CLEAR
+   - Some RBCs in the background are normal — only when the field is dominated by RBCs (>70% of cellular content) does it become hemodilute.
+--------------------------------
+COLOR / BACKGROUND CHEAT SHEET
+--------------------------------
+- Deep blue-purple PACKED nucleated cells, fat-replaced = candidate for AML (need blast morphology to confirm).
+- Pink-red SMALL DONUTS dominating = RBCs / hemodilute → NOT AML.
+- Tan/brown smooth background with sparse cells = serum / poor stain → NOT diagnostic.
+- Large white round spaces inside tissue = adipocytes → fatty marrow → NOT AML.
+- Gray-black low-chroma areas = artifact (precipitate / fold / debris) → NOT diagnostic.
+--------------------------------
 NON-NEGOTIABLE QUALITY RULES
 --------------------------------
-- Use GOOD tiles ONLY for navigation
+- Use GOOD tiles ONLY for navigation (never diagnosis)
 - Diagnose ONLY from high-power ROIs with clear cellular detail
 - Reject ROIs that are:
-  background/glass-only, pale/empty, hemodilute (RBC-dominant),
-  out of focus/blurred, stain pools, crushed/thick artifacts, redundant
+  background/glass-only, pale/empty, fatty/hypocellular (large white round adipocyte spaces dominate),
+  hemodilute (RBC-dominant), out of focus/blurred, stain pools, crushed/thick artifacts, redundant
 --------------------------------
 NAVIGATION RULES (STRICT)
 --------------------------------
@@ -85,11 +132,12 @@ Per candidate:
 - You MUST inspect inside the candidate before opening another one.
 - Perform at most 2 zoom/pan actions.
 - Then either:
-  (a) mark a ROI if morphology is interpretable, OR
+  (a) mark a ROI if morphology is interpretable AND cellularity is adequate (packed cells, minimal fat), OR
   (b) abandon the region and open a new candidate.
 
 - Do NOT open multiple candidates in a row without inspecting them.
 - Do NOT over-search for a marginally better ROI once a clearly usable ROI is visible.
+- Prefer regions where cells fill the frame edge-to-edge over regions with visible fat spaces.
 --------------------------------
 ROI COLLECTION RULES (STRICT)
 --------------------------------
@@ -100,50 +148,89 @@ ROI COLLECTION RULES (STRICT)
   → STOP calling tools immediately.
   → Output final JSON immediately.
 - Do NOT call wsi_get_view_info or continue exploration after 5 ROIs.
+- If no truly hypercellular region exists on the slide, accept the most cellular fields available BUT report the marrow as hypocellular and final_decision = "Normal marrow".
 --------------------------------
 ROI ACCEPTANCE CHECKLIST
 --------------------------------
 KEEP only if ALL are true:
-- Adequate nucleated hematopoietic cells (not RBC-diluted)
+- Adequate cellularity: nucleated cells fill MOST of the frame; fat spaces NOT dominant
+- Nucleated cells PACKED (touching/overlapping), not scattered or isolated
+- NOT RBC-dominated (RBC donuts are not >70% of the cellular content)
+- NOT serum/smear-edge artifact (no smooth tan/brown homogeneous background dominating)
 - Focus sufficient for chromatin/nucleoli assessment
 - No dominant artifact
 - Not redundant
-Else DISCARD
+DISCARD if ANY of:
+- Predominantly fat (large white/pale round adipocyte spaces dominate)
+- Sparse / scattered cells with white/red/tan space between them
+- RBC-dominant / hemodilute (field is a sea of pink-red donut RBCs with few nucleated cells)
+- Smear edge / serum-stained (smooth tan/brown background, scattered cells, drying artifacts)
+- Hemorrhagic / clot-dominated
+- Out of focus, smudged, or artifact-dominated
+- Edge/peripheral / non-representative
+--------------------------------
+CELLULARITY / FIELD-QUALITY ASSESSMENT (REQUIRED BEFORE BLAST ESTIMATION)
+--------------------------------
+For each kept ROI, first classify the FIELD TYPE:
+- HYPERCELLULAR PACKED MARROW: nucleated cells fill ≥80% of the frame, packed/touching, fat virtually absent. ← only this type can be AML.
+- NORMOCELLULAR MARROW: nucleated cells fill ~40-70% of frame, some fat present.
+- HYPOCELLULAR / FATTY: nucleated cells ≤40% of frame, fat-dominated.
+- HEMODILUTE / RBC-DOMINANT: pink-red RBC donuts dominate, scattered nucleated cells. Non-diagnostic.
+- SMEAR-EDGE / SERUM: smooth tan/brown homogeneous background, scattered cells, drying artifacts. Non-diagnostic.
+- ARTIFACT: clot, blur, debris, fold, precipitate dominates. Non-diagnostic.
+
+Decision impact:
+- AML requires MAJORITY of accepted ROIs to be HYPERCELLULAR PACKED MARROW with diffuse blast morphology.
+- If majority are HYPOCELLULAR / FATTY / HEMODILUTE / SMEAR-EDGE / ARTIFACT → final_decision = "Normal marrow" with explicit limitation note. Do NOT call AML.
+- If majority NORMOCELLULAR → AML is unlikely; require very strong, diffuse, monotonous blast morphology to call AML.
+- Non-diagnostic field types (hemodilute, smear-edge, artifact) MUST be reported as <5% blast_range in their per-ROI entry, with the limitation noted.
 --------------------------------
 BLAST IDENTIFICATION
 --------------------------------
-Blast-like ONLY if:
-- High N:C ratio
+Blast-like ONLY if ALL are true:
+- High N:C ratio (nucleus dominates the cell)
 - Round/oval nucleus
-- Fine chromatin
-- Visible nucleoli (subset sufficient)
-- Scant cytoplasm
+- Fine/open chromatin (NOT dense/clumped)
+- Visible nucleoli (at least one prominent nucleolus in a subset)
+- Scant cytoplasm with light blue/basophilic rim
 Rules:
 - Auer rod = myeloid blast (flag immediately)
 - Do NOT use color alone
+- Do NOT call dense-chromatin small cells (lymphocytes, late erythroid) "blasts"
 - Large gray/olive cells ≠ blasts without immature nucleus
-- Residual maturation does NOT exclude AML
+- Cells that are clearly mature (segmented neutrophils, bands, mature lymphocytes, normoblasts with pyknotic nuclei) are NOT blasts
+- Residual maturation does NOT exclude AML, but predominance of mature cells argues AGAINST AML
+- If chromatin/nucleolar detail cannot be resolved confidently → do NOT call cells blasts; report low confidence
 --------------------------------
 BLAST ESTIMATION
 --------------------------------
 - ROI-based only (NOT slide-wide averaging)
-- Ignore RBCs, fat, empty areas, artifacts
+- Denominator = nucleated hematopoietic cells ONLY (exclude RBCs, fat spaces, empty areas, artifacts, megakaryocytes)
+- Be CONSERVATIVE: when in doubt, choose the LOWER tier
 - Use EXACT tiers:
   <5%, 5–9%, 10–19%, 20–50%, >50%
 - Produce per-ROI and global range
+- A hypocellular ROI cannot meaningfully report 20-50% or >50% blasts — use <5% or 5-9% and note the limitation
 --------------------------------
 PRIMARY DECISION
 --------------------------------
 Choose ONE:
-A) Acute leukemia
-- Blasts >=20%
-- Require widespread immature morphology
-- Report if >50%
-B) Normal marrow
-- Heterogeneous maturation OR blasts <5%
-- If non-diagnostic but no blasts → default here (state limitation)
+A) Acute leukemia — REQUIRES ALL OF:
+- Majority of kept ROIs are HYPERCELLULAR
+- Blasts >=20% in those hypercellular ROIs
+- Widespread, diffuse immature morphology (monotonous blast population)
+- Report >50% if dominant
+B) Normal marrow — DEFAULT when:
+- Heterogeneous maturation, OR
+- Blasts <5%, OR
+- Marrow is hypocellular/fatty (regardless of cell morphology in residual cells), OR
+- Non-diagnostic / quality-limited (state limitation)
 C) Suspicious morphology with 5–20% blasts
-- * choose "Acute leukemia" if the overall morphology is closer to diffuse immature/blast-rich disease * otherwise choose "Normal marrow" and state the limitation/uncertainty explicitly
+- ONLY if cellularity is adequate (hypercellular/normocellular)
+- Choose "Acute leukemia" only if overall pattern is diffusely immature/blast-rich
+- Otherwise choose "Normal marrow" and state limitation explicitly
+
+DEFAULT BIAS: when uncertain, choose "Normal marrow" and document limitations. AML is a high-stakes call that requires clear evidence on BOTH cellularity and blast morphology.
 --------------------------------
 SECONDARY TASK: NPM1 (ONLY IF AML)
 --------------------------------
@@ -163,7 +250,7 @@ Constraints:
 - Probabilistic only
 - If ROI quality insufficient → lower confidence
 Classification (REQUIRED):
-- NPM1_mutated
+- NPM1_mutated 
 - NPM1_wildtype
 
 Confidence levels:

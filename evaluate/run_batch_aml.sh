@@ -71,6 +71,7 @@ PY
 AGENT="aml"
 RESUME=false
 USE_TILE_CACHE=false
+SLIDE_TIMEOUT=0
 PYTHON_BIN="python"
 
 if [[ -x "${REPO_ROOT}/.venv/bin/python" ]]; then
@@ -98,6 +99,7 @@ while [[ $# -gt 0 ]]; do
         --roi-size-px)  ROI_SIZE_PX="$2"; shift 2 ;;
         --default-mpp-um) DEFAULT_MPP_UM="$2"; shift 2 ;;
         --agent)        AGENT="$2";       shift 2 ;;
+        --slide-timeout) SLIDE_TIMEOUT="$2"; shift 2 ;;
         --use-tile-cache) USE_TILE_CACHE=true; shift ;;
         --resume)       RESUME=true;      shift   ;;
         *)  echo "Unknown arg: $1"; exit 1 ;;
@@ -249,6 +251,7 @@ echo " Batch size:  $BATCH_SIZE"
 echo " ROI size:    ${ROI_SIZE_PX}px"
 echo " Default MPP: ${DEFAULT_MPP_UM}"
 echo " Tile cache:  $USE_TILE_CACHE"
+echo " Slide timeout: ${SLIDE_TIMEOUT}s (0=disabled)"
 echo " CUDA devices:${CUDA_VISIBLE_DEVICES:+ }${CUDA_VISIBLE_DEVICES:-all}"
 echo " Experiment root: $EXPERIMENT_ROOT"
 echo " Config cache dir:${CONFIG_CACHE_ROOT_DIR:+ }${CONFIG_CACHE_ROOT_DIR:-<empty>}"
@@ -262,7 +265,15 @@ mkdir -p "$LOG_DIR"
 PASSED=0
 FAILED=0
 SKIPPED=0
-RETRIED=0
+TIMEDOUT=0
+
+_run_slide() {
+    if (( SLIDE_TIMEOUT > 0 )); then
+        timeout --kill-after=15s "$SLIDE_TIMEOUT" "${RUN_CMD[@]}" "$@"
+    else
+        "${RUN_CMD[@]}" "$@"
+    fi
+}
 
 for i in "${!PATIENTS[@]}"; do
     ENTRY="${PATIENTS[$i]%%,*}"
@@ -284,9 +295,17 @@ for i in "${!PATIENTS[@]}"; do
         continue
     fi
 
-    # ── Resume: skip if already completed ───────────────────────────
+    # ── Skip permanently failed slides (≥2 retry logs = 3+ attempts) ─
     OUTPUT_PATIENT="$(output_patient_name "$PATIENT")"
     SUMMARY="${OUTPUT_DIR}/${OUTPUT_PATIENT}/summary.json"
+    EXISTING_RETRY_COUNT=$(find "$LOG_DIR" -maxdepth 1 -name "${PATIENT}.retry*.log" 2>/dev/null | wc -l)
+    if $RESUME && (( EXISTING_RETRY_COUNT >= 2 )); then
+        echo "[$IDX/$TOTAL] SKIP  $PATIENT — failed ${EXISTING_RETRY_COUNT}+ times, giving up"
+        SKIPPED=$((SKIPPED + 1))
+        continue
+    fi
+
+    # ── Resume: skip if already completed ───────────────────────────
     if $RESUME && [[ -f "$SUMMARY" ]]; then
         RESUME_STATE=$("$PYTHON_BIN" - "$SUMMARY" <<'PY'
 import json
@@ -355,34 +374,26 @@ PY
         RUN_CMD+=(--use-tile-cache)
     fi
 
-    if "${RUN_CMD[@]}" \
-        >"$LOG" 2>&1; then
+    _run_slide >"$LOG" 2>&1 && RUN_EXIT=0 || RUN_EXIT=$?
+
+    SLIDE_ELAPSED_SECONDS=$(( $(date +%s) - SLIDE_STARTED_EPOCH ))
+    if (( RUN_EXIT == 0 )); then
         PASSED=$((PASSED + 1))
-        SLIDE_ELAPSED_SECONDS=$(( $(date +%s) - SLIDE_STARTED_EPOCH ))
         echo "[$IDX/$TOTAL] OK    $PATIENT elapsed=$(format_elapsed "$SLIDE_ELAPSED_SECONDS")"
+    elif (( RUN_EXIT == 124 )); then
+        TIMEDOUT=$((TIMEDOUT + 1))
+        echo "[$IDX/$TOTAL] TIMEOUT $PATIENT — exceeded ${SLIDE_TIMEOUT}s, skipping"
     else
-        RETRY_LOG="$(next_log_path "$PATIENT")"
-        echo "[$IDX/$TOTAL] RETRY $PATIENT — previous attempt returned error"
-        echo "[$IDX/$TOTAL] LOG   $PATIENT -> ${RETRY_LOG}"
-        if "${RUN_CMD[@]}" \
-            >"$RETRY_LOG" 2>&1; then
-            PASSED=$((PASSED + 1))
-            RETRIED=$((RETRIED + 1))
-            SLIDE_ELAPSED_SECONDS=$(( $(date +%s) - SLIDE_STARTED_EPOCH ))
-            echo "[$IDX/$TOTAL] OK    $PATIENT retry_succeeded elapsed=$(format_elapsed "$SLIDE_ELAPSED_SECONDS")"
-        else
-            FAILED=$((FAILED + 1))
-            SLIDE_ELAPSED_SECONDS=$(( $(date +%s) - SLIDE_STARTED_EPOCH ))
-            echo "[$IDX/$TOTAL] FAIL  $PATIENT elapsed=$(format_elapsed "$SLIDE_ELAPSED_SECONDS")"
-            print_failure_reason "$SUMMARY" "$RETRY_LOG"
-        fi
+        FAILED=$((FAILED + 1))
+        echo "[$IDX/$TOTAL] FAIL  $PATIENT (exit=${RUN_EXIT}) elapsed=$(format_elapsed "$SLIDE_ELAPSED_SECONDS"), skipping"
+        print_failure_reason "$SUMMARY" "$LOG"
     fi
 
-    echo "[$IDX/$TOTAL] Progress: $PASSED ok / $FAILED fail / $SKIPPED skip / $RETRIED retried"
+    echo "[$IDX/$TOTAL] Progress: $PASSED ok / $FAILED fail / $TIMEDOUT timeout / $SKIPPED skip"
 done
 
 echo ""
 echo "═══════════════════════════════════════════════════════════════"
 echo " BATCH COMPLETE"
-echo " Total: $TOTAL  |  OK: $PASSED  |  FAIL: $FAILED  |  SKIP: $SKIPPED  |  RETRIED: $RETRIED"
+echo " Total: $TOTAL  |  OK: $PASSED  |  FAIL: $FAILED  |  TIMEOUT: $TIMEDOUT  |  SKIP: $SKIPPED"
 echo "═══════════════════════════════════════════════════════════════"

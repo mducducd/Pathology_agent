@@ -82,12 +82,12 @@ if __name__ == "__main__":
     parser.add_argument("images", nargs="*", help="Image paths to encode")
     parser.add_argument("--model", default=None)
     parser.add_argument("--base-url", default="http://pluto/v1")
-    parser.add_argument("--api-key", default="local")
-    parser.add_argument("--prompt", default="What do you see in this image? Be brief.")
+    parser.add_argument("--api-key", default="sk-y4X1YI9feTF_7KqflLuPPg")
+    parser.add_argument("--prompt", default="You are performing morphology-only triage on a May–Grünwald–Giemsa stained bone marrow whole-slide image (WSI).. Is this AML nor normal marrow? You MUST answer Yes not Not and provide blasted percentage by your observation (STRICT). Dont suggest anything else")
     args = parser.parse_args()
 
     if not args.images:
-        print("Usage: python image_utils.py image1.jpg [--model gemma-4-31B-it]")
+        print("Usage: python image_utils.py image1.jpg [--model gemma-4-31B-it-h200]")
         sys.exit(0)
 
     # Step 1 — encode

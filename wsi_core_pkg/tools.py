@@ -169,7 +169,7 @@ def _allow_discard_last_roi(roi: Dict[str, Any]) -> tuple[bool, str]:
             (
                 f"Discard blocked: you already have {kept_roi_count} kept ROI(s) and target is "
                 f"{target_accepted_rois}. Near the target, keep borderline/interpretable AML ROIs. "
-                "Reserve discard for clearly bad ROIs such as mostly background or empty views."
+                "Reserve discard for clearly bad ROIs: mostly background/empty, fatty/hypocellular (white round fat spaces dominate), hemodilute/RBC-dominant (pink-red donut RBCs dominate), smear-edge/serum (tan-brown background with scattered cells), or clot/blur/debris-dominated."
             ),
         )
 
@@ -1520,10 +1520,10 @@ def _attach_roi_candidates(info: Dict[str, Any], top_k: int = ROI_CANDIDATE_TOP_
     if aml_mode and navigation_steps >= 5 and roi_steps == 0:
         next_rank_hint = _next_unattempted_candidate_rank()
         exploration_action = (
-            f"Open candidate region #{next_rank_hint} next, then search inside that field with zoom/pan until you find a representative interpretable high-power ROI with adequate nucleated cells, readable morphology, and acceptable focus; mark only after that search, or skip the region. "
+            f"Open candidate region #{next_rank_hint} next, then search inside that field with zoom/pan until you find a representative HYPERCELLULAR (packed, no fat) high-power ROI with adequate nucleated cells, readable morphology, and acceptable focus; mark only after that search, or skip the region. Skip fatty/hypocellular fields. "
             if next_rank_hint is not None
             else
-            "Search within the current strong region with zoom/pan until you find a representative local interpretable ROI with adequate nucleated cells and readable morphology, or call wsi_get_overview_view and move to a different region. "
+            "Search within the current strong region with zoom/pan until you find a representative local HYPERCELLULAR ROI (packed cells, no/minimal fat) with adequate nucleated cells and readable morphology, or call wsi_get_overview_view and move to a different region. "
         )
         info["exploration_over_budget_warning"] = (
             f"CRITICAL: You have navigated {navigation_steps} times without marking any ROI. "
@@ -1597,13 +1597,21 @@ def _attach_roi_candidates(info: Dict[str, Any], top_k: int = ROI_CANDIDATE_TOP_
     if candidates:
         if aml_mode:
             guidance_intro = (
-                "Treat roi_candidates as candidate blast-suspected ROIs selected from tissue, nucleated-cell, focus, RBC, and artifact heuristics across the current view. Prioritize deep dark blue-purple cellular fields; dark red-pink is only a rare fallback when clearly cellular, and gray-black low-chroma junk should be rejected. "
+                "Treat roi_candidates as candidate ROIs selected from tissue, nucleated-cell, focus, RBC, and artifact heuristics. "
+                "TARGET = HYPERCELLULAR PACKED MARROW: deep blue-purple nucleated cells filling the frame edge-to-edge, NO/MINIMAL fat spaces, NO RBC dominance, NO serum/smear-edge background. "
+                "REJECT and do NOT mark these field types — they are NOT AML even if some cells look interesting: "
+                "(1) fatty/hypocellular (large white round adipocyte spaces dominate), "
+                "(2) hemodilute / RBC-dominant (sea of small pink-red donut RBCs with sparse nucleated cells), "
+                "(3) smear-edge/serum (smooth tan/brown homogeneous background, scattered cells, drying artifacts), "
+                "(4) sparse / scattered cells on any background, "
+                "(5) gray-black low-chroma artifact / clot / fold / debris. "
             )
             info["roi_candidate_guidance"] = (
                 guidance_intro +
-                "Follow a standard practical hierarchy: tissue first, then nucleated-cell-rich interpretable marrow over RBC-rich/empty areas, then blast-suspected morphology. Prefer ROIs with adequate nucleated cells, readable single-cell detail, acceptable focus, and limited artifact. Moderate cellularity is acceptable if morphology is still assessable; do not reject a usable ROI only because it is not the single densest field in the region. "
+                "Hierarchy: tissue first → HYPERCELLULAR PACKED nucleated marrow → readable single-cell detail (chromatin/nucleoli) → monotonous blast-suspected morphology. "
                 f"A single ROI is screening evidence only. For AML, soft target is {_selected_target_accepted_rois()} kept ROIs from representative distinct slide regions when feasible; hard cap is {_selected_max_accepted_rois()}. "
-                "Use roi_candidates only to jump into a promising region quickly. After opening a candidate region, search within that field by zooming/panning until you find a representative high-power ROI. Choose a nearby area with better readability or less artifact when available, but do not over-search indefinitely for a marginally denser patch. Then use wsi_mark_roi_norm."
+                "If the slide has both fatty/hemodilute regions and packed regions, ONLY mark the packed regions. "
+                "Use roi_candidates only to jump into a promising region quickly. After opening a candidate region, search within that field by zooming/panning until you find a representative HYPERCELLULAR PACKED high-power ROI. Then use wsi_mark_roi_norm."
             )
         else:
             info["roi_candidate_guidance"] = (
@@ -1867,8 +1875,15 @@ def _mark_roi_from_candidate(
     roi["next_action_hint"] = (
         "You just requested a high-power ROI. "
         + (
-            "In AML mode, discard only if this ROI is clearly bad on review, such as mostly background/empty glass. "
-            "If it is borderline but interpretable, keep it and continue searching for additional ROIs. "
+            "In AML mode, DISCARD if this ROI is any of: "
+            "(a) mostly background/empty glass, "
+            "(b) fatty/hypocellular (large white round adipocyte spaces dominate, sparse cells), "
+            "(c) hemodilute/RBC-dominant (sea of small pink-red donut RBCs with few nucleated cells), "
+            "(d) smear-edge/serum (smooth tan/brown background, scattered cells, drying artifacts), "
+            "(e) sparse/scattered cells on any background, "
+            "(f) clot/blur/debris/fold. "
+            "These are NOT AML even when some cells look interesting. "
+            "Keep the ROI ONLY if it shows HYPERCELLULAR PACKED nucleated marrow (cells fill the frame edge-to-edge) with readable morphology. "
             if _agent_is_aml()
             else
             "Carefully inspect the newly shown ROI image in the conversation. "

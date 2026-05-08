@@ -8,7 +8,7 @@ agent:
   # API key — for local LLMs any non-empty string works.
   OPENAI_API_KEY: "local"
   # Default model name used by the agent.
-  MODEL_NAME: "GLM-4.6V-FP8"
+  MODEL_NAME: "gemma-4-31B-it-h200"
   # Default slide path used when running standalone (not batch).
   DEFAULT_SLIDE_PATH: "341476.svs"
   # Output root directory for all run artifacts.
@@ -18,13 +18,13 @@ agent:
   # Root directory for example ROI/Non-ROI images used in context injection.
   EXAMPLE_ROIS_ROOT: "./Example_ROIs"
   # Sampling temperature for all WSI agents.
-  WSI_AGENT_TEMPERATURE: 0.0
+  WSI_AGENT_TEMPERATURE: 1.0
   # Set to true to enable vLLM chain-of-thought thinking mode.
   ENABLE_THINKING: false
   # Maximum number of agent turns before forced termination.
   MAX_TURNS: 140
   # Maximum image dimension (px) for WSI view renders sent to the agent.
-  MAX_IMG_DIM: 1024
+  MAX_IMG_DIM: 256
   # Maximum image dimension (px) for native-resolution views (never sent to agent).
   MAX_NATIVE_VIEW_DIM: 4096
   # Tile size in microns used for tile-agent saving and TILE_SIZE_UM references.
@@ -154,7 +154,7 @@ roi_ranker:
     # Evidence entries retained per class in AML reference summaries.
     AML_REFERENCE_EVIDENCE_PER_CLASS: 3
     # Ignore bad AML references when forming retrieval-based tile judgments.
-    AML_DISABLE_BAD_REFERENCES: false
+    AML_DISABLE_BAD_REFERENCES: true
     # Hard reject threshold on top-1 bad-reference similarity. >1.0 means this check is effectively disabled.
     AML_BAD_TOP1_REJECT_THRESHOLD: 1.0
     # Ambiguous bad-reference similarity threshold that still needs a good/bad gap check.
@@ -227,9 +227,9 @@ roi_ranker:
 context_injection:
   images:
     # Maximum image dimension (px) when encoding context images as JPEG data URLs.
-    CONTEXT_IMAGE_MAX_DIM: 512
+    CONTEXT_IMAGE_MAX_DIM: 256
     # JPEG quality used when encoding context images.
-    CONTEXT_IMAGE_JPEG_QUALITY: 55
+    CONTEXT_IMAGE_JPEG_QUALITY: 70
     # Maximum number of inline images included per LLM request.
     CONTEXT_MAX_INLINE_IMAGES: 2
     # Maximum total base64 chars for all inline images per LLM request.

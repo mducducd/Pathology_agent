@@ -48,9 +48,10 @@ MODEL_OPTIONS = [
     "qwen3.6-35b-a3b",
     "qwen3-vl-32b-thinking-fp8",
     "Qwen3.5-397B-A17B-FP8",
-    "gemma-4-31B-it",
+    "gemma-4-31B-it-h200",
     "medgemma-27b-it",
     "DeepSeek-V4-Flash",
+    "GPT-OSS-120B",
 ]
 ALLOWED_MODEL_NAMES = set(MODEL_OPTIONS)
 DEFAULT_WEB_MODEL_NAME = MODEL_NAME if MODEL_NAME in ALLOWED_MODEL_NAMES else MODEL_OPTIONS[0]

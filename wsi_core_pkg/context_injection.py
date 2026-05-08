@@ -423,17 +423,22 @@ def _inject_wsi_images(
             text = (
                 f"CURRENT VIEW{extra}. "
                 "ROI target is reached — do NOT call any more navigation or marking tools. "
-                "Write the final JSON output now based on the kept ROIs shown above."
+                "Write the final JSON output now based on the kept ROIs shown above.\n"
+                + AML_FINAL_REVIEW_PROMPT
             )
         else:
             text = (
                 f"CURRENT VIEW for navigation{extra}. "
                 "All coordinates for NEXT tool call must be chosen relative to THIS image. "
-                "PRIORITY: Look for regions with high cellularity (dense packed nucleated cells) and clear blast visibility. "
-                "Once you find high-cellularity tissue with readable morphology, mark it with wsi_mark_roi_norm. "
-                "Do NOT select boxes centered on blank/white background; always place boxes tightly around tissue and high-cellularity areas. "
-                "Do not search indefinitely for marginal improvements. Mark if tissue is readable and diagnostic, even if not the single densest field. "
-                "Avoid panning to empty areas."
+                "PRIORITY: Look for HYPERCELLULAR PACKED MARROW — densely packed deep blue-purple nucleated cells filling the frame edge-to-edge with NO/MINIMAL fat spaces, NO RBC dominance, NO serum/smear-edge background. "
+                "AML lives ONLY in hypercellular packed marrow. The following fields are AGAINST AML and must NOT be marked: "
+                "(a) fatty/hypocellular (large white round adipocyte spaces dominate), "
+                "(b) RBC-dominant/hemodilute (sea of small pink-red donut RBCs with sparse nucleated cells), "
+                "(c) smear-edge/serum (smooth tan/brown homogeneous background, scattered cells, drying artifacts), "
+                "(d) sparse/scattered cells on any background. "
+                "Once you find HYPERCELLULAR PACKED tissue with readable morphology, mark it with wsi_mark_roi_norm. "
+                "Do NOT select boxes centered on blank/white background, fat spaces, RBC-dominant areas, smear edges, or sparse fields. "
+                "Mark only when nucleated cells are packed/touching and the field is clearly diagnostic marrow."
             )
 
         current_view_msg = {
@@ -462,16 +467,24 @@ def _inject_wsi_images(
         elif kept_roi_count >= max_accepted_rois:
             aml_stop_lines = [
                 f"- Hard cap reached: {kept_roi_count}/{max_accepted_rois} kept ROI(s). Provide final AML diagnosis.",
+                AML_FINAL_REVIEW_PROMPT,
             ]
             state.CURRENT_AGENT_ACTION = "\n".join(aml_stop_lines)
         else:
             aml_stop_lines = [
                 f"- ROI target reached: {kept_roi_count}/{target_roi_count} kept ROI(s). Provide AML blast estimate and diagnosis.",
+                AML_FINAL_REVIEW_PROMPT,
             ]
             state.CURRENT_AGENT_ACTION = "\n".join(aml_stop_lines)
+        aml_guidance_content: List[Dict[str, Any]] = [{"type": "text", "text": "\n".join(aml_stop_lines)}]
+        if kept_roi_count >= target_roi_count and state._last_overview_with_box_path:
+            overview_img = _make_image_part(state._last_overview_with_box_path, budget)
+            if overview_img:
+                aml_guidance_content.append({"type": "text", "text": "Whole-slide overview (all marked ROI positions visible)."})
+                aml_guidance_content.append(overview_img)
         new_messages.insert(
             insert_pos,
-            _tag_context_message({"role": "user", "content": [{"type": "text", "text": "\n".join(aml_stop_lines)}]}, "aml_guidance"),
+            _tag_context_message({"role": "user", "content": aml_guidance_content}, "aml_guidance"),
         )
         insert_pos += 1
 
@@ -481,9 +494,19 @@ def _inject_wsi_images(
             all_roi_parts: List[Dict[str, Any]] = [
                 {"type": "text", "text": (
                     "Target ROI count reached. Review ALL kept ROIs below and write the final JSON output. "
-                    "Assign a distinct blast_range per ROI based on each image."
+                    "For EACH ROI, first classify the FIELD TYPE: HYPERCELLULAR PACKED MARROW / NORMOCELLULAR / HYPOCELLULAR-FATTY / HEMODILUTE-RBC-DOMINANT / SMEAR-EDGE-SERUM / ARTIFACT. "
+                    "Only HYPERCELLULAR PACKED MARROW with monotonous immature cells can support an AML call. "
+                    "Hypocellular/fatty, hemodilute (sea of pink-red donut RBCs), smear-edge/serum (tan-brown background with scattered cells), and artifact-dominated fields MUST report blast_range <5%. "
+                    "Do NOT label any non-hypercellular field as 20-50% or >50% blasts. "
+                    "If MOST kept ROIs are NOT hypercellular packed marrow, final_decision MUST be \"Normal marrow\" with explicit limitation noted. "
+                    "Default bias: when uncertain, choose \"Normal marrow\"."
                 )}
             ]
+            if state._last_overview_with_box_path:
+                overview_img = _make_image_part(state._last_overview_with_box_path, budget)
+                if overview_img:
+                    all_roi_parts.append({"type": "text", "text": "Whole-slide overview (all marked ROI positions visible)."})
+                    all_roi_parts.append(overview_img)
             for roi in state._roi_marks:
                 r_id = roi.get("roi_id", "?")
                 r_label = roi.get("label", "")
@@ -516,14 +539,12 @@ def _inject_wsi_images(
 
     if suppress_candidates_for_free_local_search and _agent_type() == "aml":
         free_search_text = (
-            "You are now inside a suggested AML search region. "
-            "Treat the CURRENT VIEW as a search area. "
-            "Look for areas with high cellularity (dense packed nucleated cells) and clear blast visibility—these are priority. "
-            "Finding a visibly high-cellularity subregion: STAY and zoom into it to capture the clearest single-cell morphology. "
-            "Avoid jumping to other regions unless the current area is clearly empty or severely artifact-affected. "
-            "Prefer patches with readable single-cell detail, abundant nucleated cells, acceptable focus, and limited artifact; broad full-field cellularity is not required but high local concentration is a strong positive signal. "
+            "You are now inside a suggested marrow search region. "
+            "Treat the CURRENT VIEW as a search area for readable morphology, not as proof of AML. "
+            "Look for interpretable marrow with preserved single-cell detail, adequate nucleated cells, acceptable focus, and limited artifact. "
+            "Prefer representative regions, including areas with maturation if present. "
             "Avoid empty/pale areas, severely RBC-dominant regions, heavy stain pooling, clot/crush artifact, and blurred or unreadable zones. "
-            "Call wsi_mark_roi_norm only after identifying a high-cellularity local subregion with good blast visibility; otherwise keep exploring within this field or skip to another region."
+            "Call wsi_mark_roi_norm only after identifying readable morphology; otherwise keep exploring within this field or skip to another region."
         )
         new_messages.insert(
             insert_pos,
@@ -689,7 +710,15 @@ def _trace_response(resp: Any, model_name: str) -> None:
 
 async def _patched_async_chat_create(*args, **kwargs):
     model_name = kwargs.get("model", MODEL_NAME)
-    prepared_msgs, original_msgs = _make_chat_request(_real_async_chat_create, kwargs.get("messages"), model_name, {})
+    prepared_msgs, original_msgs = _make_chat_request(
+        _real_async_chat_create,
+        kwargs.get("messages"),
+        model_name,
+        {},
+    )
+
+    if prepared_msgs is not None:
+        kwargs["messages"] = prepared_msgs
 
     try:
         resp = await _real_async_chat_create(*args, **kwargs)
@@ -698,15 +727,6 @@ async def _patched_async_chat_create(*args, **kwargs):
             raise
         fallback_msgs = _prepare_messages_for_request(original_msgs, minimal=True)
         kwargs["messages"] = fallback_msgs
-        _append_trace(
-            {
-                "type": "context_retry",
-                "timestamp": datetime.utcnow().isoformat(),
-                "model": model_name,
-                "reason": str(exc),
-                "messages": _redact_messages_for_trace(fallback_msgs),
-            }
-        )
         resp = await _real_async_chat_create(*args, **kwargs)
 
     _trace_response(resp, model_name)
@@ -715,7 +735,15 @@ async def _patched_async_chat_create(*args, **kwargs):
 
 def _patched_sync_chat_create(*args, **kwargs):
     model_name = kwargs.get("model", MODEL_NAME)
-    prepared_msgs, original_msgs = _make_chat_request(_real_sync_chat_create, kwargs.get("messages"), model_name, {})
+    prepared_msgs, original_msgs = _make_chat_request(
+        _real_sync_chat_create,
+        kwargs.get("messages"),
+        model_name,
+        {},
+    )
+
+    if prepared_msgs is not None:
+        kwargs["messages"] = prepared_msgs
 
     try:
         resp = _real_sync_chat_create(*args, **kwargs)
@@ -724,15 +752,6 @@ def _patched_sync_chat_create(*args, **kwargs):
             raise
         fallback_msgs = _prepare_messages_for_request(original_msgs, minimal=True)
         kwargs["messages"] = fallback_msgs
-        _append_trace(
-            {
-                "type": "context_retry",
-                "timestamp": datetime.utcnow().isoformat(),
-                "model": model_name,
-                "reason": str(exc),
-                "messages": _redact_messages_for_trace(fallback_msgs),
-            }
-        )
         resp = _real_sync_chat_create(*args, **kwargs)
 
     _trace_response(resp, model_name)
@@ -746,3 +765,34 @@ def install_chat_patches() -> None:
     client_async.chat.completions.create = _patched_async_chat_create
     client_sync.chat.completions.create = _patched_sync_chat_create
     _patch_installed = True
+
+AML_FINAL_REVIEW_PROMPT = """
+Target ROI count reached. Review ALL kept ROIs below before writing the final JSON.
+
+FIELD-TYPE GATE (DO THIS FIRST FOR EACH ROI)
+--------------------------------
+Classify each kept ROI as one of:
+- HYPERCELLULAR PACKED MARROW (cells fill ≥80% of frame, packed, fat absent) ← only this can be AML.
+- NORMOCELLULAR (40-70% cellular, some fat).
+- HYPOCELLULAR / FATTY (large white round adipocyte spaces dominate, sparse cells).
+- HEMODILUTE / RBC-DOMINANT (pink-red donut RBCs dominate, few nucleated cells).
+- SMEAR-EDGE / SERUM (smooth tan/brown background, scattered cells, drying artifacts).
+- ARTIFACT (clot/blur/debris/fold/precipitate dominates).
+
+DECISION RULES (NON-NEGOTIABLE)
+--------------------------------
+- AML requires MAJORITY of kept ROIs to be HYPERCELLULAR PACKED MARROW with diffuse monotonous blast morphology.
+- If majority are NOT hypercellular packed (i.e., hypocellular / hemodilute / smear-edge / artifact) → final_decision MUST be "Normal marrow" with explicit limitation noted.
+- Non-diagnostic ROIs (hemodilute, smear-edge, artifact, fatty) MUST report blast_range <5% (you cannot count blasts in non-diagnostic fields).
+- Do NOT label ANY non-hypercellular ROI as 20-50% or >50% blasts.
+
+REMINDERS
+--------------------------------
+- Fat = large round white/pale spaces in tissue (NOT background; NOT blasts). Exclude from blast denominator.
+- RBCs = small uniform pink-red donut cells with central pallor. NOT nucleated cells. A field of RBCs is hemodilute, not diagnostic.
+- Smooth tan/brown background = serum / smear-edge artifact, not real marrow.
+- Scattered cells in any non-cellular background ≠ AML.
+- AML = monotonous packed immature blasts filling the frame. Anything heterogeneous, sparse, or RBC/fat/serum-dominated → "Normal marrow".
+
+DEFAULT BIAS: when uncertain, choose "Normal marrow" and document limitations.
+"""

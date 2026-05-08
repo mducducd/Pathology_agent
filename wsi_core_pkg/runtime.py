@@ -1,3 +1,4 @@
+import json
 import re
 from contextlib import contextmanager
 from typing import Any, Dict, Optional
@@ -13,7 +14,7 @@ from .agents import (
     _agent_with_model,
 )
 from .config import MAX_TURNS
-from .prompts import DEFAULT_AML_PROMPT, DEFAULT_TILE_PROMPT, DEFAULT_WSI_PROMPT
+from .prompts import DEFAULT_TILE_PROMPT, DEFAULT_WSI_PROMPT
 from .reporting import write_markdown_report
 from .state import get_public_state_snapshot, reset_wsi_state, set_slide_path
 
@@ -22,6 +23,38 @@ _FINAL_DIAGNOSIS_LABELS = (
     "Acute leukemia",
 )
 _FINAL_DIAGNOSIS_LOOKUP = {label.lower(): label for label in _FINAL_DIAGNOSIS_LABELS}
+DEFAULT_AML_USER_PROMPT = "Run morphology-only AML assessment for this slide."
+
+
+def _extract_json_from_text(text: str) -> str:
+    """Extract the first JSON object from a possibly prose-wrapped response."""
+    # Already clean JSON
+    stripped = text.strip()
+    if stripped.startswith("{"):
+        try:
+            json.loads(stripped)
+            return stripped
+        except json.JSONDecodeError:
+            pass
+    # Try to find JSON inside code fences or prose
+    match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", stripped, re.DOTALL)
+    if match:
+        candidate = match.group(1)
+        try:
+            json.loads(candidate)
+            return candidate
+        except json.JSONDecodeError:
+            pass
+    # Greedy: find first { ... } block
+    match = re.search(r"(\{.*\})", stripped, re.DOTALL)
+    if match:
+        candidate = match.group(1)
+        try:
+            json.loads(candidate)
+            return candidate
+        except json.JSONDecodeError:
+            pass
+    return text
 
 
 def _normalize_recovered_tool_name(raw_name: str) -> str:
@@ -120,7 +153,7 @@ def run_wsi_agent_for_web(
         if agent_type_l == "tile":
             prompt = DEFAULT_TILE_PROMPT
         elif agent_type_l == "aml":
-            prompt = DEFAULT_AML_PROMPT
+            prompt = DEFAULT_AML_USER_PROMPT
         else:
             prompt = DEFAULT_WSI_PROMPT
 
@@ -177,6 +210,8 @@ def run_wsi_agent_for_web(
         raise RuntimeError(state.LAST_FATAL_ERROR or "WSI run failed due to a fatal slide error.")
 
     final_text = result.final_output
+    if agent_type_l == "aml" and final_text:
+        final_text = _extract_json_from_text(final_text)
     reasoning = getattr(result, "reasoning_content", None)
 
     report_path = write_markdown_report(
