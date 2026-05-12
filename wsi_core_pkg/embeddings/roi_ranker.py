@@ -479,6 +479,81 @@ def _aggregate_knn_similarities(
     return np.mean(sims, axis=1).astype(np.float32, copy=False)
 
 
+def _aggregate_masked_knn_similarities(
+    sims: npt.NDArray[np.float32],
+    *,
+    valid_mask: npt.NDArray[np.bool_],
+    method: str = "mean",
+) -> npt.NDArray[np.float32]:
+    rows = int(sims.shape[0]) if sims.ndim == 2 else 0
+    if rows == 0 or valid_mask.ndim != 2 or valid_mask.shape != sims.shape:
+        return np.zeros((rows,), dtype=np.float32)
+
+    out = np.zeros((rows,), dtype=np.float32)
+    for row_idx in range(rows):
+        vals = sims[row_idx][valid_mask[row_idx]]
+        if vals.size == 0:
+            continue
+        if method == "max":
+            out[row_idx] = float(np.max(vals))
+            continue
+        if method == "weighted":
+            weights = np.exp(-np.arange(vals.size) / 3.0).astype(np.float32)
+            weights = weights / np.maximum(weights.sum(), 1e-6)
+            out[row_idx] = float(np.sum(vals * weights))
+            continue
+        out[row_idx] = float(np.mean(vals))
+    return out.astype(np.float32, copy=False)
+
+
+def _invert_reference_nominations(
+    *,
+    num_tiles: int,
+    ref_indices: npt.NDArray[np.int32],
+    tile_indices_by_ref: npt.NDArray[np.int32],
+    tile_sims_by_ref: npt.NDArray[np.float32],
+    max_refs_per_tile: int,
+) -> tuple[npt.NDArray[np.int32], npt.NDArray[np.float32], npt.NDArray[np.bool_], npt.NDArray[np.int32]]:
+    if num_tiles <= 0 or ref_indices.size == 0 or tile_indices_by_ref.size == 0 or max_refs_per_tile <= 0:
+        empty_idx = np.empty((max(0, num_tiles), 0), dtype=np.int32)
+        empty_sims = np.empty((max(0, num_tiles), 0), dtype=np.float32)
+        return (
+            empty_idx,
+            empty_sims,
+            np.zeros((max(0, num_tiles),), dtype=np.bool_),
+            np.zeros((max(0, num_tiles),), dtype=np.int32),
+        )
+
+    per_tile_support: list[list[tuple[float, int]]] = [[] for _ in range(num_tiles)]
+    nomination_counts = np.zeros((num_tiles,), dtype=np.int32)
+
+    for ref_row, ref_idx in enumerate(ref_indices.tolist()):
+        if ref_row >= tile_indices_by_ref.shape[0] or ref_row >= tile_sims_by_ref.shape[0]:
+            break
+        for tile_idx_raw, sim_raw in zip(tile_indices_by_ref[ref_row], tile_sims_by_ref[ref_row]):
+            tile_idx = int(tile_idx_raw)
+            if tile_idx < 0 or tile_idx >= num_tiles:
+                continue
+            nomination_counts[tile_idx] += 1
+            per_tile_support[tile_idx].append((float(sim_raw), int(ref_idx)))
+
+    neighbor_indices = np.full((num_tiles, max_refs_per_tile), -1, dtype=np.int32)
+    neighbor_sims = np.zeros((num_tiles, max_refs_per_tile), dtype=np.float32)
+    candidate_mask = nomination_counts > 0
+
+    for tile_idx, supports in enumerate(per_tile_support):
+        if not supports:
+            continue
+        supports.sort(key=lambda item: item[0], reverse=True)
+        limit = min(max_refs_per_tile, len(supports))
+        for pos in range(limit):
+            sim, ref_idx = supports[pos]
+            neighbor_indices[tile_idx, pos] = ref_idx
+            neighbor_sims[tile_idx, pos] = sim
+
+    return neighbor_indices, neighbor_sims, candidate_mask, nomination_counts
+
+
 def _ensure_reference_hnsw_index(
     ref_features_l2: npt.NDArray[np.float32],
     ref_labels: npt.NDArray[np.str_],

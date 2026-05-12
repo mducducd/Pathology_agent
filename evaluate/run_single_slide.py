@@ -191,6 +191,105 @@ def _resolve_tile_size_config(
     }
 
 
+def _read_slide_mpp_um(slide_path: str) -> tuple[float | None, str | None]:
+    try:
+        import openslide
+    except Exception:
+        return None, None
+
+    slide = None
+    try:
+        slide = openslide.open_slide(str(slide_path))
+        props = getattr(slide, "properties", {}) or {}
+
+        for key in ("openslide.mpp-x", "openslide.mpp-y", "aperio.MPP"):
+            value = props.get(key)
+            if value:
+                try:
+                    return float(value), key
+                except Exception:
+                    pass
+
+        slide_comment = props.get("openslide.comment", "")
+        match = re.search(r"<PixelSizeMicrons>(.*?)</PixelSizeMicrons>", slide_comment)
+        if match is not None:
+            try:
+                return float(match.group(1)), "openslide.comment:PixelSizeMicrons"
+            except Exception:
+                pass
+
+        xml_text = props.get("tiff.ImageDescription")
+        if xml_text:
+            try:
+                doc = minidom.parseString(xml_text)
+                images = doc.documentElement.getElementsByTagName("Image")
+                pixels = images[0].getElementsByTagName("Pixels")
+                physical_size_x = pixels[0].getAttribute("PhysicalSizeX")
+                if physical_size_x:
+                    return float(physical_size_x), "tiff.ImageDescription:PhysicalSizeX"
+            except Exception:
+                pass
+
+        objective_power = props.get("openslide.objective-power")
+        if objective_power:
+            try:
+                return 10.0 / float(objective_power), "openslide.objective-power"
+            except Exception:
+                pass
+    except Exception:
+        return None, None
+    finally:
+        if slide is not None:
+            try:
+                slide.close()
+            except Exception:
+                pass
+
+    return None, None
+
+
+def _resolve_tile_size_config(
+    *,
+    slide_path: str,
+    tile_size_px: int,
+    requested_tile_size_um: float | None,
+    requested_default_mpp_um: float | None,
+) -> dict[str, float | str | None]:
+    slide_mpp_um, mpp_source = _read_slide_mpp_um(slide_path)
+    if requested_default_mpp_um is not None and float(requested_default_mpp_um) > 0:
+        resolved_mpp_um = float(requested_default_mpp_um)
+        effective_mpp_source = "input_default_mpp"
+    elif slide_mpp_um and slide_mpp_um > 0:
+        resolved_mpp_um = float(slide_mpp_um)
+        effective_mpp_source = str(mpp_source or "slide_metadata")
+    else:
+        resolved_mpp_um = DEFAULT_MPP_UM_FALLBACK
+        effective_mpp_source = "default_fallback"
+
+    if requested_tile_size_um is not None:
+        tile_size_um = float(requested_tile_size_um)
+        tile_size_um_source = "explicit"
+    else:
+        tile_size_um = float(tile_size_px) * float(resolved_mpp_um)
+        if effective_mpp_source == "input_default_mpp":
+            tile_size_um_source = "auto_from_input_mpp"
+        elif slide_mpp_um and slide_mpp_um > 0:
+            tile_size_um_source = "auto_from_slide_mpp"
+        else:
+            tile_size_um_source = "auto_from_default_mpp"
+
+    return {
+        "tile_size_um": tile_size_um,
+        "tile_size_um_requested": requested_tile_size_um,
+        "tile_size_um_source": tile_size_um_source,
+        "default_mpp_um_requested": requested_default_mpp_um,
+        "slide_mpp_um": slide_mpp_um,
+        "resolved_mpp_um": resolved_mpp_um,
+        "mpp_source": effective_mpp_source,
+        "default_mpp_um_fallback": DEFAULT_MPP_UM_FALLBACK,
+    }
+
+
 def _strip_tile_cache(root: Path) -> None:
     for cache_dir in (root / "tile_cache", root / "_tile_cache"):
         if cache_dir.exists() and cache_dir.is_dir():
