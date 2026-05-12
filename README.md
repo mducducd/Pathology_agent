@@ -18,19 +18,25 @@ Evaluated on a private dataset of 372 bone marrow WSIs.
 
 Results averaged across available feature extractors. `roi5_rate` is the % of runs where the VLM successfully reached the 5 ROI target.
 
+<div style="font-size: 0.78em; line-height: 1.25;">
+
 | Model | task_success (%) | roi5_rate (%) | avg_tool_calls |
-|---|---|---|---|
+|---|---:|---:|---:|
 | [gemma-4-31B-it](https://huggingface.co/google/gemma-4-31B-it) | 100.00 | 71.30 | 21.24 |
 | [Qwen3.5-397B-A17B-FP8](https://huggingface.co/Qwen/Qwen3.5-397B-A22B) | 99.66 | 99.26 | 25.07 |
 | [DeepSeek-V4-Flash](https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash) | 100.00 | 99.73 | 27.10 |
 | [GLM-4.6V-FP8](https://huggingface.co/THUDM/GLM-4.6V-FP8) | 92.14 | 95.63 | 26.28 |
 | GPT-OSS-120B | 99.63 | 23.99 | 37.36 |
 
+
+
 ### AML Detector Results
 
 > We empirically chose gemma-4 and Qwen3.5 as the diagnosis models — gemma-4 demonstrates specific recognition of AML morphology, while Qwen3.5 is more general in blood cell image understanding.
 >
 > Results are not heavily affected by the AML diagnosis prompt, and are easily biased by minor changes in instruction wording.
+
+<div style="font-size: 0.78em; line-height: 1.25;">
 
 | Model | Extractor | Accuracy (%) | AML TP | AML FN | Normal TN | Normal FP | NPM1 Acc (%) |
 |---|---|---|---|---|---|---|---|
@@ -43,6 +49,7 @@ Results averaged across available feature extractors. `roi5_rate` is the % of ru
 | [Qwen3.5-397B-A17B-FP8](https://huggingface.co/Qwen/Qwen3.5-397B-A22B) | UNI-2 | 69.09 | 215 | 104 | 42 | 11 | 64.15 |
 | [Qwen3.5-397B-A17B-FP8](https://huggingface.co/Qwen/Qwen3.5-397B-A22B) | Virchow2 | 66.13 | 207 | 112 | 39 | 14 | 67.88 |
 
+</div>
 
 ## Install
 
