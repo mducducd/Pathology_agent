@@ -948,8 +948,10 @@ def _build_aml_diagnosis_view_state(run: RunStatus) -> Dict[str, object]:
 def _merge_saved_aml_rois_into_view_state(run: RunStatus, wsi_state: Optional[Dict[str, object]]) -> Optional[Dict[str, object]]:
     if run.agent_type not in {"aml", "aml_auto", "aml_roi"}:
         return wsi_state
-    # Don't preload old saved ROIs while the run is active — they may be from a previous run on the same output path
-    if run.status in {"created", "uploading", "pending", "running"}:
+    # For aml_roi and aml_auto: don't preload old ROIs while actively collecting/generating new ones
+    # (only preload after completion to avoid showing stale cached results during rerun)
+    # For aml_diagnosis: always preload since saved ROIs are the input data being diagnosed, not stale cache
+    if run.agent_type in {"aml_auto", "aml_roi"} and run.status in {"created", "uploading", "pending", "running"}:
         return wsi_state
     if not run.roi_collection_path or not Path(run.roi_collection_path).is_file():
         return wsi_state
