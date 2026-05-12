@@ -75,6 +75,74 @@ python -m wsi_core_pkg.embeddings.prebuild_reference_embeddings [OPTIONS]
 | `--device` | `cuda` (if available) | torch device (e.g., `cuda`, `cuda:0`, `cpu`) |
 | `--extractor` | `reddino` | Extractor to use: `reddino`, `dinobloom`, `uni2` |
 
+## Evaluate Scripts (`evaluate/`)
+
+These scripts are the practical entrypoints for running AML experiments at scale.
+
+### `run_batch_aml_suite.sh` (matrix runner)
+
+Runs predefined `(model, extractor)` combinations from its internal `RUNS` list.
+
+```bash
+bash evaluate/run_batch_aml_suite.sh \
+  --models "gemma-4-31B-it" \
+  --extractors "dinobloom_giant" \
+  --output-parent "/mnt/bulk-neptune/nguyenmin/stamp-dev/experiments/Narmin" \
+  --experiment-name "exp_diagnosis" \
+  --resume
+```
+
+Notes:
+- Agent mode is read from `configs/config.yaml` (`tools.slide.AGENT`), set it to `aml_auto` for full pipeline.
+- Model names must exactly match entries in the suite `RUNS` list.
+- `gemma-4-31B-it` is not in the suite matrix; use `run_batch_aml.sh` for custom models.
+
+### `run_batch_aml.sh` (single combo, custom model)
+
+Use this when you want a model/extractor combo not present in suite matrix.
+
+```bash
+bash evaluate/run_batch_aml.sh \
+  --csv "/mnt/bulk-neptune/nguyenmin/stamp-dev/experiments/Narmin/AML_HEALTHY_SLIDE_TEST.csv" \
+  --slides-root "/mnt/copernicus3/PATHOLOGY/others/private/haemadata/ALL_WSIs" \
+  --output-dir "/mnt/bulk-neptune/nguyenmin/stamp-dev/experiments/Narmin/exp_diagnosis/gemma-4-31B-it_DinoBloom-G_224px" \
+  --model "gemma-4-31B-it" \
+  --extractor "dinobloom_giant" \
+  --agent "aml_auto" \
+  --resume
+```
+
+### `run_batch_aml_diagnosis.sh` (diagnosis-only from existing ROI outputs)
+
+Runs `aml_diagnosis` over previously generated ROI outputs. Current behavior uses ROI images from each case (`images/roi.png`, `images/roi_1.jpg`, or first `images/roi_*.{jpg,jpeg,png}`), not `roi_collection.json` as a hard requirement.
+
+```bash
+EXP_NAME="Qwen3.5-397B-A17B-FP8_UNI2_224px"
+
+bash evaluate/run_batch_aml_diagnosis.sh \
+  --exp-path "/mnt/bulk-neptune/nguyenmin/stamp-dev/experiments/Narmin/exp_290425_aml_suite/${EXP_NAME}" \
+  --output-root "/mnt/bulk-neptune/nguyenmin/stamp-dev/experiments/Narmin/exp_diagnosis" \
+  --model "Qwen3.5-397B-A17B-FP8" \
+  --chunks-dir "/mnt/bulk-neptune/nguyenmin/stamp-dev/experiments/Narmin/chunks1" \
+  --chunk-index 1 \
+  --resume
+```
+
+### Parallel all 4 extractors for one model (diagnosis-only)
+
+```bash
+bash evaluate/run_batch_aml_diagnosis.sh \
+  --exp-path "/mnt/bulk-neptune/nguyenmin/stamp-dev/experiments/Narmin/exp_290425_aml_suite" \
+  --output-root "/mnt/bulk-neptune/nguyenmin/stamp-dev/experiments/Narmin/exp_diagnosis" \
+  --model "Qwen3.5-397B-A17B-FP8" \
+  --subdir-filter "Qwen3.5-397B-A17B-FP8_UNI2_224px,Qwen3.5-397B-A17B-FP8_Virchow2_224px,Qwen3.5-397B-A17B-FP8_H-optimus-1_224px,Qwen3.5-397B-A17B-FP8_DinoBloom-G_224px" \
+  --parallel \
+  --resume
+```
+
+Important:
+- Do not combine `--parallel` with `--chunks-dir/--chunk-index`.
+
 ## Output Files
 
 The script produces:

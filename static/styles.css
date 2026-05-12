@@ -896,6 +896,28 @@ select.picker-list:hover{
   border-color: var(--border-hover);
 }
 
+.text-input{
+  width: 100%;
+  min-width: 0;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--field-bg);
+  color: var(--text);
+  padding: 6px 8px;
+  font-size: 12px;
+  outline: none;
+}
+
+.text-input:focus,
+.text-input:focus-visible{
+  border-color: rgba(var(--accent-rgb),.55);
+  box-shadow: 0 0 0 3px rgba(var(--accent-rgb),.14);
+}
+
+.text-input:hover{
+  border-color: var(--border-hover);
+}
+
 .agent-picker{
   min-height: 0;
 }
@@ -1173,6 +1195,12 @@ textarea{
   flex-direction:column;
   flex:1;
   min-height:220px;
+}
+
+.aml-auto-prompts-field{
+  display:flex;
+  flex-direction:column;
+  gap:12px;
 }
 
 .prompt-field textarea{

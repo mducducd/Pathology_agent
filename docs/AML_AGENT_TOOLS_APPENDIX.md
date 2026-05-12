@@ -13,6 +13,24 @@ change the visual field and expose candidate regions, but they do not determine
 the final AML label. The final decision is made from accepted ROI evidence under
 the morphology-only reporting rules.
 
+## Tool — Agent Assignment
+
+| Tool | `WSIAmlRoiCollectorAgent` | `WSIAmlDetectorAgent` | `WSITileSelectorAgent` | `WSIPathologyAgent` | `WSIAmlDiagnosisAgent` |
+|---|:---:|:---:|:---:|:---:|:---:|
+| `wsi_get_overview_view` | ✓ | ✓ | ✓ | ✓ | — |
+| `wsi_zoom_current_norm` | ✓ | ✓ | ✓ | ✓ | — |
+| `wsi_zoom_full_norm` | ✓ | ✓ | ✓ | ✓ | — |
+| `wsi_pan_current` | ✓ | ✓ | ✓ | ✓ | — |
+| `wsi_get_view_info` | ✓ | ✓ | ✓ | ✓ | — |
+| `wsi_open_candidate` | ✓ | ✓ | — | ✓ | — |
+| `wsi_mark_candidate` | ✓ | ✓ | — | ✓ | — |
+| `wsi_mark_roi_norm` | ✓ | ✓ | — | ✓ | — |
+| `wsi_discard_last_roi` | ✓ | ✓ | — | ✓ | — |
+| `wsi_save_tile_norm` | — | ✓ | ✓ | ✓ | — |
+| `wsi_rebuild_reference_index` | — | ✓ | — | ✓ | — |
+
+`WSIAmlDiagnosisAgent` has no tools — it runs as a direct chat-completion call. It accepts either a `roi_collection.json` file directly or an output slide folder containing one.
+
 ## Tool Groups
 
 | Group | Tools | Methodological role |

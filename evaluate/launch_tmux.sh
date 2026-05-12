@@ -18,7 +18,7 @@ EXPERIMENT_NAME="${EXPERIMENT_NAME:-exp_rerun_clean}"
 MODELS=(
     "GLM-4.6V-FP8"
     "Qwen3.5-397B-A17B-FP8"
-    "gemma-4-31B-it-h200"
+    "gemma-4-31B-it"
 )
 
 if tmux has-session -t "$SESSION" 2>/dev/null; then
