@@ -1,4 +1,4 @@
-# WSI Agent Report (20260512_105514_f7bfac_diag)
+# WSI Agent Report (20260512_120412_9728f8_diag)
 
 ## Prompt
 
@@ -312,7 +312,7 @@ Return one strict JSON object only. Do not return markdown, prose, or code fence
 ### ROI 1: AML_ROI_1
 
 - **Importance**: 5
-- **Note**: Dense cellular area with suspected blasts.
+- **Note**: Dense cellular area with interpretable chromatin.
 - **View level**: 0
 - **BBox (level 0)**: x=93201, y=86911, w=2048, h=2048
 - **Approx field size**: ~326 × 326 µm
@@ -324,7 +324,7 @@ Return one strict JSON object only. Do not return markdown, prose, or code fence
 ### ROI 2: AML_ROI_2
 
 - **Importance**: 5
-- **Note**: Dense cellular area with suspected blasts.
+- **Note**: Dense cellular area with interpretable chromatin.
 - **View level**: 0
 - **BBox (level 0)**: x=94712, y=89680, w=2048, h=2048
 - **Approx field size**: ~326 × 326 µm
@@ -376,7 +376,7 @@ Return one strict JSON object only. Do not return markdown, prose, or code fence
 
 ### Step 4: `wsi_open_candidate`
 
-- **Reason**: Moving to a distinct region of the slide to collect the second ROI.
+- **Reason**: Moving to a different region of the slide to ensure ROIs are from distinct areas. Candidate #2 is a high-ranked promising region.
 - **View level**: 0
 - **BBox (level 0)**: x=93092, y=88060, w=3774, h=3774
 - **Approx field size**: ~600 × 600 µm

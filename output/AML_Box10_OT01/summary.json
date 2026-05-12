@@ -1,7 +1,7 @@
 {
   "patient": "AML_Box10_OT01",
   "slide": "/mnt/copernicus3/PATHOLOGY/others/private/haemadata/ALL_WSIs/AML_Box10_OT01.mrxs",
-  "run_id": "20260512_105514_f7bfac",
+  "run_id": "20260512_120412_9728f8",
   "agent": "aml_auto",
   "model": "gemma-4-31B-it",
   "extractor": "uni2",
@@ -17,7 +17,7 @@
   "mpp_source": null,
   "roi_size_px": 2048,
   "batch_size": 128,
-  "elapsed_sec": 123.9,
+  "elapsed_sec": 95.3,
   "status": "ok",
   "final_decision": "Acute leukemia"
 }

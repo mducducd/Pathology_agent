@@ -1131,14 +1131,6 @@
     reasoningText.classList.remove("waiting");
   }
 
-  function setSlideNameDisplay(slideName) {
-    if (!slideNameDisplay) return;
-    const name = String(slideName || "").trim();
-    const hasName = name && name.length > 0;
-    slideNameDisplay.hidden = !hasName;
-    slideNameDisplay.textContent = hasName ? `Slide: ${name}` : "";
-  }
-
   async function fetchAndRenderReport(href, fallbackText) {
     const token = ++reportFetchToken;
     renderFinalReportMarkdown("Loading report markdown…", true);
@@ -2946,8 +2938,6 @@
 
       if (run.reasoning_content) setReasoningContent(run.reasoning_content);
       else setReasoningContent("");
-
-      setSlideNameDisplay(run.slide_name);
 
       if (run.report_path) {
         const href = reportHrefFromPath(run.report_path);
