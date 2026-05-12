@@ -1,40 +1,52 @@
 import os
 import shutil
 from collections import Counter
+from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Sequence
 
 from . import state
 from .config import REPORT_ROOT_DIR
 
+ReportRow = Dict[str, Any]
 
-def _copy_image_for_report(
-    src_path: Optional[str],
-    images_dir: str,
-    run_dir: str,
-    copied_map: Dict[str, str],
-) -> Optional[str]:
-    if not src_path or not os.path.exists(src_path):
-        return None
-    if src_path in copied_map:
-        return copied_map[src_path]
 
-    base = os.path.basename(src_path)
-    dst = os.path.join(images_dir, base)
-    i = 1
-    name, ext = os.path.splitext(base)
-    while os.path.exists(dst):
-        dst = os.path.join(images_dir, f"{name}_{i}{ext}")
-        i += 1
+@dataclass
+class ReportImageStore:
+    images_dir: str
+    run_dir: str
+    copied_paths: Dict[str, str] = field(default_factory=dict)
 
-    shutil.copy2(src_path, dst)
-    rel = os.path.relpath(dst, run_dir)
-    copied_map[src_path] = rel
-    return rel
+    def copy(self, src_path: Optional[str]) -> Optional[str]:
+        if not src_path or not os.path.exists(src_path):
+            return None
+        if src_path in self.copied_paths:
+            return self.copied_paths[src_path]
+
+        base = os.path.basename(src_path)
+        dst = os.path.join(self.images_dir, base)
+        i = 1
+        name, ext = os.path.splitext(base)
+        while os.path.exists(dst):
+            dst = os.path.join(self.images_dir, f"{name}_{i}{ext}")
+            i += 1
+
+        shutil.copy2(src_path, dst)
+        rel = os.path.relpath(dst, self.run_dir)
+        self.copied_paths[src_path] = rel
+        return rel
 
 
 def _as_dict(value: Any) -> Optional[Dict[str, Any]]:
     return value if isinstance(value, dict) else None
+
+
+def _text(value: Any) -> str:
+    return str(value or "")
+
+
+def _fmt_float(value: Any, digits: int) -> str:
+    return f"{float(value):.{digits}f}"
 
 
 def _field(
@@ -50,20 +62,18 @@ def _field(
 def _append_debug_image(
     lines: List[str],
     debug_path: Optional[str],
-    images_dir: str,
-    run_dir: str,
-    copied_paths: Dict[str, str],
+    image_store: ReportImageStore,
     alt: str,
 ) -> None:
     if not debug_path:
         return
-    rel_img = _copy_image_for_report(debug_path, images_dir, run_dir, copied_paths)
+    rel_img = image_store.copy(debug_path)
     if rel_img:
         lines.append("")
         lines.append(f"![{alt}]({rel_img})")
 
 
-def _render_view_metadata(lines: List[str], obj: Dict[str, Any]) -> None:
+def _render_view_metadata(lines: List[str], obj: ReportRow) -> None:
     _field(lines, "View level", obj.get("view_level"))
     bbox = obj.get("view_bbox_level0")
     if bbox is not None:
@@ -73,7 +83,16 @@ def _render_view_metadata(lines: List[str], obj: Dict[str, Any]) -> None:
     field_h = obj.get("field_height_um")
     if field_w is not None and field_h is not None:
         lines.append(f"- **Approx field size**: ~{field_w:.0f} × {field_h:.0f} µm")
-    _field(lines, "Tissue fraction", obj.get("tissue_fraction"), lambda v: f"{v:.2f}")
+    _field(
+        lines, "Tissue fraction", obj.get("tissue_fraction"), lambda v: _fmt_float(v, 2)
+    )
+
+
+def _append_fenced_text(lines: List[str], value: Any) -> None:
+    lines.append("```text")
+    lines.append(_text(value))
+    lines.append("```")
+    lines.append("")
 
 
 def _render_header(
@@ -83,30 +102,27 @@ def _render_header(
     final_text: str,
     reasoning_content: Optional[str],
 ) -> None:
+    reasoning_text = _text(reasoning_content) if reasoning_content is not None else ""
+
     lines.append(f"# WSI Agent Report ({ts})\n")
 
     lines.append("## Prompt\n")
-    lines.append("```text")
-    lines.append(run_prompt)
-    lines.append("```")
-    lines.append("")
+    _append_fenced_text(lines, run_prompt)
 
     lines.append("## Final Report\n")
-    lines.append(final_text)
+    lines.append(_text(final_text))
     lines.append("")
 
-    if reasoning_content:
+    if reasoning_text:
         lines.append("## Model Reasoning\n")
-        lines.append("```text")
-        lines.append(reasoning_content)
-        lines.append("```")
-        lines.append("")
+        _append_fenced_text(lines, reasoning_text)
 
 
-def _render_aml_summary(lines: List[str], rois: List[Dict[str, Any]]) -> None:
-    if str(getattr(state, "AGENT_TYPE", "") or "").lower() != "aml":
-        return
+def _is_aml_report() -> bool:
+    return _text(getattr(state, "AGENT_TYPE", "")).lower() == "aml"
 
+
+def _render_aml_summary(lines: List[str], rois: Sequence[ReportRow]) -> None:
     counts: Counter = Counter()
     for roi in rois:
         ref = _as_dict(roi.get("aml_reference_evidence"))
@@ -123,14 +139,29 @@ def _render_aml_summary(lines: List[str], rois: List[Dict[str, Any]]) -> None:
     lines.append("")
 
 
-def _render_aml_reference(lines: List[str], aml_ref: Dict[str, Any]) -> None:
+def _render_aml_reference(lines: List[str], aml_ref: ReportRow) -> None:
     match_label = aml_ref.get("match_label")
     if match_label:
         lines.append(f"- **AML reference match**: {str(match_label).replace('_', ' ')}")
     _field(lines, "AML reference summary", aml_ref.get("summary") or None)
-    _field(lines, "Retrieval score", aml_ref.get("retrieval_score"), lambda v: f"{float(v):.3f}")
-    _field(lines, "Nearest bad similarity", aml_ref.get("bad_top1_similarity"), lambda v: f"{float(v):.3f}")
-    _field(lines, "Nearest good similarity", aml_ref.get("good_top1_similarity"), lambda v: f"{float(v):.3f}")
+    _field(
+        lines,
+        "Retrieval score",
+        aml_ref.get("retrieval_score"),
+        lambda v: _fmt_float(v, 3),
+    )
+    _field(
+        lines,
+        "Nearest bad similarity",
+        aml_ref.get("bad_top1_similarity"),
+        lambda v: _fmt_float(v, 3),
+    )
+    _field(
+        lines,
+        "Nearest good similarity",
+        aml_ref.get("good_top1_similarity"),
+        lambda v: _fmt_float(v, 3),
+    )
 
     nearest_bad = _as_dict(aml_ref.get("nearest_bad_ref"))
     if nearest_bad and nearest_bad.get("name"):
@@ -142,10 +173,8 @@ def _render_aml_reference(lines: List[str], aml_ref: Dict[str, Any]) -> None:
 
 def _render_roi(
     lines: List[str],
-    roi: Dict[str, Any],
-    images_dir: str,
-    run_dir: str,
-    copied_paths: Dict[str, str],
+    roi: ReportRow,
+    image_store: ReportImageStore,
 ) -> None:
     rid = roi["roi_id"]
     lines.append(f"### ROI {rid}: {roi['label']}\n")
@@ -163,38 +192,38 @@ def _render_roi(
     if aml_ref:
         _render_aml_reference(lines, aml_ref)
 
-    _append_debug_image(
-        lines, roi.get("debug_path"), images_dir, run_dir, copied_paths, f"ROI {rid}"
-    )
+    _append_debug_image(lines, roi.get("debug_path"), image_store, f"ROI {rid}")
     lines.append("")
+
+
+def _sorted_rois(rois: Sequence[ReportRow]) -> List[ReportRow]:
+    return sorted(
+        rois,
+        key=lambda r: (-int(r.get("importance", 1)), r["roi_id"]),
+    )
 
 
 def _render_rois(
     lines: List[str],
-    images_dir: str,
-    run_dir: str,
-    copied_paths: Dict[str, str],
+    rois: Sequence[ReportRow],
+    image_store: ReportImageStore,
 ) -> None:
     lines.append("## Regions of Interest (ROIs)\n")
-    if not state._roi_marks:
+    if not rois:
         lines.append("_No ROIs were kept in this run._\n")
         return
 
-    sorted_rois = sorted(
-        state._roi_marks,
-        key=lambda r: (-int(r.get("importance", 1)), r["roi_id"]),
-    )
-    _render_aml_summary(lines, sorted_rois)
+    sorted_rois = _sorted_rois(rois)
+    if _is_aml_report():
+        _render_aml_summary(lines, sorted_rois)
     for roi in sorted_rois:
-        _render_roi(lines, roi, images_dir, run_dir, copied_paths)
+        _render_roi(lines, roi, image_store)
 
 
 def _render_step(
     lines: List[str],
-    step: Dict[str, Any],
-    images_dir: str,
-    run_dir: str,
-    copied_paths: Dict[str, str],
+    step: ReportRow,
+    image_store: ReportImageStore,
 ) -> None:
     idx = step["step_index"]
     lines.append(f"### Step {idx}: `{step['tool']}`\n")
@@ -221,32 +250,43 @@ def _render_step(
     if dims is not None:
         lines.append(f"- **View image size**: {dims[0]}×{dims[1]} px")
 
-    _append_debug_image(
-        lines, step.get("debug_path"), images_dir, run_dir, copied_paths, f"Step {idx}"
-    )
+    _append_debug_image(lines, step.get("debug_path"), image_store, f"Step {idx}")
     lines.append("")
 
 
 def _render_steps(
     lines: List[str],
-    images_dir: str,
-    run_dir: str,
-    copied_paths: Dict[str, str],
+    steps: Sequence[ReportRow],
+    image_store: ReportImageStore,
 ) -> None:
     lines.append("## Navigation Steps\n")
-    if not state._step_log:
+    if not steps:
         lines.append("_No navigation steps recorded._\n")
         return
-    for step in state._step_log:
-        _render_step(lines, step, images_dir, run_dir, copied_paths)
+    for step in steps:
+        _render_step(lines, step, image_store)
 
 
 def _write_text_report(path: str, run_prompt: str, final_text: str) -> None:
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         f.write("Prompt\n")
-        f.write(run_prompt.strip() + "\n\n")
+        f.write(_text(run_prompt).strip() + "\n\n")
         f.write("Final Report\n")
-        f.write(final_text.strip() + "\n")
+        f.write(_text(final_text).strip() + "\n")
+
+
+def _render_report_lines(
+    ts: str,
+    run_prompt: str,
+    final_text: str,
+    reasoning_content: Optional[str],
+    image_store: ReportImageStore,
+) -> List[str]:
+    lines: List[str] = []
+    _render_header(lines, ts, run_prompt, final_text, reasoning_content)
+    _render_rois(lines, list(state._roi_marks or []), image_store)
+    _render_steps(lines, list(state._step_log or []), image_store)
+    return lines
 
 
 def write_markdown_report(
@@ -264,14 +304,16 @@ def write_markdown_report(
     report_path = os.path.join(run_dir, "report.md")
     text_report_path = os.path.join(run_dir, "report.txt")
 
-    copied_paths: Dict[str, str] = {}
-    lines: List[str] = []
+    image_store = ReportImageStore(images_dir=images_dir, run_dir=run_dir)
+    lines = _render_report_lines(
+        ts,
+        run_prompt,
+        final_text,
+        reasoning_content,
+        image_store,
+    )
 
-    _render_header(lines, ts, run_prompt, final_text, reasoning_content)
-    _render_rois(lines, images_dir, run_dir, copied_paths)
-    _render_steps(lines, images_dir, run_dir, copied_paths)
-
-    with open(report_path, "w") as f:
+    with open(report_path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
 
     _write_text_report(text_report_path, run_prompt, final_text)

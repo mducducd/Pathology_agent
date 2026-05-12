@@ -295,15 +295,8 @@ for i in "${!PATIENTS[@]}"; do
         continue
     fi
 
-    # ── Skip permanently failed slides (≥2 retry logs = 3+ attempts) ─
     OUTPUT_PATIENT="$(output_patient_name "$PATIENT")"
     SUMMARY="${OUTPUT_DIR}/${OUTPUT_PATIENT}/summary.json"
-    EXISTING_RETRY_COUNT=$(find "$LOG_DIR" -maxdepth 1 -name "${PATIENT}.retry*.log" 2>/dev/null | wc -l)
-    if $RESUME && (( EXISTING_RETRY_COUNT >= 2 )); then
-        echo "[$IDX/$TOTAL] SKIP  $PATIENT — failed ${EXISTING_RETRY_COUNT}+ times, giving up"
-        SKIPPED=$((SKIPPED + 1))
-        continue
-    fi
 
     # ── Resume: skip if already completed ───────────────────────────
     if $RESUME && [[ -f "$SUMMARY" ]]; then

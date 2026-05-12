@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────────────
-# run_batch_aml_suite.sh — Run AML detector across (model × extractor).
+# run_batch_aml_suite.sh — Run WSI agents across (model × extractor).
 #
 # STRICTLY SEQUENTIAL. No background workers, no `&`, no monitors.
 # One combo at a time, one slide at a time. Ctrl-C stops everything
@@ -8,6 +8,8 @@
 #
 # To run multiple combos in parallel, open multiple terminals and
 # filter each one by --models (e.g. one terminal per VLM endpoint).
+#
+# Agent mode (aml_auto, aml_roi, etc) is read from configs/config.yaml.
 # ─────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
@@ -70,14 +72,14 @@ RUNS=(
     "GLM-4.6V-FP8|virchow2|GLM-4.6V-FP8_Virchow2_224px"
     "GLM-4.6V-FP8|h_optimus_1|GLM-4.6V-FP8_H-optimus-1_224px"
     "GLM-4.6V-FP8|dinobloom_giant|GLM-4.6V-FP8_DinoBloom-G_224px"
-    "GLM-4.6V-Flash|uni2|GLM-4.6V-Flash_UNI2_224px"
-    "GLM-4.6V-Flash|virchow2|GLM-4.6V-Flash_Virchow2_224px"
-    "GLM-4.6V-Flash|h_optimus_1|GLM-4.6V-Flash_H-optimus-1_224px"
-    "GLM-4.6V-Flash|dinobloom_giant|GLM-4.6V-Flash_DinoBloom-G_224px"
-    "gemma-4-31B-it-h200|uni2|gemma-4-31B-it-h200_UNI2_224px"
-    "gemma-4-31B-it-h200|virchow2|gemma-4-31B-it-h200_Virchow2_224px"
-    "gemma-4-31B-it-h200|h_optimus_1|gemma-4-31B-it-h200_H-optimus-1_224px"
-    "gemma-4-31B-it-h200|dinobloom_giant|gemma-4-31B-it-h200_DinoBloom-G_224px"
+    "glm-4.6V-flash|uni2|glm-4.6V-flash_UNI2_224px"
+    "glm-4.6V-flash|virchow2|glm-4.6V-flash_Virchow2_224px"
+    "glm-4.6V-flash|h_optimus_1|glm-4.6V-flash_H-optimus-1_224px"
+    "glm-4.6V-flash|dinobloom_giant|glm-4.6V-flash_DinoBloom-G_224px"
+    "gemma-4-31B-it|uni2|gemma-4-31B-it_UNI2_224px"
+    "gemma-4-31B-it|virchow2|gemma-4-31B-it_Virchow2_224px"
+    "gemma-4-31B-it|h_optimus_1|gemma-4-31B-it_H-optimus-1_224px"
+    "gemma-4-31B-it|dinobloom_giant|gemma-4-31B-it_DinoBloom-G_224px"
     "medgemma-27b-it|uni2|medgemma-27b-it_UNI2_224px"
     "medgemma-27b-it|virchow2|medgemma-27b-it_Virchow2_224px"
     "medgemma-27b-it|h_optimus_1|medgemma-27b-it_H-optimus-1_224px"

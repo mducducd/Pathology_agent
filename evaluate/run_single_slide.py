@@ -1,14 +1,26 @@
 #!/usr/bin/env python3
-"""Run the AML detector agent on a single MIRAX slide (headless, no GUI).
+"""Run WSI agents on a single slide or ROI collection (headless, no GUI).
 
 Usage:
+    # AML auto mode (ROI collection + diagnosis):
     python evaluate/run_single_slide.py \
         --slide /path/to/patient.mrxs \
         --output-dir ./batch_outputs \
-        [--model GLM-4.6V-FP8] \
-        [--extractor uni2] \
-        [--experiment-root ./batch_outputs] \
-        [--tile-filter hybrid]
+        --agent aml_auto
+
+    # AML ROI collector only:
+    python evaluate/run_single_slide.py \
+        --slide /path/to/patient.mrxs \
+        --output-dir ./batch_outputs \
+        --agent aml_roi
+
+    # AML diagnosis only (from existing ROI collection):
+    python evaluate/run_single_slide.py \
+        --output-dir ./batch_outputs \
+        --agent aml_diagnosis \
+        --roi-input-path /path/to/roi_collection.json
+
+    [Optional: --model GLM-4.6V-FP8, --extractor uni2, --experiment-root ./cache, --tile-filter hybrid]
 """
 
 import argparse
@@ -27,6 +39,9 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from wsi_core_pkg.aml_output import extract_final_decision as shared_extract_final_decision
+from wsi_core_pkg.aml_output import persist_aml_slide_bundle
+
 MIRAX_EXTS = {".mrxs", ".mrsx"}
 FINAL_DECISIONS = (
     "Normal marrow",
@@ -37,12 +52,16 @@ FINAL_DECISION_LOOKUP = {label.lower(): label for label in FINAL_DECISIONS}
 try:
     from wsi_core_pkg.tuning_config import tuning_value
     DEFAULT_MPP_UM_FALLBACK = float(tuning_value("tools.slide", "DEFAULT_MPP_UM"))
+    DEFAULT_MAX_ACCEPTED_ROIS = int(tuning_value("tools.navigation", "MAX_ACCEPTED_ROIS"))
+    DEFAULT_TARGET_ACCEPTED_ROIS = int(tuning_value("tools.navigation", "TARGET_ACCEPTED_ROIS"))
     try:
         CONFIG_CACHE_ROOT_DIR = str(tuning_value("tools.cache", "CACHE_ROOT_DIR") or "").strip()
     except Exception:
         CONFIG_CACHE_ROOT_DIR = ""
 except Exception:
     DEFAULT_MPP_UM_FALLBACK = 0.159
+    DEFAULT_MAX_ACCEPTED_ROIS = 10
+    DEFAULT_TARGET_ACCEPTED_ROIS = 5
     CONFIG_CACHE_ROOT_DIR = ""
 
 
@@ -600,7 +619,7 @@ def _validate_slide_package(slide_path: str) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run AML agent on a single slide")
-    parser.add_argument("--slide", required=True, help="Path to .mrxs file")
+    parser.add_argument("--slide", default=None, help="Path to .mrxs file")
     parser.add_argument("--output-dir", required=True, help="Directory to collect results")
     parser.add_argument(
         "--experiment-root",
@@ -620,7 +639,9 @@ def main() -> int:
         help="Prefix the per-slide output folder with the model name.",
     )
     parser.add_argument("--tile-filter", default="hybrid", help="Tile prefilter method")
-    parser.add_argument("--agent", default="aml", help="Agent mode (e.g. aml, wsi)")
+    parser.add_argument("--agent", default="aml_auto", help="Agent mode (e.g. aml_auto, aml_roi, aml_diagnosis, wsi)")
+    parser.add_argument("--roi-input-path", default=None, help="Path to roi_collection.json for aml_diagnosis mode")
+    parser.add_argument("--roi-collection-path", default=None, help="Path where to write roi_collection.json for aml_roi mode")
     parser.add_argument(
         "--tile-size-um",
         type=float,
@@ -630,6 +651,18 @@ def main() -> int:
     parser.add_argument("--tile-size-px", type=int, default=224)
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--roi-size-px", type=int, default=2048, help="ROI crop/output size in pixels")
+    parser.add_argument(
+        "--max-accepted-rois",
+        type=int,
+        default=DEFAULT_MAX_ACCEPTED_ROIS,
+        help="Hard cap on kept AML ROIs before ROI collection stops immediately.",
+    )
+    parser.add_argument(
+        "--target-accepted-rois",
+        type=int,
+        default=DEFAULT_TARGET_ACCEPTED_ROIS,
+        help="Soft target number of kept AML ROIs.",
+    )
     parser.add_argument(
         "--default-mpp-um",
         type=float,
@@ -652,13 +685,46 @@ def main() -> int:
         parser.error("--tile-size-um must be > 0")
     if args.default_mpp_um is not None and float(args.default_mpp_um) <= 0:
         parser.error("--default-mpp-um must be > 0")
+    if int(args.max_accepted_rois) <= 0:
+        parser.error("--max-accepted-rois must be > 0")
+    if int(args.target_accepted_rois) <= 0:
+        parser.error("--target-accepted-rois must be > 0")
+    if int(args.target_accepted_rois) > int(args.max_accepted_rois):
+        args.target_accepted_rois = int(args.max_accepted_rois)
 
-    slide_path = os.path.abspath(args.slide)
-    if not os.path.exists(slide_path):
-        print(f"[ERROR] Slide not found: {slide_path}", file=sys.stderr)
-        return 1
+    # Normalize agent type
+    agent_type_lower = (args.agent or "aml_auto").lower()
+    if agent_type_lower in {"aml", "aml_auto"}:
+        agent_type_lower = "aml_auto"
+    args.agent = agent_type_lower
 
-    patient_name = Path(slide_path).stem
+    # For aml_diagnosis mode, roi_input_path is required; slide is not.
+    # Use the parent directory of roi_collection.json as the case/patient id.
+    if args.agent == "aml_diagnosis":
+        if not args.roi_input_path:
+            print("[ERROR] --roi-input-path is required for aml_diagnosis mode", file=sys.stderr)
+            return 1
+        roi_input_path = Path(args.roi_input_path).resolve()
+        if not roi_input_path.is_file():
+            print(f"[ERROR] ROI input not found: {roi_input_path}", file=sys.stderr)
+            return 1
+        slide_path = None
+        # Keep case ID stable for image-path inputs like <case>/images/roi_1.jpg
+        if roi_input_path.parent.name == "images" and roi_input_path.parent.parent.name:
+            patient_name = roi_input_path.parent.parent.name
+        else:
+            patient_name = roi_input_path.parent.name
+    else:
+        # Standard modes require a slide.
+        if not args.slide:
+            print("[ERROR] --slide is required unless --agent aml_diagnosis", file=sys.stderr)
+            return 1
+        slide_path = os.path.abspath(args.slide)
+        if not os.path.exists(slide_path):
+            print(f"[ERROR] Slide not found: {slide_path}", file=sys.stderr)
+            return 1
+        patient_name = Path(slide_path).stem
+
     patient_output_name = _patient_output_name(
         patient_name,
         args.model,
@@ -710,36 +776,53 @@ def main() -> int:
 
     t0 = time.time()
     try:
-        _validate_slide_package(slide_path)
-        tile_size_config = _resolve_tile_size_config(
-            slide_path=slide_path,
-            tile_size_px=args.tile_size_px,
-            requested_tile_size_um=args.tile_size_um,
-            requested_default_mpp_um=args.default_mpp_um,
-        )
-        args.tile_size_um = float(tile_size_config["tile_size_um"])
-        args.tile_size_um_requested = tile_size_config["tile_size_um_requested"]
-        args.tile_size_um_source = str(tile_size_config["tile_size_um_source"])
-        args.default_mpp_um_requested = tile_size_config["default_mpp_um_requested"]
-        args.slide_mpp_um = tile_size_config["slide_mpp_um"]
-        args.resolved_mpp_um = float(tile_size_config["resolved_mpp_um"])
-        args.mpp_source = str(tile_size_config["mpp_source"])
-        args.default_mpp_um_fallback = float(tile_size_config["default_mpp_um_fallback"])
+        # For aml_diagnosis mode, skip slide validation and tile size resolution
+        if args.agent != "aml_diagnosis":
+            _validate_slide_package(slide_path)
+            tile_size_config = _resolve_tile_size_config(
+                slide_path=slide_path,
+                tile_size_px=args.tile_size_px,
+                requested_tile_size_um=args.tile_size_um,
+                requested_default_mpp_um=args.default_mpp_um,
+            )
+            args.tile_size_um = float(tile_size_config["tile_size_um"])
+            args.tile_size_um_requested = tile_size_config["tile_size_um_requested"]
+            args.tile_size_um_source = str(tile_size_config["tile_size_um_source"])
+            args.default_mpp_um_requested = tile_size_config["default_mpp_um_requested"]
+            args.slide_mpp_um = tile_size_config["slide_mpp_um"]
+            args.resolved_mpp_um = float(tile_size_config["resolved_mpp_um"])
+            args.mpp_source = str(tile_size_config["mpp_source"])
+            args.default_mpp_um_fallback = float(tile_size_config["default_mpp_um_fallback"])
 
-        print(f"[SLIDE] {slide_path}")
+            print(f"[SLIDE] {slide_path}")
+        else:
+            # For aml_diagnosis, set tile size config to defaults
+            args.tile_size_um = args.tile_size_um or (args.tile_size_px * DEFAULT_MPP_UM_FALLBACK)
+            args.tile_size_um_requested = None
+            args.tile_size_um_source = "not_applicable"
+            args.default_mpp_um_requested = None
+            args.slide_mpp_um = None
+            args.resolved_mpp_um = DEFAULT_MPP_UM_FALLBACK
+            args.mpp_source = "not_applicable"
+            args.default_mpp_um_fallback = DEFAULT_MPP_UM_FALLBACK
+            print(f"[MODE] aml_diagnosis (no slide needed)")
+            print(f"[ROI_INPUT] {args.roi_input_path}")
+
         print(f"[RUN]   {run_id}")
+        print(f"[AGENT] {args.agent}")
         print(f"[MODEL] {args.model}  [EXTRACTOR] {args.extractor}  [FILTER] {args.tile_filter}")
         print(f"[ROI]   {args.roi_size_px}px")
-        print(
-            "[TILE]  %spx / %.3fum  [source=%s, mpp=%.6f from %s]"
-            % (
-                args.tile_size_px,
-                args.tile_size_um,
-                args.tile_size_um_source,
-                args.resolved_mpp_um,
-                args.mpp_source,
+        if args.agent != "aml_diagnosis":
+            print(
+                "[TILE]  %spx / %.3fum  [source=%s, mpp=%.6f from %s]"
+                % (
+                    args.tile_size_px,
+                    args.tile_size_um,
+                    args.tile_size_um_source,
+                    args.resolved_mpp_um,
+                    args.mpp_source,
+                )
             )
-        )
         print(f"[CACHEROOT] {cache_root}")
         if tile_cache_dir is not None:
             print(f"[TILECACHE] {tile_cache_dir}")
@@ -750,6 +833,13 @@ def main() -> int:
         print(f"[FEATCACHE] {feature_cache_dir}")
         if os.getenv("CUDA_VISIBLE_DEVICES"):
             print(f"[CUDA]  CUDA_VISIBLE_DEVICES={os.getenv('CUDA_VISIBLE_DEVICES')}")
+
+        # For AML modes, pre-create patient_out and pass as case_output_dir
+        patient_out = out_dir / patient_output_name
+        case_output_dir = None
+        if args.agent in {"aml_roi", "aml_auto", "aml_diagnosis"}:
+            patient_out.mkdir(parents=True, exist_ok=True)
+            case_output_dir = str(patient_out)
 
         result = run_wsi_agent_for_web(
             slide_path=slide_path,
@@ -763,14 +853,24 @@ def main() -> int:
             batch_size=args.batch_size,
             tile_prefilter_method=args.tile_filter,
             roi_output_size_px=args.roi_size_px,
+            max_accepted_rois=args.max_accepted_rois,
+            target_accepted_rois=args.target_accepted_rois,
             default_mpp_um=args.default_mpp_um,
+            roi_input_path=args.roi_input_path,
+            roi_collection_path=args.roi_collection_path,
+            case_output_dir=case_output_dir,
         )
         elapsed = time.time() - t0
 
-        patient_out = out_dir / patient_output_name
-        patient_out.mkdir(parents=True, exist_ok=True)
+        # Only create patient_out for aml_diagnosis mode (aml_roi/auto already created it)
+        if args.agent == "aml_diagnosis":
+            patient_out = out_dir / patient_output_name
+            patient_out.mkdir(parents=True, exist_ok=True)
 
-        for legacy_dir in ("artifacts", "images"):
+        legacy_dirs = ["artifacts"]
+        if args.agent not in {"aml_roi", "aml_auto", "aml_diagnosis"}:
+            legacy_dirs.append("images")
+        for legacy_dir in legacy_dirs:
             dst = patient_out / legacy_dir
             if dst.exists() and dst.is_dir():
                 shutil.rmtree(dst)
@@ -783,54 +883,93 @@ def main() -> int:
         (patient_out / "final_output.txt").write_text(final_output)
         report_src = result.get("report_path")
         state_data = result.get("state") or {}
-        final_decision = _extract_final_decision(final_output)
-        if not final_decision:
-            raise RuntimeError("Completed run did not include a parseable final decision")
 
-        if run_artifacts.is_dir():
-            _strip_tile_cache(run_artifacts)
-        _copy_eval_images(patient_out, state_data, run_artifacts)
-        _persist_report_artifacts(
-            patient_out=patient_out,
-            report_src=report_src,
-            state_data=state_data,
-            final_output=final_output,
-            final_decision=final_decision,
-            patient_name=patient_name,
-            slide_path=slide_path,
-            run_id=run_id,
-            args=args,
-            elapsed=elapsed,
-        )
+        # Only check for final decision in modes that produce one (not aml_roi)
+        final_decision = None
+        if args.agent != "aml_roi":
+            final_decision = shared_extract_final_decision(final_output)
+            if not final_decision and args.agent != "aml_auto":
+                raise RuntimeError("Completed run did not include a parseable final decision")
+            # For aml_auto, diagnosis happens after ROI collection, so it should have final_decision
+            if args.agent == "aml_auto" and not final_decision:
+                raise RuntimeError("aml_auto mode: diagnosis phase did not produce a parseable final decision")
 
-        _write_summary(
-            patient_out,
-            patient=patient_name,
-            slide=slide_path,
-            run_id=run_id,
-            agent=args.agent,
-            model=args.model,
-            extractor=args.extractor,
-            tile_filter=args.tile_filter,
-            tile_size_px=args.tile_size_px,
-            tile_size_um=args.tile_size_um,
-            tile_size_um_requested=getattr(args, "tile_size_um_requested", args.tile_size_um),
-            tile_size_um_source=getattr(args, "tile_size_um_source", "explicit"),
-            default_mpp_um_requested=getattr(args, "default_mpp_um_requested", None),
-            slide_mpp_um=getattr(args, "slide_mpp_um", None),
-            resolved_mpp_um=getattr(args, "resolved_mpp_um", None),
-            default_mpp_um_fallback=getattr(args, "default_mpp_um_fallback", DEFAULT_MPP_UM_FALLBACK),
-            mpp_source=getattr(args, "mpp_source", None),
-            roi_size_px=args.roi_size_px,
-            batch_size=args.batch_size,
-            elapsed_sec=round(elapsed, 1),
-            status="ok",
-            final_decision=final_decision,
-            fresh_embedding_cache=bool(args.fresh_embedding_cache),
-            tile_cache_enabled=bool(args.use_tile_cache),
-            tile_cache_dir=str(tile_cache_dir) if tile_cache_dir else "",
-            feature_cache_dir=str(feature_cache_dir),
-        )
+        if args.agent.startswith("aml"):
+            persist_aml_slide_bundle(
+                case_output_dir=patient_out,
+                result=result,
+                run_id=run_id,
+                agent_type=args.agent,
+                model_name=args.model,
+                extractor_name=args.extractor,
+                tile_filter=args.tile_filter,
+                tile_size_px=args.tile_size_px,
+                tile_size_um=args.tile_size_um,
+                tile_size_um_requested=getattr(args, "tile_size_um_requested", args.tile_size_um),
+                tile_size_um_source=getattr(args, "tile_size_um_source", "explicit"),
+                default_mpp_um_requested=getattr(args, "default_mpp_um_requested", None),
+                slide_mpp_um=getattr(args, "slide_mpp_um", None),
+                resolved_mpp_um=getattr(args, "resolved_mpp_um", None),
+                default_mpp_um_fallback=getattr(args, "default_mpp_um_fallback", DEFAULT_MPP_UM_FALLBACK),
+                mpp_source=getattr(args, "mpp_source", None),
+                roi_size_px=args.roi_size_px,
+                batch_size=args.batch_size,
+                elapsed_sec=elapsed,
+                slide_path=slide_path,
+                slide_name=result.get("slide_name"),
+                patient_name=patient_name,
+                roi_input_path=args.roi_input_path,
+                status="ok",
+                fresh_embedding_cache=bool(args.fresh_embedding_cache),
+                tile_cache_enabled=bool(args.use_tile_cache),
+                tile_cache_dir=str(tile_cache_dir) if tile_cache_dir else "",
+                feature_cache_dir=str(feature_cache_dir),
+            )
+        else:
+            if run_artifacts.is_dir():
+                _strip_tile_cache(run_artifacts)
+            _copy_eval_images(patient_out, state_data, run_artifacts)
+            _persist_report_artifacts(
+                patient_out=patient_out,
+                report_src=report_src,
+                state_data=state_data,
+                final_output=final_output,
+                final_decision=final_decision,
+                patient_name=patient_name,
+                slide_path=slide_path,
+                run_id=run_id,
+                args=args,
+                elapsed=elapsed,
+            )
+
+            _write_summary(
+                patient_out,
+                patient=patient_name,
+                slide=slide_path,
+                run_id=run_id,
+                agent=args.agent,
+                model=args.model,
+                extractor=args.extractor,
+                tile_filter=args.tile_filter,
+                tile_size_px=args.tile_size_px,
+                tile_size_um=args.tile_size_um,
+                tile_size_um_requested=getattr(args, "tile_size_um_requested", args.tile_size_um),
+                tile_size_um_source=getattr(args, "tile_size_um_source", "explicit"),
+                default_mpp_um_requested=getattr(args, "default_mpp_um_requested", None),
+                slide_mpp_um=getattr(args, "slide_mpp_um", None),
+                resolved_mpp_um=getattr(args, "resolved_mpp_um", None),
+                default_mpp_um_fallback=getattr(args, "default_mpp_um_fallback", DEFAULT_MPP_UM_FALLBACK),
+                mpp_source=getattr(args, "mpp_source", None),
+                roi_size_px=args.roi_size_px,
+                batch_size=args.batch_size,
+                elapsed_sec=round(elapsed, 1),
+                status="ok",
+                final_decision=final_decision,
+                fresh_embedding_cache=bool(args.fresh_embedding_cache),
+                tile_cache_enabled=bool(args.use_tile_cache),
+                tile_cache_dir=str(tile_cache_dir) if tile_cache_dir else "",
+                feature_cache_dir=str(feature_cache_dir),
+            )
 
         print(f"[OK]    {patient_name}  ({elapsed:.0f}s)  -> {patient_out}")
         return 0
@@ -839,36 +978,71 @@ def main() -> int:
         elapsed = time.time() - t0
         print(f"[FAIL]  {patient_name}  ({elapsed:.0f}s)  {exc}", file=sys.stderr)
 
-        patient_out = out_dir / patient_output_name
+        # Ensure patient_out exists for error reporting
+        if 'patient_out' not in locals():
+            patient_out = out_dir / patient_output_name
         patient_out.mkdir(parents=True, exist_ok=True)
-        _write_summary(
-            patient_out,
-            patient=patient_name,
-            slide=slide_path,
-            run_id=run_id,
-            agent=args.agent,
-            model=args.model,
-            extractor=args.extractor,
-            tile_filter=args.tile_filter,
-            tile_size_px=args.tile_size_px,
-            tile_size_um=args.tile_size_um,
-            tile_size_um_requested=getattr(args, "tile_size_um_requested", args.tile_size_um),
-            tile_size_um_source=getattr(args, "tile_size_um_source", "explicit"),
-            default_mpp_um_requested=getattr(args, "default_mpp_um_requested", None),
-            slide_mpp_um=getattr(args, "slide_mpp_um", None),
-            resolved_mpp_um=getattr(args, "resolved_mpp_um", None),
-            default_mpp_um_fallback=getattr(args, "default_mpp_um_fallback", DEFAULT_MPP_UM_FALLBACK),
-            mpp_source=getattr(args, "mpp_source", None),
-            roi_size_px=args.roi_size_px,
-            batch_size=args.batch_size,
-            elapsed_sec=round(elapsed, 1),
-            status="error",
-            error=str(exc),
-            fresh_embedding_cache=bool(args.fresh_embedding_cache),
-            tile_cache_enabled=bool(args.use_tile_cache),
-            tile_cache_dir=str(tile_cache_dir) if tile_cache_dir else "",
-            feature_cache_dir=str(feature_cache_dir),
-        )
+        if args.agent.startswith("aml"):
+            persist_aml_slide_bundle(
+                case_output_dir=patient_out,
+                result=None,
+                run_id=run_id,
+                agent_type=args.agent,
+                model_name=args.model,
+                extractor_name=args.extractor,
+                tile_filter=args.tile_filter,
+                tile_size_px=args.tile_size_px,
+                tile_size_um=args.tile_size_um,
+                tile_size_um_requested=getattr(args, "tile_size_um_requested", args.tile_size_um),
+                tile_size_um_source=getattr(args, "tile_size_um_source", "explicit"),
+                default_mpp_um_requested=getattr(args, "default_mpp_um_requested", None),
+                slide_mpp_um=getattr(args, "slide_mpp_um", None),
+                resolved_mpp_um=getattr(args, "resolved_mpp_um", None),
+                default_mpp_um_fallback=getattr(args, "default_mpp_um_fallback", DEFAULT_MPP_UM_FALLBACK),
+                mpp_source=getattr(args, "mpp_source", None),
+                roi_size_px=args.roi_size_px,
+                batch_size=args.batch_size,
+                elapsed_sec=elapsed,
+                slide_path=slide_path,
+                slide_name=patient_name,
+                patient_name=patient_name,
+                roi_input_path=args.roi_input_path,
+                status="error",
+                error=str(exc),
+                fresh_embedding_cache=bool(args.fresh_embedding_cache),
+                tile_cache_enabled=bool(args.use_tile_cache),
+                tile_cache_dir=str(tile_cache_dir) if tile_cache_dir else "",
+                feature_cache_dir=str(feature_cache_dir),
+            )
+        else:
+            _write_summary(
+                patient_out,
+                patient=patient_name,
+                slide=slide_path,
+                run_id=run_id,
+                agent=args.agent,
+                model=args.model,
+                extractor=args.extractor,
+                tile_filter=args.tile_filter,
+                tile_size_px=args.tile_size_px,
+                tile_size_um=args.tile_size_um,
+                tile_size_um_requested=getattr(args, "tile_size_um_requested", args.tile_size_um),
+                tile_size_um_source=getattr(args, "tile_size_um_source", "explicit"),
+                default_mpp_um_requested=getattr(args, "default_mpp_um_requested", None),
+                slide_mpp_um=getattr(args, "slide_mpp_um", None),
+                resolved_mpp_um=getattr(args, "resolved_mpp_um", None),
+                default_mpp_um_fallback=getattr(args, "default_mpp_um_fallback", DEFAULT_MPP_UM_FALLBACK),
+                mpp_source=getattr(args, "mpp_source", None),
+                roi_size_px=args.roi_size_px,
+                batch_size=args.batch_size,
+                elapsed_sec=round(elapsed, 1),
+                status="error",
+                error=str(exc),
+                fresh_embedding_cache=bool(args.fresh_embedding_cache),
+                tile_cache_enabled=bool(args.use_tile_cache),
+                tile_cache_dir=str(tile_cache_dir) if tile_cache_dir else "",
+                feature_cache_dir=str(feature_cache_dir),
+            )
         return 1
     finally:
         if run_artifacts.exists() and run_artifacts.is_dir():

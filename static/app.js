@@ -17,7 +17,15 @@
   const validationEl = document.getElementById("validation");
 
   const promptEl = document.getElementById("prompt");
+  const singlePromptField = document.getElementById("single-prompt-field");
+  const amlAutoPromptsField = document.getElementById("aml-auto-prompts-field");
+  const amlAutoRoiPromptEl = document.getElementById("aml-auto-roi-prompt");
+  const amlAutoDiagnosisPromptEl = document.getElementById("aml-auto-diagnosis-prompt");
   const agentSelect = document.getElementById("agent-select");
+  const roiInputField = document.getElementById("roi-input-field");
+  const roiInputPath = document.getElementById("roi-input-path");
+  const outputPathField = document.getElementById("output-path-field");
+  const outputPathInput = document.getElementById("output-path");
   const modelSelect = document.getElementById("model-select");
   const extractorSelect = document.getElementById("extractor-select");
   const targetAcceptedRoisSelect = document.getElementById("target-accepted-rois-select");
@@ -62,6 +70,7 @@
   const btnDarkToggle = document.getElementById("btn-dark-toggle");
   const finalSection = document.getElementById("final-section");
   const finalText = document.getElementById("final-text");
+  const slideNameDisplay = document.getElementById("slide-name-display");
   const reasoningSection = document.getElementById("reasoning-section");
   const reasoningText = document.getElementById("reasoning-text");
   const reportLink = document.getElementById("report-link");
@@ -93,6 +102,13 @@
   let defaultPrompts = {
     tile: "",
     aml: "",
+    aml_auto: "",
+    aml_auto_stage_defaults: {
+      roi_collection: "",
+      diagnosis: ""
+    },
+    aml_roi: "",
+    aml_diagnosis: "",
     wsi: ""
   };
   const uploadActionHints = {
@@ -105,6 +121,10 @@
 
   function selectedAgentType() {
     return (agentSelect && agentSelect.value) ? agentSelect.value : "tile";
+  }
+
+  function isAmlAgentType(agentType) {
+    return String(agentType || "").toLowerCase().startsWith("aml");
   }
 
   function selectedModelName() {
@@ -153,6 +173,35 @@
     if (!raw) return null;
     const parsed = Number.parseFloat(raw);
     return Number.isFinite(parsed) && parsed >= 100 ? parsed : null;
+  }
+
+  function selectedRoiInputPath() {
+    return (roiInputPath && typeof roiInputPath.value === "string")
+      ? roiInputPath.value.trim()
+      : "";
+  }
+
+  function selectedOutputPath() {
+    const raw = (outputPathInput && typeof outputPathInput.value === "string")
+      ? outputPathInput.value.trim()
+      : "";
+    return raw || "output/";
+  }
+
+  function isAmlAutoAgentType(agentType) {
+    return String(agentType || "").toLowerCase() === "aml_auto";
+  }
+
+  function selectedPromptValue() {
+    return promptEl ? (promptEl.value || "") : "";
+  }
+
+  function selectedAmlAutoRoiPromptValue() {
+    return amlAutoRoiPromptEl ? (amlAutoRoiPromptEl.value || "") : "";
+  }
+
+  function selectedAmlAutoDiagnosisPromptValue() {
+    return amlAutoDiagnosisPromptEl ? (amlAutoDiagnosisPromptEl.value || "") : "";
   }
 
   function formatMppUm(value) {
@@ -318,7 +367,16 @@
 
   function isKnownDefaultPrompt(value) {
     if (!value) return false;
-    return Object.values(defaultPrompts).some((prompt) => prompt && prompt === value);
+    return [
+      defaultPrompts.tile,
+      defaultPrompts.aml,
+      defaultPrompts.aml_auto,
+      defaultPrompts.aml_roi,
+      defaultPrompts.aml_diagnosis,
+      defaultPrompts.wsi,
+      defaultPrompts.aml_auto_stage_defaults && defaultPrompts.aml_auto_stage_defaults.roi_collection,
+      defaultPrompts.aml_auto_stage_defaults && defaultPrompts.aml_auto_stage_defaults.diagnosis,
+    ].some((prompt) => prompt && prompt === value);
   }
 
   async function loadDefaultPrompts() {
@@ -329,16 +387,36 @@
       }
       const payload = await res.json();
       const prompts = payload && payload.prompts ? payload.prompts : {};
+      const amlAutoStageDefaults = prompts && typeof prompts.aml_auto_stage_defaults === "object" && prompts.aml_auto_stage_defaults
+        ? prompts.aml_auto_stage_defaults
+        : {};
       const nextPrompts = {
         tile: typeof prompts.tile === "string" ? prompts.tile : "",
         aml: typeof prompts.aml === "string" ? prompts.aml : "",
+        aml_auto: typeof prompts.aml_auto === "string" ? prompts.aml_auto : "",
+        aml_auto_stage_defaults: {
+          roi_collection: typeof amlAutoStageDefaults.roi_collection === "string" ? amlAutoStageDefaults.roi_collection : "",
+          diagnosis: typeof amlAutoStageDefaults.diagnosis === "string" ? amlAutoStageDefaults.diagnosis : "",
+        },
+        aml_roi: typeof prompts.aml_roi === "string" ? prompts.aml_roi : "",
+        aml_diagnosis: typeof prompts.aml_diagnosis === "string" ? prompts.aml_diagnosis : "",
         wsi: typeof prompts.wsi === "string" ? prompts.wsi : ""
       };
-      const currentValue = promptEl.value;
-      const shouldReplace = !currentValue.trim() || isKnownDefaultPrompt(currentValue);
+      const currentValue = selectedPromptValue();
+      const currentRoiValue = selectedAmlAutoRoiPromptValue();
+      const currentDiagnosisValue = selectedAmlAutoDiagnosisPromptValue();
+      const shouldReplaceSingle = !currentValue.trim() || isKnownDefaultPrompt(currentValue);
+      const shouldReplaceRoi = !currentRoiValue.trim() || isKnownDefaultPrompt(currentRoiValue);
+      const shouldReplaceDiagnosis = !currentDiagnosisValue.trim() || isKnownDefaultPrompt(currentDiagnosisValue);
       defaultPrompts = nextPrompts;
-      if (shouldReplace) {
+      if (shouldReplaceSingle && promptEl) {
         promptEl.value = defaultPrompts[selectedAgentType()] || "";
+      }
+      if (shouldReplaceRoi && amlAutoRoiPromptEl) {
+        amlAutoRoiPromptEl.value = defaultPrompts.aml_auto_stage_defaults.roi_collection || "";
+      }
+      if (shouldReplaceDiagnosis && amlAutoDiagnosisPromptEl) {
+        amlAutoDiagnosisPromptEl.value = defaultPrompts.aml_auto_stage_defaults.diagnosis || "";
       }
     } catch (err) {
       console.warn("Failed to load default prompts from backend", err);
@@ -428,7 +506,24 @@
 
   function maybeLoadDefaultPrompt() {
     const type = selectedAgentType();
+    if (isAmlAutoAgentType(type)) {
+      const roiDefault = (defaultPrompts.aml_auto_stage_defaults && defaultPrompts.aml_auto_stage_defaults.roi_collection) || "";
+      const diagnosisDefault = (defaultPrompts.aml_auto_stage_defaults && defaultPrompts.aml_auto_stage_defaults.diagnosis) || "";
+      if (amlAutoRoiPromptEl) {
+        if (!amlAutoRoiPromptEl.value.trim() || isKnownDefaultPrompt(amlAutoRoiPromptEl.value)) {
+          amlAutoRoiPromptEl.value = roiDefault;
+        }
+      }
+      if (amlAutoDiagnosisPromptEl) {
+        if (!amlAutoDiagnosisPromptEl.value.trim() || isKnownDefaultPrompt(amlAutoDiagnosisPromptEl.value)) {
+          amlAutoDiagnosisPromptEl.value = diagnosisDefault;
+        }
+      }
+      return;
+    }
+
     const d = defaultPrompts[type] || "";
+    if (!promptEl) return;
     if (!promptEl.value.trim()) {
       promptEl.value = d;
       return;
@@ -438,11 +533,53 @@
     }
   }
 
-  if (agentSelect) {
-    agentSelect.addEventListener("change", maybeLoadDefaultPrompt);
+  function updateRoiInputFieldVisibility() {
+    const agentType = selectedAgentType();
+    const isAmlDiagnosis = (agentType === "aml_diagnosis");
+    const isAmlAuto = isAmlAutoAgentType(agentType);
+    const isAmlAgent = isAmlAgentType(agentType);
+    if (singlePromptField) {
+      singlePromptField.hidden = isAmlAuto;
+    }
+    if (amlAutoPromptsField) {
+      amlAutoPromptsField.hidden = !isAmlAuto;
+    }
+    if (roiInputField) {
+      roiInputField.hidden = !isAmlDiagnosis;
+    }
+    if (outputPathField) {
+      outputPathField.hidden = !isAmlAgent;
+    }
+    if (dropzone) {
+      dropzone.hidden = isAmlDiagnosis;  // Hide dropzone for aml_diagnosis mode
+    }
   }
+
+  if (agentSelect) {
+    agentSelect.addEventListener("change", () => {
+      maybeLoadDefaultPrompt();
+      updateRoiInputFieldVisibility();
+      computeModeAndValidation();
+      syncStartButtonState();
+    });
+  }
+
+  // Update validation when ROI input path changes
+  if (roiInputPath) {
+    roiInputPath.addEventListener("input", () => {
+      syncStartButtonState();
+    });
+  }
+
+  if (outputPathInput) {
+    outputPathInput.addEventListener("input", () => {
+      syncStartButtonState();
+    });
+  }
+
   loadDefaultPrompts();
   loadEmbeddingExtractorOptions();
+  updateRoiInputFieldVisibility();
 
   const allowedPrimary = new Set([".svs", ".tif", ".tiff", ".ndpi", ".mrxs", ".mrsx"]);
   const allowedZip = ".zip";
@@ -994,6 +1131,14 @@
     reasoningText.classList.remove("waiting");
   }
 
+  function setSlideNameDisplay(slideName) {
+    if (!slideNameDisplay) return;
+    const name = String(slideName || "").trim();
+    const hasName = name && name.length > 0;
+    slideNameDisplay.hidden = !hasName;
+    slideNameDisplay.textContent = hasName ? `Slide: ${name}` : "";
+  }
+
   async function fetchAndRenderReport(href, fallbackText) {
     const token = ++reportFetchToken;
     renderFinalReportMarkdown("Loading report markdown…", true);
@@ -1144,6 +1289,32 @@
   }
 
   function computeModeAndValidation() {
+    const agentType = selectedAgentType();
+
+    // Special case for aml_diagnosis: requires ROI input path, no slide needed
+    if (agentType === "aml_diagnosis") {
+      const roiPath = selectedRoiInputPath();
+      const outputPath = selectedOutputPath();
+      if (!roiPath) {
+        return {
+          ok: false,
+          level: "bad",
+          mode: "AML Diagnosis",
+          msg: "ROI input path is required for aml_diagnosis mode.",
+          startLabel: "Start run",
+          selectionMode: "none",
+        };
+      }
+      return {
+        ok: true,
+        level: "good",
+        mode: "AML Diagnosis",
+        msg: `Ready to run diagnosis from ROI input: ${roiPath} -> ${outputPath}`,
+        startLabel: "Start run",
+        selectionMode: "roi",
+      };
+    }
+
     if (serverSelection) {
       return {
         ok: true,
@@ -2629,13 +2800,16 @@
   }
 
   async function pollRun() {
-    if (!currentRunId) return;
+    const runIdForPoll = currentRunId;
+    if (!runIdForPoll) return;
     if (pollInFlight) return;
     pollInFlight = true;
     try {
-      const res = await fetch(`/api/runs/${currentRunId}`);
+      const res = await fetch(`/api/runs/${encodeURIComponent(runIdForPoll)}`);
+      if (currentRunId !== runIdForPoll) return;
       if (!res.ok) return;
       const data = await res.json();
+      if (currentRunId !== runIdForPoll) return;
       const run = data.run;
       const st = data.wsi_state;
       const tilePrefilterMethod =
@@ -2706,7 +2880,7 @@
       lastCurrentViewState = (st && st.current_view) ? st.current_view : null;
       overviewCacheState = (st && st.overview_cache) ? st.overview_cache : null;
 
-      slideNameEl.textContent = run.slide_filename || "—";
+      slideNameEl.textContent = run.slide_name || run.slide_filename || "—";
 
       if (run.status === "created") setPill(statusPill, "run", "Created");
       if (run.status === "uploading") setPill(statusPill, "run", "Uploading");
@@ -2755,7 +2929,7 @@
       // Re-fetch dark regions when overview image changes (if enabled)
       if (overviewUrlChanged && darkRegionsEnabled && currentRunId) {
         darkRegionsLoaded = false;  // Reset to allow re-fetch
-        fetchDarkRegions(currentRunId);
+        fetchDarkRegions(runIdForPoll);
       }
       const hasReportPath = !!run.report_path;
       if (!hasReportPath) {
@@ -2772,6 +2946,8 @@
 
       if (run.reasoning_content) setReasoningContent(run.reasoning_content);
       else setReasoningContent("");
+
+      setSlideNameDisplay(run.slide_name);
 
       if (run.report_path) {
         const href = reportHrefFromPath(run.report_path);
@@ -3003,9 +3179,13 @@
 
   async function apiCreateRun() {
     const fd = new FormData();
+    const agentType = selectedAgentType();
+    const isAmlAuto = isAmlAutoAgentType(agentType);
     fd.append("agent_type", selectedAgentType());
     fd.append("model_name", selectedModelName());
-    fd.append("prompt", promptEl.value || "");
+    fd.append("prompt", isAmlAuto ? "" : selectedPromptValue());
+    fd.append("aml_auto_roi_prompt", isAmlAuto ? selectedAmlAutoRoiPromptValue() : "");
+    fd.append("aml_auto_diagnosis_prompt", isAmlAuto ? selectedAmlAutoDiagnosisPromptValue() : "");
     fd.append("extractor_name", extractorSelect ? extractorSelect.value : "uni2");
     fd.append("tile_size_px", tileSizeSelect ? tileSizeSelect.value : "224");
     fd.append("batch_size", String(selectedBatchSize()));
@@ -3017,6 +3197,9 @@
     fd.append("default_mpp_um", selectedDefaultMpp == null ? "" : String(selectedDefaultMpp));
     const selectedNavField = selectedCandidateNavFieldUm();
     fd.append("candidate_nav_field_um", selectedNavField == null ? "" : String(selectedNavField));
+    fd.append("roi_input_path", selectedRoiInputPath());
+    fd.append("roi_collection_path", "");
+    fd.append("output_path", selectedOutputPath());
     const res = await fetch("/api/runs/create", { method: "POST", body: fd });
     if (!res.ok) throw new Error(await res.text());
     return await res.json();
@@ -3093,7 +3276,15 @@
     const v = computeModeAndValidation();
     if (!v.ok) return;
     const usingServerSelection = !!serverSelection;
+    const agentType = selectedAgentType();
+    const isAmlDiagnosis = agentType === "aml_diagnosis";
 
+    if (pollingTimer) {
+      clearInterval(pollingTimer);
+      pollingTimer = null;
+    }
+    currentRunId = null;
+    pollInFlight = false;
     resetRunUI();
     closeStatusActionsMenu();
     terminateRequested = false;
@@ -3120,28 +3311,31 @@
       setModelStatus("created", currentModelName);
       syncTerminateButtonState();
 
-      if (usingServerSelection) {
-        setPill(statusPill, "run", "Preparing server slide…");
-        upsertLiveStatusStep(
-          "Attaching server slide",
-          serverSelection ? serverSelection.requestedPath : "Resolving server selection…"
-        );
-        await apiAttachServerSelection(currentRunId, serverSelection.requestedPath);
-        if (terminateRequested) throw new Error("Run terminated by user.");
-      } else {
-        // Upload files one by one
-        setPill(statusPill, "run", "Uploading…");
-        syncLiveRunStatusStep("uploading");
+      if (!isAmlDiagnosis) {
+        // Only upload/attach slide if not aml_diagnosis mode
+        if (usingServerSelection) {
+          setPill(statusPill, "run", "Preparing server slide…");
+          upsertLiveStatusStep(
+            "Attaching server slide",
+            serverSelection ? serverSelection.requestedPath : "Resolving server selection…"
+          );
+          await apiAttachServerSelection(currentRunId, serverSelection.requestedPath);
+          if (terminateRequested) throw new Error("Run terminated by user.");
+        } else {
+          // Upload files one by one
+          setPill(statusPill, "run", "Uploading…");
+          syncLiveRunStatusStep("uploading");
 
-        await uploadAllFilesPerRequest(currentRunId);
-        if (terminateRequested) throw new Error("Run terminated by user.");
+          await uploadAllFilesPerRequest(currentRunId);
+          if (terminateRequested) throw new Error("Run terminated by user.");
+        }
       }
 
       // Finalize + start
-      setPill(statusPill, "run", usingServerSelection ? "Starting…" : "Finalizing…");
+      setPill(statusPill, "run", "Starting…");
       upsertLiveStatusStep(
-        usingServerSelection ? "Starting run" : "Finalizing run",
-        usingServerSelection ? "Validating server slide and starting agent…" : "Validating bundle and starting agent…"
+        "Starting run",
+        isAmlDiagnosis ? "Using ROI collection and starting diagnosis agent…" : "Validating slide and starting agent…"
       );
       setModelStatus("pending", currentModelName);
 

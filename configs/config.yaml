@@ -8,7 +8,7 @@ agent:
   # API key — for local LLMs any non-empty string works.
   OPENAI_API_KEY: "local"
   # Default model name used by the agent.
-  MODEL_NAME: "gemma-4-31B-it-h200"
+  MODEL_NAME: "gemma-4-31B-it"
   # Default slide path used when running standalone (not batch).
   DEFAULT_SLIDE_PATH: "341476.svs"
   # Output root directory for all run artifacts.
@@ -18,20 +18,20 @@ agent:
   # Root directory for example ROI/Non-ROI images used in context injection.
   EXAMPLE_ROIS_ROOT: "./Example_ROIs"
   # Sampling temperature for all WSI agents.
-  WSI_AGENT_TEMPERATURE: 1.0
+  WSI_AGENT_TEMPERATURE: 0.0
   # Set to true to enable vLLM chain-of-thought thinking mode.
   ENABLE_THINKING: false
   # Maximum number of agent turns before forced termination.
-  MAX_TURNS: 140
+  MAX_TURNS: 80
   # Maximum image dimension (px) for WSI view renders sent to the agent.
-  MAX_IMG_DIM: 256
+  MAX_IMG_DIM: 1024
   # Maximum image dimension (px) for native-resolution views (never sent to agent).
   MAX_NATIVE_VIEW_DIM: 4096
   # Tile size in microns used for tile-agent saving and TILE_SIZE_UM references.
   TILE_SIZE_UM: 256.0
   # Tile output size in pixels after resizing (used by tile-save agent).
   TILE_PX: 224
-  # Maximum number of good tiles the tile agent will save per run.
+  # Maximum number of good tiles the tile agent will save per run.P
   MAX_GOOD_TILES: 200
   # Maximum number of bad tiles the tile agent will save per run.
   MAX_BAD_TILES: 50
@@ -61,7 +61,7 @@ tools:
     # Default AML ROI side length passed to AML batch runs.
     ROI_SIZE_PX: 2048
     # Default agent mode passed to AML batch runs.
-    AGENT: "aml"
+    AGENT: "aml_auto"
 
   cache:
     # Unified cache directory for all embeddings, tiles, and reference indices.
@@ -223,6 +223,23 @@ roi_ranker:
     AML_COMBINED_RANK_GOOD_SUPPORT_BONUS: 0.06
     # Tile-size multiplier used to enforce adaptive center spacing between kept ROI candidates.
     ROI_ADAPTIVE_MIN_SEPARATION_TILE_RATIO: 0.38
+
+aml_pipeline:
+  # Frontend/default AML mode used by the web UI and batch scripts.
+  DEFAULT_AML_AGENT_TYPE: "aml_auto"
+
+  # Output conventions matching run_batch_aml_suite.sh / evaluate/run_single_slide.py.
+  ROI_IMAGES_SUBDIR: "images"
+  ROI_COLLECTION_FILENAME: "roi_collection.json"
+  ROI_IMAGE_GLOB: "roi_*.jpg"
+  ROI_CANDIDATES_FILENAME: "roi_candidates.jpg"
+
+  # If empty, aml_roi/aml_auto writes ROI outputs under OUTPUTS_ROOT_DIR/<run_id>/aml_case/.
+  ROI_OUTPUT_ROOT: ""
+
+  # Allowed roots for loading ROI collections in aml_diagnosis.
+  # Empty means allow paths under OUTPUTS_ROOT_DIR and current experiment output dir.
+  ROI_INPUT_ROOTS: []
 
 context_injection:
   images:

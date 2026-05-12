@@ -10,6 +10,7 @@ from PIL import Image, ImageDraw
 
 from . import state
 from .config import MAX_IMG_DIM, MAX_NATIVE_VIEW_DIM
+from .exceptions import AmlRoiCollectionComplete
 from .tuning_config import tuning_value
 
 DEFAULT_MPP_FALLBACK_UM = float(tuning_value("tools.slide", "DEFAULT_MPP_UM"))
@@ -121,6 +122,8 @@ def _safe(fn, **kwargs) -> str:
         if isinstance(out, str):
             return out
         return json.dumps(_strip_paths(out))
+    except AmlRoiCollectionComplete:
+        raise
     except Exception as e:
         if isinstance(e, (FileNotFoundError, openslide.OpenSlideError)):
             state.HAS_FATAL_ERROR = True

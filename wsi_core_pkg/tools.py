@@ -11,6 +11,7 @@ from agents import function_tool
 from PIL import Image, ImageDraw
 
 from . import state
+from .aml_output import persist_current_aml_roi_collection
 from .config import (
     DEFAULT_MPP_UM,
     EXAMPLE_TILES_ROOT,
@@ -22,6 +23,7 @@ from .config import (
     TILE_SIZE_UM,
 )
 from .embeddings import embedding_extractor_display_name, get_embedding_extractor
+from .exceptions import AmlRoiCollectionComplete
 from .embeddings.roi_ranker import (
     build_unsupervised_roi_index,
     select_topk_candidates_for_view,
@@ -36,7 +38,6 @@ from .slide_utils import (
     _render_view_from_base_bbox,
     _save_debug_image,
     _safe,
-    _safe_filename,
 )
 from .tuning_config import tuning_value
 
@@ -169,103 +170,11 @@ def _allow_discard_last_roi(roi: Dict[str, Any]) -> tuple[bool, str]:
             (
                 f"Discard blocked: you already have {kept_roi_count} kept ROI(s) and target is "
                 f"{target_accepted_rois}. Near the target, keep borderline/interpretable AML ROIs. "
-                "Reserve discard for clearly bad ROIs: mostly background/empty, fatty/hypocellular (white round fat spaces dominate), hemodilute/RBC-dominant (pink-red donut RBCs dominate), smear-edge/serum (tan-brown background with scattered cells), or clot/blur/debris-dominated."
+                "Reserve discard for clearly bad ROIs such as mostly background or empty views."
             ),
         )
 
     return True, ""
-
-
-def _save_tile_from_current_view_center(
-    *,
-    label: str,
-    quality: str = "good",
-    nav_reason: str = "Auto-save diagnostic tile from kept ROI",
-) -> Dict[str, Any]:
-    if not state._current_view:
-        raise RuntimeError("Tile save requested before any current view exists.")
-
-    quality = (quality or "good").strip().lower()
-    if quality not in {"good", "bad"}:
-        raise ValueError("quality must be 'good' or 'bad'")
-
-    if quality == "good" and len(state._saved_good_tiles) >= MAX_GOOD_TILES:
-        return {"ok": False, "reason": "max_good_tiles_reached"}
-    if quality == "bad" and len(state._saved_bad_tiles) >= MAX_BAD_TILES:
-        return {"ok": False, "reason": "max_bad_tiles_reached"}
-
-    slide = _load_slide()
-    mpp = _effective_slide_mpp_um(slide)
-    tile_px = int(round(TILE_SIZE_UM / mpp))
-    tile_px = max(32, tile_px)
-
-    cv_x0 = int(state._current_view["x0"])
-    cv_y0 = int(state._current_view["y0"])
-    cv_w = int(state._current_view["w"])
-    cv_h = int(state._current_view["h"])
-    slide_w0, slide_h0 = slide.level_dimensions[0]
-    tile_px = min(tile_px, slide_w0, slide_h0)
-
-    cx_base = cv_x0 + (cv_w // 2)
-    cy_base = cv_y0 + (cv_h // 2)
-    x0 = cx_base - (tile_px // 2)
-    y0 = cy_base - (tile_px // 2)
-    x0 = max(0, min(x0, slide_w0 - tile_px))
-    y0 = max(0, min(y0, slide_h0 - tile_px))
-
-    region = slide.read_region((x0, y0), 0, (tile_px, tile_px)).convert("RGB")
-    region = region.resize((TILE_PX, TILE_PX), Image.BILINEAR)
-
-    run_id = state.RUN_ID or datetime.now().strftime("%Y%m%d_%H%M%S")
-    out_dir = os.path.join(SELECTED_TILES_ROOT, run_id, "Selected_Tiles", quality)
-    os.makedirs(out_dir, exist_ok=True)
-
-    idx = (len(state._saved_good_tiles) + 1) if quality == "good" else (len(state._saved_bad_tiles) + 1)
-    x_um = x0 * mpp
-    y_um = y0 * mpp
-    out_path = os.path.join(out_dir, f"{quality}_{idx:04d}_tile_({x_um}, {y_um}).jpg")
-    region.save(out_path, format="JPEG", quality=95)
-
-    record = {
-        "quality": quality,
-        "label": label,
-        "path": out_path,
-        "bbox_level0": [x0, y0, tile_px, tile_px],
-        "tile_px": TILE_PX,
-        "tile_um": TILE_SIZE_UM,
-        "mpp_used": mpp,
-    }
-    if quality == "good":
-        state._saved_good_tiles.append(record)
-    else:
-        state._saved_bad_tiles.append(record)
-
-    try:
-        from wsi_core_pkg.embeddings.roi_ranker import _clear_reference_hnsw_cache
-        _clear_reference_hnsw_cache()
-    except Exception:
-        pass
-
-    _log_step(
-        "wsi_save_tile_norm",
-        nav_reason,
-        {
-            "view_bbox_level0": record["bbox_level0"],
-            "field_width_um": TILE_SIZE_UM,
-            "field_height_um": TILE_SIZE_UM,
-        },
-    )
-
-    return {
-        "ok": True,
-        "quality": quality,
-        "path": out_path,
-        "count_good": len(state._saved_good_tiles),
-        "count_bad": len(state._saved_bad_tiles),
-        "tile_px": TILE_PX,
-        "tile_um": TILE_SIZE_UM,
-        "mpp_used": mpp,
-    }
 
 
 def _selected_candidate_nav_field_um() -> float:
@@ -1520,10 +1429,10 @@ def _attach_roi_candidates(info: Dict[str, Any], top_k: int = ROI_CANDIDATE_TOP_
     if aml_mode and navigation_steps >= 5 and roi_steps == 0:
         next_rank_hint = _next_unattempted_candidate_rank()
         exploration_action = (
-            f"Open candidate region #{next_rank_hint} next, then search inside that field with zoom/pan until you find a representative HYPERCELLULAR (packed, no fat) high-power ROI with adequate nucleated cells, readable morphology, and acceptable focus; mark only after that search, or skip the region. Skip fatty/hypocellular fields. "
+            f"Open candidate region #{next_rank_hint} next, then search inside that field with zoom/pan until you find a representative interpretable high-power ROI with adequate nucleated cells, readable morphology, and acceptable focus; mark only after that search, or skip the region. "
             if next_rank_hint is not None
             else
-            "Search within the current strong region with zoom/pan until you find a representative local HYPERCELLULAR ROI (packed cells, no/minimal fat) with adequate nucleated cells and readable morphology, or call wsi_get_overview_view and move to a different region. "
+            "Search within the current strong region with zoom/pan until you find a representative local interpretable ROI with adequate nucleated cells and readable morphology, or call wsi_get_overview_view and move to a different region. "
         )
         info["exploration_over_budget_warning"] = (
             f"CRITICAL: You have navigated {navigation_steps} times without marking any ROI. "
@@ -1597,21 +1506,13 @@ def _attach_roi_candidates(info: Dict[str, Any], top_k: int = ROI_CANDIDATE_TOP_
     if candidates:
         if aml_mode:
             guidance_intro = (
-                "Treat roi_candidates as candidate ROIs selected from tissue, nucleated-cell, focus, RBC, and artifact heuristics. "
-                "TARGET = HYPERCELLULAR PACKED MARROW: deep blue-purple nucleated cells filling the frame edge-to-edge, NO/MINIMAL fat spaces, NO RBC dominance, NO serum/smear-edge background. "
-                "REJECT and do NOT mark these field types — they are NOT AML even if some cells look interesting: "
-                "(1) fatty/hypocellular (large white round adipocyte spaces dominate), "
-                "(2) hemodilute / RBC-dominant (sea of small pink-red donut RBCs with sparse nucleated cells), "
-                "(3) smear-edge/serum (smooth tan/brown homogeneous background, scattered cells, drying artifacts), "
-                "(4) sparse / scattered cells on any background, "
-                "(5) gray-black low-chroma artifact / clot / fold / debris. "
+                "Treat roi_candidates as candidate blast-suspected ROIs selected from tissue, nucleated-cell, focus, RBC, and artifact heuristics across the current view. Prioritize deep dark blue-purple cellular fields; dark red-pink is only a rare fallback when clearly cellular, and gray-black low-chroma junk should be rejected. "
             )
             info["roi_candidate_guidance"] = (
                 guidance_intro +
-                "Hierarchy: tissue first → HYPERCELLULAR PACKED nucleated marrow → readable single-cell detail (chromatin/nucleoli) → monotonous blast-suspected morphology. "
+                "Follow a standard practical hierarchy: tissue first, then nucleated-cell-rich interpretable marrow over RBC-rich/empty areas, then blast-suspected morphology. Prefer ROIs with adequate nucleated cells, readable single-cell detail, acceptable focus, and limited artifact. Moderate cellularity is acceptable if morphology is still assessable; do not reject a usable ROI only because it is not the single densest field in the region. "
                 f"A single ROI is screening evidence only. For AML, soft target is {_selected_target_accepted_rois()} kept ROIs from representative distinct slide regions when feasible; hard cap is {_selected_max_accepted_rois()}. "
-                "If the slide has both fatty/hemodilute regions and packed regions, ONLY mark the packed regions. "
-                "Use roi_candidates only to jump into a promising region quickly. After opening a candidate region, search within that field by zooming/panning until you find a representative HYPERCELLULAR PACKED high-power ROI. Then use wsi_mark_roi_norm."
+                "Use roi_candidates only to jump into a promising region quickly. After opening a candidate region, search within that field by zooming/panning until you find a representative high-power ROI. Choose a nearby area with better readability or less artifact when available, but do not over-search indefinitely for a marginally denser patch. Then use wsi_mark_roi_norm."
             )
         else:
             info["roi_candidate_guidance"] = (
@@ -1860,30 +1761,13 @@ def _mark_roi_from_candidate(
     state.CURRENT_AGENT_ACTION = f"Marked ROI #{roi_id}: {label}"
     _record_attempted_roi_bbox(roi.get("view_bbox_level0"))
 
-    if _agent_is_aml() and len(state._saved_good_tiles) < 5:
-        auto_tile = _save_tile_from_current_view_center(
-            label=label or f"roi_{roi_id}",
-            quality="good",
-            nav_reason=f"Auto-save one good tile for kept AML ROI #{roi_id}",
-        )
-        roi["auto_saved_tile"] = dict(auto_tile)
-        if auto_tile.get("ok"):
-            roi["auto_saved_tile_path"] = auto_tile.get("path")
-
     next_rank_hint = _next_unattempted_candidate_rank()
     roi["next_candidate_rank_hint"] = next_rank_hint
     roi["next_action_hint"] = (
         "You just requested a high-power ROI. "
         + (
-            "In AML mode, DISCARD if this ROI is any of: "
-            "(a) mostly background/empty glass, "
-            "(b) fatty/hypocellular (large white round adipocyte spaces dominate, sparse cells), "
-            "(c) hemodilute/RBC-dominant (sea of small pink-red donut RBCs with few nucleated cells), "
-            "(d) smear-edge/serum (smooth tan/brown background, scattered cells, drying artifacts), "
-            "(e) sparse/scattered cells on any background, "
-            "(f) clot/blur/debris/fold. "
-            "These are NOT AML even when some cells look interesting. "
-            "Keep the ROI ONLY if it shows HYPERCELLULAR PACKED nucleated marrow (cells fill the frame edge-to-edge) with readable morphology. "
+            "In AML mode, discard only if this ROI is clearly bad on review, such as mostly background/empty glass. "
+            "If it is borderline but interpretable, keep it and continue searching for additional ROIs. "
             if _agent_is_aml()
             else
             "Carefully inspect the newly shown ROI image in the conversation. "
@@ -1911,6 +1795,13 @@ def _mark_roi_from_candidate(
     )
 
     _make_overview_with_current_box(draw_current_box=True)
+    if _agent_is_aml():
+        persist_current_aml_roi_collection()
+        if _roi_cap_reached():
+            cap = _selected_max_accepted_rois()
+            raise AmlRoiCollectionComplete(
+                f"AML ROI collection completed after reaching MAX_ACCEPTED_ROIS ({cap})."
+            )
     # Do not auto clear candidate cache - allow continued exploration within current region
 
     return roi
@@ -1994,6 +1885,99 @@ def _open_candidate_by_rank(
     return info
 
 
+def _normalize_tile_quality(quality: str) -> str:
+    normalized = (quality or "good").strip().lower()
+    if normalized not in {"good", "bad"}:
+        raise ValueError("quality must be 'good' or 'bad'")
+    return normalized
+
+
+def _tile_save_limit_response(quality: str) -> Optional[Dict[str, Any]]:
+    if quality == "good" and len(state._saved_good_tiles) >= MAX_GOOD_TILES:
+        return {"ok": False, "reason": "max_good_tiles_reached"}
+    if quality == "bad" and len(state._saved_bad_tiles) >= MAX_BAD_TILES:
+        return {"ok": False, "reason": "max_bad_tiles_reached"}
+    return None
+
+
+def _tile_bbox_from_current_view_norm(
+    *,
+    slide,
+    mpp: float,
+    x0_999: int,
+    y0_999: int,
+    x1_999: int,
+    y1_999: int,
+) -> tuple[int, int, int]:
+    tile_px = max(32, int(round(TILE_SIZE_UM / mpp)))
+
+    x0_999_cl = max(0, min(999, x0_999))
+    x1_999_cl = max(0, min(999, x1_999))
+    y0_999_cl = max(0, min(999, y0_999))
+    y1_999_cl = max(0, min(999, y1_999))
+
+    cx_999 = (x0_999_cl + x1_999_cl) / 2.0
+    cy_999 = (y0_999_cl + y1_999_cl) / 2.0
+
+    cv_x0 = state._current_view["x0"]
+    cv_y0 = state._current_view["y0"]
+    cv_w = state._current_view["w"]
+    cv_h = state._current_view["h"]
+    slide_w0, slide_h0 = slide.level_dimensions[0]
+    tile_px = min(tile_px, slide_w0, slide_h0)
+
+    cx_base = cv_x0 + int(round((cx_999 / 999.0) * cv_w))
+    cy_base = cv_y0 + int(round((cy_999 / 999.0) * cv_h))
+
+    x0 = max(0, min(cx_base - tile_px // 2, slide_w0 - tile_px))
+    y0 = max(0, min(cy_base - tile_px // 2, slide_h0 - tile_px))
+    return x0, y0, tile_px
+
+
+def _save_selected_tile_record(
+    *,
+    slide,
+    mpp: float,
+    bbox_level0: tuple[int, int, int],
+    label: str,
+    quality: str,
+) -> Dict[str, Any]:
+    x0, y0, tile_px = bbox_level0
+    region = slide.read_region((x0, y0), 0, (tile_px, tile_px)).convert("RGB")
+    region = region.resize((TILE_PX, TILE_PX), Image.BILINEAR)
+
+    run_id = state.RUN_ID or datetime.now().strftime("%Y%m%d_%H%M%S")
+    out_dir = os.path.join(SELECTED_TILES_ROOT, run_id, "Selected_Tiles", quality)
+    os.makedirs(out_dir, exist_ok=True)
+
+    idx = (len(state._saved_good_tiles) + 1) if quality == "good" else (len(state._saved_bad_tiles) + 1)
+    x_um = x0 * mpp
+    y_um = y0 * mpp
+    out_path = os.path.join(out_dir, f"{quality}_{idx:04d}_tile_({x_um}, {y_um}).jpg")
+    region.save(out_path, format="JPEG", quality=95)
+
+    record = {
+        "quality": quality,
+        "label": label,
+        "path": out_path,
+        "bbox_level0": [x0, y0, tile_px, tile_px],
+        "tile_px": TILE_PX,
+        "tile_um": TILE_SIZE_UM,
+        "mpp_used": mpp,
+    }
+    if quality == "good":
+        state._saved_good_tiles.append(record)
+    else:
+        state._saved_bad_tiles.append(record)
+    return record
+
+
+def _invalidate_reference_tile_cache() -> None:
+    try:
+        from wsi_core_pkg.embeddings.roi_ranker import _clear_reference_hnsw_cache
+        _clear_reference_hnsw_cache()
+    except Exception:
+        pass
 
 
 @function_tool
@@ -2526,82 +2510,29 @@ def wsi_save_tile_norm(
         if not state._current_view:
             raise RuntimeError("wsi_save_tile_norm called before wsi_get_overview_view.")
 
-        quality = (quality or "good").strip().lower()
-        if quality not in {"good", "bad"}:
-            raise ValueError("quality must be 'good' or 'bad'")
-
-        if quality == "good" and len(state._saved_good_tiles) >= MAX_GOOD_TILES:
-            return {"ok": False, "reason": "max_good_tiles_reached"}
-        if quality == "bad" and len(state._saved_bad_tiles) >= MAX_BAD_TILES:
-            return {"ok": False, "reason": "max_bad_tiles_reached"}
+        quality = _normalize_tile_quality(quality)
+        limit_response = _tile_save_limit_response(quality)
+        if limit_response is not None:
+            return limit_response
 
         slide = _load_slide()
         mpp = _effective_slide_mpp_um(slide)
-        tile_px = int(round(TILE_SIZE_UM / mpp))
-        tile_px = max(32, tile_px)
-
-        x0_999_cl = max(0, min(999, x0_999))
-        x1_999_cl = max(0, min(999, x1_999))
-        y0_999_cl = max(0, min(999, y0_999))
-        y1_999_cl = max(0, min(999, y1_999))
-
-        cx_999 = (x0_999_cl + x1_999_cl) / 2.0
-        cy_999 = (y0_999_cl + y1_999_cl) / 2.0
-
-        cv_x0 = state._current_view["x0"]
-        cv_y0 = state._current_view["y0"]
-        cv_w = state._current_view["w"]
-        cv_h = state._current_view["h"]
-        slide_w0, slide_h0 = slide.level_dimensions[0]
-        tile_px = min(tile_px, slide_w0, slide_h0)
-
-        cx_base = cv_x0 + int(round((cx_999 / 999.0) * cv_w))
-        cy_base = cv_y0 + int(round((cy_999 / 999.0) * cv_h))
-
-        x0 = cx_base - tile_px // 2
-        y0 = cy_base - tile_px // 2
-        x0 = max(0, min(x0, slide_w0 - tile_px))
-        y0 = max(0, min(y0, slide_h0 - tile_px))
-
-        region = slide.read_region((x0, y0), 0, (tile_px, tile_px)).convert("RGB")
-        region = region.resize((TILE_PX, TILE_PX), Image.BILINEAR)
-
-        run_id = state.RUN_ID or datetime.now().strftime("%Y%m%d_%H%M%S")
-        out_dir = os.path.join(SELECTED_TILES_ROOT, run_id, "Selected_Tiles", quality)
-        os.makedirs(out_dir, exist_ok=True)
-
-        idx = (len(state._saved_good_tiles) + 1) if quality == "good" else (len(state._saved_bad_tiles) + 1)
-        label_safe = _safe_filename(label)
-        x_um = x0 * mpp
-        y_um = y0 * mpp
-        out_path = os.path.join(
-            out_dir,
-            f"{quality}_{idx:04d}_tile_({x_um}, {y_um}).jpg",
+        bbox_level0 = _tile_bbox_from_current_view_norm(
+            slide=slide,
+            mpp=mpp,
+            x0_999=x0_999,
+            y0_999=y0_999,
+            x1_999=x1_999,
+            y1_999=y1_999,
         )
-        region.save(out_path, format="JPEG", quality=95)
-
-        record = {
-            "quality": quality,
-            "label": label,
-            "path": out_path,
-            "bbox_level0": [x0, y0, tile_px, tile_px],
-            "tile_px": TILE_PX,
-            "tile_um": TILE_SIZE_UM,
-            "mpp_used": mpp,
-        }
-        _ = label_safe
-
-        if quality == "good":
-            state._saved_good_tiles.append(record)
-        else:
-            state._saved_bad_tiles.append(record)
-
-        # Invalidate HNSW cache so new tiles are included in future retrievals
-        try:
-            from wsi_core_pkg.embeddings.roi_ranker import _clear_reference_hnsw_cache
-            _clear_reference_hnsw_cache()
-        except Exception:
-            pass  # Non-critical - cache will rebuild naturally
+        record = _save_selected_tile_record(
+            slide=slide,
+            mpp=mpp,
+            bbox_level0=bbox_level0,
+            label=label,
+            quality=quality,
+        )
+        _invalidate_reference_tile_cache()
 
         _log_step(
             "wsi_save_tile_norm",
@@ -2676,6 +2607,8 @@ def wsi_discard_last_roi(
             nav_reason,
             {"view_bbox_level0": roi.get("view_bbox_level0")},
         )
+        if _agent_is_aml():
+            persist_current_aml_roi_collection()
         response = {
             "ok": True,
             "discarded_roi_id": roi["roi_id"],

@@ -1,0 +1,2243 @@
+{
+  "run_id": "20260512_094930_a34e73",
+  "agent_type": "aml",
+  "model_name": "gemma-4-31B-it-h200",
+  "current_view": {
+    "x0": 36092,
+    "y0": 185794,
+    "w": 2048,
+    "h": 2048,
+    "level": 0,
+    "level_downsample": 1.0,
+    "shown_w": 2048,
+    "shown_h": 2048,
+    "debug_path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/outputs/20260512_094930_a34e73/wsi_debug/0019_roi.jpg",
+    "view_tag": "roi",
+    "field_width_um": 325.632,
+    "field_height_um": 325.632,
+    "tissue_fraction": 0.95989990234375
+  },
+  "batch_size": 128,
+  "tile_prefilter_method": "hybrid",
+  "roi_output_size_px": 2048,
+  "max_accepted_rois": 2,
+  "target_accepted_rois": 2,
+  "default_mpp_um": 0.159,
+  "slide_mpp_um": 0.203532064128257,
+  "overview_cache": {
+    "level": 6,
+    "level_w": 1690,
+    "level_h": 3839,
+    "level_downsample": 64.0,
+    "shown_w": 451,
+    "shown_h": 1024,
+    "base_w0": 108208,
+    "base_h0": 245752
+  },
+  "step_log": [
+    {
+      "step_index": 1,
+      "tool": "wsi_get_overview_view",
+      "nav_reason": "Initial overview to identify cellular regions.",
+      "debug_path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/outputs/20260512_094930_a34e73/wsi_debug/0001_overview.jpg",
+      "view_level": 6,
+      "view_bbox_level0": [
+        0,
+        0,
+        108208,
+        245752
+      ],
+      "view_image_dims": [
+        451,
+        1024
+      ],
+      "field_width_um": 17205.072,
+      "field_height_um": 39074.568,
+      "tissue_fraction": 0.7265625,
+      "roi_candidate_count": 23,
+      "roi_candidate_source": "uni2_exact_retrieval",
+      "roi_candidate_warning": "Hid 46 bad_like ROI candidate(s). Do not mark bad_like candidates when good_like or uncertain alternatives exist.",
+      "roi_candidate_stage": null,
+      "roi_candidate_pipeline": "No tile prefilter -> UNI2-h tile embeddings -> ROI-quality exemplar retrieval + nuclei/dark-region heuristics -> top-K candidate blast-suspected ROIs per current view",
+      "roi_candidate_index_meta": {
+        "cache_source": "disk"
+      },
+      "aml_reference_stats": null
+    },
+    {
+      "step_index": 2,
+      "tool": "wsi_open_candidate",
+      "nav_reason": "Opening the highest scoring candidate to find a high-cellularity region.",
+      "debug_path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/outputs/20260512_094930_a34e73/wsi_debug/0004_zoom.jpg",
+      "view_level": 1,
+      "view_bbox_level0": [
+        42773,
+        200023,
+        6289,
+        6289
+      ],
+      "view_image_dims": [
+        1024,
+        1024
+      ],
+      "field_width_um": 999.951,
+      "field_height_um": 999.951,
+      "tissue_fraction": 0.78033447265625,
+      "roi_candidate_count": null,
+      "roi_candidate_source": "uni2_exact_retrieval",
+      "roi_candidate_warning": null,
+      "roi_candidate_stage": null,
+      "roi_candidate_pipeline": "No tile prefilter -> UNI2-h tile embeddings -> ROI-quality exemplar retrieval + nuclei/dark-region heuristics -> top-K candidate blast-suspected ROIs per current view",
+      "roi_candidate_index_meta": {
+        "cache_source": "disk"
+      },
+      "aml_reference_stats": null
+    },
+    {
+      "step_index": 3,
+      "tool": "wsi_zoom_current_norm",
+      "nav_reason": "Zooming into a cellular area in the center-left to assess morphology.",
+      "debug_path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/outputs/20260512_094930_a34e73/wsi_debug/0007_zoom.jpg",
+      "view_level": 0,
+      "view_bbox_level0": [
+        43952,
+        202461,
+        2048,
+        2048
+      ],
+      "view_image_dims": [
+        1024,
+        1024
+      ],
+      "field_width_um": 325.632,
+      "field_height_um": 325.632,
+      "tissue_fraction": 0.8270263671875,
+      "roi_candidate_count": 1,
+      "roi_candidate_source": "uni2_exact_retrieval",
+      "roi_candidate_warning": null,
+      "roi_candidate_stage": null,
+      "roi_candidate_pipeline": "No tile prefilter -> UNI2-h tile embeddings -> ROI-quality exemplar retrieval + nuclei/dark-region heuristics -> top-K candidate blast-suspected ROIs per current view",
+      "roi_candidate_index_meta": {
+        "cache_source": "disk"
+      },
+      "aml_reference_stats": null
+    },
+    {
+      "step_index": 4,
+      "tool": "wsi_save_tile_norm",
+      "nav_reason": "Auto-save one good tile for kept AML ROI #1",
+      "debug_path": null,
+      "view_level": null,
+      "view_bbox_level0": [
+        44683,
+        202578,
+        1610,
+        1610
+      ],
+      "view_image_dims": null,
+      "field_width_um": 256.0,
+      "field_height_um": 256.0,
+      "tissue_fraction": null,
+      "roi_candidate_count": null,
+      "roi_candidate_source": null,
+      "roi_candidate_warning": null,
+      "roi_candidate_stage": null,
+      "roi_candidate_pipeline": null,
+      "roi_candidate_index_meta": null,
+      "aml_reference_stats": null
+    },
+    {
+      "step_index": 5,
+      "tool": "wsi_mark_roi_norm",
+      "nav_reason": "High cellularity with clear nucleated cells and interpretable morphology.",
+      "debug_path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/outputs/20260512_094930_a34e73/wsi_debug/0010_roi.jpg",
+      "view_level": 0,
+      "view_bbox_level0": [
+        44464,
+        202359,
+        2048,
+        2048
+      ],
+      "view_image_dims": [
+        2048,
+        2048
+      ],
+      "field_width_um": 325.632,
+      "field_height_um": 325.632,
+      "tissue_fraction": 0.87652587890625,
+      "roi_candidate_count": null,
+      "roi_candidate_source": null,
+      "roi_candidate_warning": null,
+      "roi_candidate_stage": null,
+      "roi_candidate_pipeline": null,
+      "roi_candidate_index_meta": null,
+      "aml_reference_stats": null
+    },
+    {
+      "step_index": 6,
+      "tool": "wsi_open_candidate",
+      "nav_reason": "Moving to a different region to ensure ROIs are from distinct areas of the slide.",
+      "debug_path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/outputs/20260512_094930_a34e73/wsi_debug/0013_zoom.jpg",
+      "view_level": 1,
+      "view_bbox_level0": [
+        33967,
+        183669,
+        6289,
+        6289
+      ],
+      "view_image_dims": [
+        1024,
+        1024
+      ],
+      "field_width_um": 999.951,
+      "field_height_um": 999.951,
+      "tissue_fraction": 0.86590576171875,
+      "roi_candidate_count": null,
+      "roi_candidate_source": "uni2_exact_retrieval",
+      "roi_candidate_warning": null,
+      "roi_candidate_stage": null,
+      "roi_candidate_pipeline": "No tile prefilter -> UNI2-h tile embeddings -> ROI-quality exemplar retrieval + nuclei/dark-region heuristics -> top-K candidate blast-suspected ROIs per current view",
+      "roi_candidate_index_meta": {
+        "cache_source": "disk"
+      },
+      "aml_reference_stats": null
+    },
+    {
+      "step_index": 7,
+      "tool": "wsi_zoom_current_norm",
+      "nav_reason": "Zooming into the central dense cellular area to verify morphology and focus.",
+      "debug_path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/outputs/20260512_094930_a34e73/wsi_debug/0016_zoom.jpg",
+      "view_level": 0,
+      "view_bbox_level0": [
+        35856,
+        185558,
+        2518,
+        2518
+      ],
+      "view_image_dims": [
+        1024,
+        1024
+      ],
+      "field_width_um": 400.362,
+      "field_height_um": 400.362,
+      "tissue_fraction": 0.96392822265625,
+      "roi_candidate_count": 5,
+      "roi_candidate_source": "uni2_exact_retrieval",
+      "roi_candidate_warning": null,
+      "roi_candidate_stage": null,
+      "roi_candidate_pipeline": "No tile prefilter -> UNI2-h tile embeddings -> ROI-quality exemplar retrieval + nuclei/dark-region heuristics -> top-K candidate blast-suspected ROIs per current view",
+      "roi_candidate_index_meta": {
+        "cache_source": "disk"
+      },
+      "aml_reference_stats": null
+    },
+    {
+      "step_index": 8,
+      "tool": "wsi_save_tile_norm",
+      "nav_reason": "Auto-save one good tile for kept AML ROI #2",
+      "debug_path": null,
+      "view_level": null,
+      "view_bbox_level0": [
+        36311,
+        186013,
+        1610,
+        1610
+      ],
+      "view_image_dims": null,
+      "field_width_um": 256.0,
+      "field_height_um": 256.0,
+      "tissue_fraction": null,
+      "roi_candidate_count": null,
+      "roi_candidate_source": null,
+      "roi_candidate_warning": null,
+      "roi_candidate_stage": null,
+      "roi_candidate_pipeline": null,
+      "roi_candidate_index_meta": null,
+      "aml_reference_stats": null
+    },
+    {
+      "step_index": 9,
+      "tool": "wsi_mark_roi_norm",
+      "nav_reason": "High cellularity with clear nucleated cells and interpretable morphology in a distinct region.",
+      "debug_path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/outputs/20260512_094930_a34e73/wsi_debug/0019_roi.jpg",
+      "view_level": 0,
+      "view_bbox_level0": [
+        36092,
+        185794,
+        2048,
+        2048
+      ],
+      "view_image_dims": [
+        2048,
+        2048
+      ],
+      "field_width_um": 325.632,
+      "field_height_um": 325.632,
+      "tissue_fraction": 0.95989990234375,
+      "roi_candidate_count": null,
+      "roi_candidate_source": null,
+      "roi_candidate_warning": null,
+      "roi_candidate_stage": null,
+      "roi_candidate_pipeline": null,
+      "roi_candidate_index_meta": null,
+      "aml_reference_stats": null
+    }
+  ],
+  "roi_marks": [
+    {
+      "roi_id": 1,
+      "label": "cellular_marrow",
+      "note": "Dense area of hematopoietic cells, suitable for blast assessment.",
+      "importance": 5,
+      "view_level": 0,
+      "view_bbox_level0": [
+        44464,
+        202359,
+        2048,
+        2048
+      ],
+      "downsample": 1.0,
+      "objective_power": 20.0,
+      "effective_magnification": 20.0,
+      "debug_path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/outputs/20260512_094930_a34e73/wsi_debug/0010_roi.jpg",
+      "field_width_um": 325.632,
+      "field_height_um": 325.632,
+      "tissue_fraction": 0.87652587890625,
+      "roi_output_size_px": 2048,
+      "candidate_rank": null,
+      "candidate_score": null,
+      "candidate_center_norm": [
+        750,
+        450
+      ],
+      "requested_center_norm": [
+        750,
+        450
+      ],
+      "requested_bbox_norm": [
+        500,
+        200,
+        999,
+        700
+      ],
+      "auto_saved_tile": {
+        "ok": true,
+        "quality": "good",
+        "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/outputs/20260512_094930_a34e73/Selected_Tiles/good/good_0001_tile_(7104.597, 32209.902000000002).jpg",
+        "count_good": 1,
+        "count_bad": 0,
+        "tile_px": 224,
+        "tile_um": 256.0,
+        "mpp_used": 0.159
+      },
+      "auto_saved_tile_path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/outputs/20260512_094930_a34e73/Selected_Tiles/good/good_0001_tile_(7104.597, 32209.902000000002).jpg",
+      "next_candidate_rank_hint": 3,
+      "next_action_hint": "You just requested a high-power ROI. In AML mode, discard only if this ROI is clearly bad on review, such as mostly background/empty glass. If it is borderline but interpretable, keep it and continue searching for additional ROIs. If you still need more evidence, use candidate #3 next instead of continuing local search inside this ROI. ",
+      "guidance_for_next_action": "ROI #1 has been marked and saved. You can now:\n1) Continue searching WITHIN THIS CANDIDATE REGION for additional strong ROIs by using wsi_zoom_current_norm to explore other sub-areas.\n2) When this candidate region is exhausted (no more strong tissue), call wsi_open_candidate(rank=3) to move to the next candidate.\nIf you just discarded an ROI, you can search for a different position in this region OR jump to the next candidate.",
+      "image_url": "/debug/20260512_094930_a34e73/wsi_debug/0010_roi.jpg"
+    },
+    {
+      "roi_id": 2,
+      "label": "cellular_marrow",
+      "note": "Dense area of hematopoietic cells, suitable for blast assessment.",
+      "importance": 5,
+      "view_level": 0,
+      "view_bbox_level0": [
+        36092,
+        185794,
+        2048,
+        2048
+      ],
+      "downsample": 1.0,
+      "objective_power": 20.0,
+      "effective_magnification": 20.0,
+      "debug_path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/outputs/20260512_094930_a34e73/wsi_debug/0019_roi.jpg",
+      "field_width_um": 325.632,
+      "field_height_um": 325.632,
+      "tissue_fraction": 0.95989990234375,
+      "roi_output_size_px": 2048,
+      "candidate_rank": null,
+      "candidate_score": null,
+      "candidate_center_norm": [
+        500,
+        500
+      ],
+      "requested_center_norm": [
+        500,
+        500
+      ],
+      "requested_bbox_norm": [
+        100,
+        100,
+        900,
+        900
+      ],
+      "auto_saved_tile": {
+        "ok": true,
+        "quality": "good",
+        "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/outputs/20260512_094930_a34e73/Selected_Tiles/good/good_0002_tile_(5773.4490000000005, 29576.067).jpg",
+        "count_good": 2,
+        "count_bad": 0,
+        "tile_px": 224,
+        "tile_um": 256.0,
+        "mpp_used": 0.159
+      },
+      "auto_saved_tile_path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/outputs/20260512_094930_a34e73/Selected_Tiles/good/good_0002_tile_(5773.4490000000005, 29576.067).jpg",
+      "next_candidate_rank_hint": 4,
+      "next_action_hint": "You just requested a high-power ROI. In AML mode, discard only if this ROI is clearly bad on review, such as mostly background/empty glass. If it is borderline but interpretable, keep it and continue searching for additional ROIs. If you still need more evidence, use candidate #4 next instead of continuing local search inside this ROI. ",
+      "guidance_for_next_action": "ROI #2 has been marked and saved. You can now:\n1) Continue searching WITHIN THIS CANDIDATE REGION for additional strong ROIs by using wsi_zoom_current_norm to explore other sub-areas.\n2) When this candidate region is exhausted (no more strong tissue), call wsi_open_candidate(rank=4) to move to the next candidate.\nIf you just discarded an ROI, you can search for a different position in this region OR jump to the next candidate.",
+      "image_url": "/debug/20260512_094930_a34e73/wsi_debug/0019_roi.jpg"
+    }
+  ],
+  "attempted_roi_bboxes_level0": [
+    [
+      44464,
+      202359,
+      2048,
+      2048
+    ],
+    [
+      36092,
+      185794,
+      2048,
+      2048
+    ]
+  ],
+  "last_overview_with_box_path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/outputs/20260512_094930_a34e73/wsi_debug/0021_overview_with_current.jpg",
+  "last_overview_debug_path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/outputs/20260512_094930_a34e73/wsi_debug/0001_overview.jpg",
+  "last_roi_candidates": [
+    {
+      "rank": 1,
+      "tile_index": 129,
+      "score": 0.7400000095367432,
+      "combined_rank_score": 0.7400000095367432,
+      "retrieval_score": 0.7556241750717163,
+      "dark_roi_score": 0.5232614278793335,
+      "inside_dark_region": null,
+      "dark_region_mode": "none",
+      "bad_likelihood": 0.09390398859977722,
+      "bad_margin": 0.7556241750717163,
+      "bad_top1_similarity": 0.0,
+      "good_top1_similarity": 0.7729217410087585,
+      "quality_hint": "good_like",
+      "reference_mode": "good_bad_hnsw_knn",
+      "reference_neighbor_k": 7,
+      "retrieved_bad_refs": [],
+      "retrieved_good_refs": [
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Good_Tiles/tile_(12546.123496994018, 34565.85045090189).jpg",
+          "name": "tile_(12546.123496994018, 34565.85045090189).jpg",
+          "label": "good",
+          "similarity": 0.7729217410087585
+        },
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Good_Tiles/tile_(10753.820140280586, 28164.767034068205).jpg",
+          "name": "tile_(10753.820140280586, 28164.767034068205).jpg",
+          "label": "good",
+          "similarity": 0.7600133419036865
+        },
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Good_Tiles/tile_(3072.5200400801677, 35333.98046092193).jpg",
+          "name": "tile_(3072.5200400801677, 35333.98046092193).jpg",
+          "label": "good",
+          "similarity": 0.7563037872314453
+        }
+      ],
+      "center_norm": [
+        498,
+        498
+      ],
+      "bbox_norm": [
+        248,
+        248,
+        748,
+        748
+      ],
+      "center_level0": [
+        37111,
+        186813
+      ],
+      "tile_bbox_level0": [
+        36482,
+        186184,
+        37740,
+        187442
+      ]
+    },
+    {
+      "rank": 2,
+      "tile_index": 131,
+      "score": -0.6199999451637268,
+      "combined_rank_score": -0.6199999451637268,
+      "retrieval_score": 0.6910907030105591,
+      "dark_roi_score": 0.3340606987476349,
+      "inside_dark_region": null,
+      "dark_region_mode": "none",
+      "bad_likelihood": 0.11172188073396683,
+      "bad_margin": 0.6910907030105591,
+      "bad_top1_similarity": 0.0,
+      "good_top1_similarity": 0.6982865333557129,
+      "quality_hint": "good_like",
+      "reference_mode": "good_bad_hnsw_knn",
+      "reference_neighbor_k": 7,
+      "retrieved_bad_refs": [],
+      "retrieved_good_refs": [
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Good_Tiles/tile_(12546.123496994018, 34565.85045090189).jpg",
+          "name": "tile_(12546.123496994018, 34565.85045090189).jpg",
+          "label": "good",
+          "similarity": 0.6982865333557129
+        },
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Good_Tiles/tile_(9473.60345691385, 40454.84719438887).jpg",
+          "name": "tile_(9473.60345691385, 40454.84719438887).jpg",
+          "label": "good",
+          "similarity": 0.6980131268501282
+        },
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Good_Tiles/tile_(3072.5200400801677, 35333.98046092193).jpg",
+          "name": "tile_(3072.5200400801677, 35333.98046092193).jpg",
+          "label": "good",
+          "similarity": 0.6942123174667358
+        }
+      ],
+      "center_norm": [
+        498,
+        997
+      ],
+      "bbox_norm": [
+        248,
+        747,
+        748,
+        999
+      ],
+      "center_level0": [
+        37111,
+        188071
+      ],
+      "tile_bbox_level0": [
+        36482,
+        187442,
+        37740,
+        188700
+      ]
+    }
+  ],
+  "overview_roi_candidates": [
+    {
+      "rank": 6,
+      "tile_index": 133,
+      "score": 1.0409036874771118,
+      "combined_rank_score": 1.0409036874771118,
+      "retrieval_score": 0.8116908669471741,
+      "dark_roi_score": 0.4130909740924835,
+      "inside_dark_region": null,
+      "dark_region_mode": "none",
+      "bad_likelihood": 0.08053703606128693,
+      "bad_margin": 0.8116908669471741,
+      "bad_top1_similarity": 0.0,
+      "good_top1_similarity": 0.8394875526428223,
+      "quality_hint": "good_like",
+      "reference_mode": "good_bad_hnsw_knn",
+      "reference_neighbor_k": 7,
+      "retrieved_bad_refs": [],
+      "retrieved_good_refs": [
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Good_Tiles/tile_(12546.123496994018, 34565.85045090189).jpg",
+          "name": "tile_(12546.123496994018, 34565.85045090189).jpg",
+          "label": "good",
+          "similarity": 0.8394875526428223
+        },
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Good_Tiles/tile_(11777.993486973975, 14594.470190380796).jpg",
+          "name": "tile_(11777.993486973975, 14594.470190380796).jpg",
+          "label": "good",
+          "similarity": 0.8188065886497498
+        },
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Good_Tiles/tile_(2816.4767034068204, 35077.93712424858).jpg",
+          "name": "tile_(2816.4767034068204, 35077.93712424858).jpg",
+          "label": "good",
+          "similarity": 0.8113950490951538
+        }
+      ],
+      "center_norm": [
+        528,
+        759
+      ],
+      "bbox_norm": [
+        518,
+        749,
+        538,
+        769
+      ],
+      "center_level0": [
+        57239,
+        186813
+      ],
+      "tile_bbox_level0": [
+        56610,
+        186184,
+        57868,
+        187442
+      ],
+      "navigation_bbox_norm": [
+        499,
+        746,
+        557,
+        772
+      ],
+      "navigation_field_width_um": 1000.0
+    },
+    {
+      "rank": 2,
+      "tile_index": 146,
+      "score": 1.411374568939209,
+      "combined_rank_score": 1.411374568939209,
+      "retrieval_score": 0.8119797110557556,
+      "dark_roi_score": 0.5455752015113831,
+      "inside_dark_region": null,
+      "dark_region_mode": "none",
+      "bad_likelihood": 0.0804729014635086,
+      "bad_margin": 0.8119797110557556,
+      "bad_top1_similarity": 0.0,
+      "good_top1_similarity": 0.8254399299621582,
+      "quality_hint": "good_like",
+      "reference_mode": "good_bad_hnsw_knn",
+      "reference_neighbor_k": 7,
+      "retrieved_bad_refs": [],
+      "retrieved_good_refs": [
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Good_Tiles/tile_(4608.780060120252, 36102.11047094197).jpg",
+          "name": "tile_(4608.780060120252, 36102.11047094197).jpg",
+          "label": "good",
+          "similarity": 0.8254399299621582
+        },
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Good_Tiles/tile_(3072.5200400801677, 35333.98046092193).jpg",
+          "name": "tile_(3072.5200400801677, 35333.98046092193).jpg",
+          "label": "good",
+          "similarity": 0.8244669437408447
+        },
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Good_Tiles/tile_(2816.4767034068204, 35333.98046092193).jpg",
+          "name": "tile_(2816.4767034068204, 35333.98046092193).jpg",
+          "label": "good",
+          "similarity": 0.8193926215171814
+        }
+      ],
+      "center_norm": [
+        424,
+        826
+      ],
+      "bbox_norm": [
+        414,
+        816,
+        434,
+        836
+      ],
+      "center_level0": [
+        45917,
+        203167
+      ],
+      "tile_bbox_level0": [
+        45288,
+        202538,
+        46546,
+        203796
+      ],
+      "navigation_bbox_norm": [
+        395,
+        813,
+        453,
+        839
+      ],
+      "navigation_field_width_um": 1000.0
+    },
+    {
+      "rank": 8,
+      "tile_index": 142,
+      "score": 0.9716621041297913,
+      "combined_rank_score": 0.9716621041297913,
+      "retrieval_score": 0.7770666480064392,
+      "dark_roi_score": 0.4783099889755249,
+      "inside_dark_region": null,
+      "dark_region_mode": "none",
+      "bad_likelihood": 0.11825376749038696,
+      "bad_margin": 0.6696904301643372,
+      "bad_top1_similarity": 0.7516336441040039,
+      "good_top1_similarity": 0.8183033466339111,
+      "quality_hint": "good_like",
+      "reference_mode": "good_bad_hnsw_knn",
+      "reference_neighbor_k": 7,
+      "retrieved_bad_refs": [
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Bad_Tiles/tile_(9473.60345691385, 34053.76377755519).jpg",
+          "name": "tile_(9473.60345691385, 34053.76377755519).jpg",
+          "label": "bad",
+          "similarity": 0.7516336441040039
+        }
+      ],
+      "retrieved_good_refs": [
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Good_Tiles/tile_(12546.123496994018, 34565.85045090189).jpg",
+          "name": "tile_(12546.123496994018, 34565.85045090189).jpg",
+          "label": "good",
+          "similarity": 0.8183033466339111
+        },
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Good_Tiles/tile_(2304.390030060126, 34821.89378757523).jpg",
+          "name": "tile_(2304.390030060126, 34821.89378757523).jpg",
+          "label": "good",
+          "similarity": 0.7844688296318054
+        },
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Good_Tiles/tile_(2816.4767034068204, 35333.98046092193).jpg",
+          "name": "tile_(2816.4767034068204, 35333.98046092193).jpg",
+          "label": "good",
+          "similarity": 0.7730861902236938
+        }
+      ],
+      "center_norm": [
+        331,
+        795
+      ],
+      "bbox_norm": [
+        321,
+        785,
+        341,
+        805
+      ],
+      "center_level0": [
+        35853,
+        195619
+      ],
+      "tile_bbox_level0": [
+        35224,
+        194990,
+        36482,
+        196248
+      ],
+      "navigation_bbox_norm": [
+        302,
+        782,
+        360,
+        808
+      ],
+      "navigation_field_width_um": 1000.0
+    },
+    {
+      "rank": 5,
+      "tile_index": 124,
+      "score": 1.111493468284607,
+      "combined_rank_score": 1.111493468284607,
+      "retrieval_score": 0.7832849621772766,
+      "dark_roi_score": 0.5265952348709106,
+      "inside_dark_region": null,
+      "dark_region_mode": "none",
+      "bad_likelihood": 0.11668767780065536,
+      "bad_margin": 0.6747260093688965,
+      "bad_top1_similarity": 0.7599127888679504,
+      "good_top1_similarity": 0.8094254732131958,
+      "quality_hint": "good_like",
+      "reference_mode": "good_bad_hnsw_knn",
+      "reference_neighbor_k": 7,
+      "retrieved_bad_refs": [
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Bad_Tiles/tile_(9729.646793587197, 25348.290330661384).jpg",
+          "name": "tile_(9729.646793587197, 25348.290330661384).jpg",
+          "label": "bad",
+          "similarity": 0.7599127888679504
+        }
+      ],
+      "retrieved_good_refs": [
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Good_Tiles/tile_(4608.780060120252, 36102.11047094197).jpg",
+          "name": "tile_(4608.780060120252, 36102.11047094197).jpg",
+          "label": "good",
+          "similarity": 0.8094254732131958
+        },
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Good_Tiles/tile_(6657.12675350703, 25604.33366733473).jpg",
+          "name": "tile_(6657.12675350703, 25604.33366733473).jpg",
+          "label": "good",
+          "similarity": 0.799958348274231
+        },
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Good_Tiles/tile_(3584.6067134268624, 36614.197144288664).jpg",
+          "name": "tile_(3584.6067134268624, 36614.197144288664).jpg",
+          "label": "good",
+          "similarity": 0.791195809841156
+        }
+      ],
+      "center_norm": [
+        354,
+        729
+      ],
+      "bbox_norm": [
+        344,
+        719,
+        364,
+        739
+      ],
+      "center_level0": [
+        38369,
+        179265
+      ],
+      "tile_bbox_level0": [
+        37740,
+        178636,
+        38998,
+        179894
+      ],
+      "navigation_bbox_norm": [
+        325,
+        716,
+        383,
+        742
+      ],
+      "navigation_field_width_um": 1000.0
+    },
+    {
+      "rank": 16,
+      "tile_index": 16,
+      "score": 0.6262683272361755,
+      "combined_rank_score": 0.6262683272361755,
+      "retrieval_score": 0.7368763089179993,
+      "dark_roi_score": 0.39775779843330383,
+      "inside_dark_region": null,
+      "dark_region_mode": "none",
+      "bad_likelihood": 0.21786469221115112,
+      "bad_margin": 0.42605116963386536,
+      "bad_top1_similarity": 0.7476744651794434,
+      "good_top1_similarity": 0.8004118800163269,
+      "quality_hint": "good_like",
+      "reference_mode": "good_bad_hnsw_knn",
+      "reference_neighbor_k": 7,
+      "retrieved_bad_refs": [
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Bad_Tiles/tile_(4864.8233967935985, 18947.2069138277).jpg",
+          "name": "tile_(4864.8233967935985, 18947.2069138277).jpg",
+          "label": "bad",
+          "similarity": 0.7476744651794434
+        },
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Bad_Tiles/tile_(4096.693386773557, 12034.036823647324).jpg",
+          "name": "tile_(4096.693386773557, 12034.036823647324).jpg",
+          "label": "bad",
+          "similarity": 0.7172231674194336
+        },
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Bad_Tiles/tile_(7681.300100200419, 40198.803857715524).jpg",
+          "name": "tile_(7681.300100200419, 40198.803857715524).jpg",
+          "label": "bad",
+          "similarity": 0.7108783721923828
+        }
+      ],
+      "retrieved_good_refs": [
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Good_Tiles/tile_(12546.123496994018, 34565.85045090189).jpg",
+          "name": "tile_(12546.123496994018, 34565.85045090189).jpg",
+          "label": "good",
+          "similarity": 0.8004118800163269
+        },
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Good_Tiles/tile_(11777.993486973975, 14594.470190380796).jpg",
+          "name": "tile_(11777.993486973975, 14594.470190380796).jpg",
+          "label": "good",
+          "similarity": 0.7484788298606873
+        },
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Good_Tiles/tile_(5888.996743486988, 29701.027054108286).jpg",
+          "name": "tile_(5888.996743486988, 29701.027054108286).jpg",
+          "label": "good",
+          "similarity": 0.7229585647583008
+        }
+      ],
+      "center_norm": [
+        331,
+        228
+      ],
+      "bbox_norm": [
+        321,
+        218,
+        341,
+        238
+      ],
+      "center_level0": [
+        35853,
+        55981
+      ],
+      "tile_bbox_level0": [
+        35224,
+        55352,
+        36482,
+        56610
+      ],
+      "navigation_bbox_norm": [
+        302,
+        215,
+        360,
+        241
+      ],
+      "navigation_field_width_um": 1000.0
+    },
+    {
+      "rank": 11,
+      "tile_index": 14,
+      "score": 0.8041813373565674,
+      "combined_rank_score": 0.8041813373565674,
+      "retrieval_score": 0.7532629370689392,
+      "dark_roi_score": 0.35525578260421753,
+      "inside_dark_region": null,
+      "dark_region_mode": "none",
+      "bad_likelihood": 0.09450844675302505,
+      "bad_margin": 0.7532629370689392,
+      "bad_top1_similarity": 0.0,
+      "good_top1_similarity": 0.7915897965431213,
+      "quality_hint": "good_like",
+      "reference_mode": "good_bad_hnsw_knn",
+      "reference_neighbor_k": 7,
+      "retrieved_bad_refs": [],
+      "retrieved_good_refs": [
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Good_Tiles/tile_(12546.123496994018, 34565.85045090189).jpg",
+          "name": "tile_(12546.123496994018, 34565.85045090189).jpg",
+          "label": "good",
+          "similarity": 0.7915897965431213
+        },
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Good_Tiles/tile_(11777.993486973975, 14594.470190380796).jpg",
+          "name": "tile_(11777.993486973975, 14594.470190380796).jpg",
+          "label": "good",
+          "similarity": 0.7692423462867737
+        },
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Good_Tiles/tile_(5888.996743486988, 29701.027054108286).jpg",
+          "name": "tile_(5888.996743486988, 29701.027054108286).jpg",
+          "label": "good",
+          "similarity": 0.7485367059707642
+        }
+      ],
+      "center_norm": [
+        343,
+        222
+      ],
+      "bbox_norm": [
+        333,
+        212,
+        353,
+        232
+      ],
+      "center_level0": [
+        37111,
+        54723
+      ],
+      "tile_bbox_level0": [
+        36482,
+        54094,
+        37740,
+        55352
+      ],
+      "navigation_bbox_norm": [
+        314,
+        209,
+        372,
+        235
+      ],
+      "navigation_field_width_um": 1000.0
+    },
+    {
+      "rank": 10,
+      "tile_index": 140,
+      "score": 0.8287396430969238,
+      "combined_rank_score": 0.8287396430969238,
+      "retrieval_score": 0.7619364857673645,
+      "dark_roi_score": 0.44939756393432617,
+      "inside_dark_region": null,
+      "dark_region_mode": "none",
+      "bad_likelihood": 0.1628391146659851,
+      "bad_margin": 0.5457512140274048,
+      "bad_top1_similarity": 0.7644157409667969,
+      "good_top1_similarity": 0.7880295515060425,
+      "quality_hint": "good_like",
+      "reference_mode": "good_bad_hnsw_knn",
+      "reference_neighbor_k": 7,
+      "retrieved_bad_refs": [
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Bad_Tiles/tile_(13314.25350701406, 42759.237224449).jpg",
+          "name": "tile_(13314.25350701406, 42759.237224449).jpg",
+          "label": "bad",
+          "similarity": 0.7644157409667969
+        },
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Bad_Tiles/tile_(6657.12675350703, 33797.72044088184).jpg",
+          "name": "tile_(6657.12675350703, 33797.72044088184).jpg",
+          "label": "bad",
+          "similarity": 0.7488809823989868
+        }
+      ],
+      "retrieved_good_refs": [
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Good_Tiles/tile_(12546.123496994018, 34565.85045090189).jpg",
+          "name": "tile_(12546.123496994018, 34565.85045090189).jpg",
+          "label": "good",
+          "similarity": 0.7880295515060425
+        },
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Good_Tiles/tile_(2816.4767034068204, 35333.98046092193).jpg",
+          "name": "tile_(2816.4767034068204, 35333.98046092193).jpg",
+          "label": "good",
+          "similarity": 0.76739501953125
+        },
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Good_Tiles/tile_(9473.60345691385, 40454.84719438887).jpg",
+          "name": "tile_(9473.60345691385, 40454.84719438887).jpg",
+          "label": "good",
+          "similarity": 0.7609789371490479
+        }
+      ],
+      "center_norm": [
+        331,
+        790
+      ],
+      "bbox_norm": [
+        321,
+        780,
+        341,
+        800
+      ],
+      "center_level0": [
+        35853,
+        194361
+      ],
+      "tile_bbox_level0": [
+        35224,
+        193732,
+        36482,
+        194990
+      ],
+      "navigation_bbox_norm": [
+        302,
+        777,
+        360,
+        803
+      ],
+      "navigation_field_width_um": 1000.0
+    },
+    {
+      "rank": 9,
+      "tile_index": 148,
+      "score": 0.8363566398620605,
+      "combined_rank_score": 0.8363566398620605,
+      "retrieval_score": 0.7431895136833191,
+      "dark_roi_score": 0.4574728310108185,
+      "inside_dark_region": null,
+      "dark_region_mode": "none",
+      "bad_likelihood": 0.1671035885810852,
+      "bad_margin": 0.5354318022727966,
+      "bad_top1_similarity": 0.7398407459259033,
+      "good_top1_similarity": 0.7870068550109863,
+      "quality_hint": "good_like",
+      "reference_mode": "good_bad_hnsw_knn",
+      "reference_neighbor_k": 7,
+      "retrieved_bad_refs": [
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Bad_Tiles/tile_(4864.8233967935985, 18947.2069138277).jpg",
+          "name": "tile_(4864.8233967935985, 18947.2069138277).jpg",
+          "label": "bad",
+          "similarity": 0.7398407459259033
+        },
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Bad_Tiles/tile_(4096.693386773557, 12034.036823647324).jpg",
+          "name": "tile_(4096.693386773557, 12034.036823647324).jpg",
+          "label": "bad",
+          "similarity": 0.7144632339477539
+        }
+      ],
+      "retrieved_good_refs": [
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Good_Tiles/tile_(12546.123496994018, 34565.85045090189).jpg",
+          "name": "tile_(12546.123496994018, 34565.85045090189).jpg",
+          "label": "good",
+          "similarity": 0.7870068550109863
+        },
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Good_Tiles/tile_(3072.5200400801677, 35333.98046092193).jpg",
+          "name": "tile_(3072.5200400801677, 35333.98046092193).jpg",
+          "label": "good",
+          "similarity": 0.7418672442436218
+        },
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Good_Tiles/tile_(11777.993486973975, 14594.470190380796).jpg",
+          "name": "tile_(11777.993486973975, 14594.470190380796).jpg",
+          "label": "good",
+          "similarity": 0.7378499507904053
+        }
+      ],
+      "center_norm": [
+        494,
+        826
+      ],
+      "bbox_norm": [
+        484,
+        816,
+        504,
+        836
+      ],
+      "center_level0": [
+        53465,
+        203167
+      ],
+      "tile_bbox_level0": [
+        52836,
+        202538,
+        54094,
+        203796
+      ],
+      "navigation_bbox_norm": [
+        465,
+        813,
+        523,
+        839
+      ],
+      "navigation_field_width_um": 1000.0
+    },
+    {
+      "rank": 4,
+      "tile_index": 128,
+      "score": 1.205810308456421,
+      "combined_rank_score": 1.205810308456421,
+      "retrieval_score": 0.7528181076049805,
+      "dark_roi_score": 0.498867392539978,
+      "inside_dark_region": null,
+      "dark_region_mode": "none",
+      "bad_likelihood": 0.09462270140647888,
+      "bad_margin": 0.7528181076049805,
+      "bad_top1_similarity": 0.0,
+      "good_top1_similarity": 0.7824742794036865,
+      "quality_hint": "good_like",
+      "reference_mode": "good_bad_hnsw_knn",
+      "reference_neighbor_k": 7,
+      "retrieved_bad_refs": [],
+      "retrieved_good_refs": [
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Good_Tiles/tile_(12546.123496994018, 34565.85045090189).jpg",
+          "name": "tile_(12546.123496994018, 34565.85045090189).jpg",
+          "label": "good",
+          "similarity": 0.7824742794036865
+        },
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Good_Tiles/tile_(3072.5200400801677, 35333.98046092193).jpg",
+          "name": "tile_(3072.5200400801677, 35333.98046092193).jpg",
+          "label": "good",
+          "similarity": 0.7618041038513184
+        },
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Good_Tiles/tile_(3072.5200400801677, 35590.02379759528).jpg",
+          "name": "tile_(3072.5200400801677, 35590.02379759528).jpg",
+          "label": "good",
+          "similarity": 0.7565324902534485
+        }
+      ],
+      "center_norm": [
+        331,
+        759
+      ],
+      "bbox_norm": [
+        321,
+        749,
+        341,
+        769
+      ],
+      "center_level0": [
+        35853,
+        186813
+      ],
+      "tile_bbox_level0": [
+        35224,
+        186184,
+        36482,
+        187442
+      ],
+      "navigation_bbox_norm": [
+        302,
+        746,
+        360,
+        772
+      ],
+      "navigation_field_width_um": 1000.0
+    },
+    {
+      "rank": 3,
+      "tile_index": 129,
+      "score": 1.2761449813842773,
+      "combined_rank_score": 1.2761449813842773,
+      "retrieval_score": 0.7556241750717163,
+      "dark_roi_score": 0.5232614278793335,
+      "inside_dark_region": null,
+      "dark_region_mode": "none",
+      "bad_likelihood": 0.09390398859977722,
+      "bad_margin": 0.7556241750717163,
+      "bad_top1_similarity": 0.0,
+      "good_top1_similarity": 0.7729217410087585,
+      "quality_hint": "good_like",
+      "reference_mode": "good_bad_hnsw_knn",
+      "reference_neighbor_k": 7,
+      "retrieved_bad_refs": [],
+      "retrieved_good_refs": [
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Good_Tiles/tile_(12546.123496994018, 34565.85045090189).jpg",
+          "name": "tile_(12546.123496994018, 34565.85045090189).jpg",
+          "label": "good",
+          "similarity": 0.7729217410087585
+        },
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Good_Tiles/tile_(10753.820140280586, 28164.767034068205).jpg",
+          "name": "tile_(10753.820140280586, 28164.767034068205).jpg",
+          "label": "good",
+          "similarity": 0.7600133419036865
+        },
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Good_Tiles/tile_(3072.5200400801677, 35333.98046092193).jpg",
+          "name": "tile_(3072.5200400801677, 35333.98046092193).jpg",
+          "label": "good",
+          "similarity": 0.7563037872314453
+        }
+      ],
+      "center_norm": [
+        343,
+        759
+      ],
+      "bbox_norm": [
+        333,
+        749,
+        353,
+        769
+      ],
+      "center_level0": [
+        37111,
+        186813
+      ],
+      "tile_bbox_level0": [
+        36482,
+        186184,
+        37740,
+        187442
+      ],
+      "navigation_bbox_norm": [
+        314,
+        746,
+        372,
+        772
+      ],
+      "navigation_field_width_um": 1000.0
+    },
+    {
+      "rank": 24,
+      "tile_index": 149,
+      "score": 0.4256458282470703,
+      "combined_rank_score": 0.4256458282470703,
+      "retrieval_score": 0.7358884811401367,
+      "dark_roi_score": 0.22930197417736053,
+      "inside_dark_region": null,
+      "dark_region_mode": "none",
+      "bad_likelihood": 0.09906424582004547,
+      "bad_margin": 0.7358884811401367,
+      "bad_top1_similarity": 0.0,
+      "good_top1_similarity": 0.7600873708724976,
+      "quality_hint": "good_like",
+      "reference_mode": "good_bad_hnsw_knn",
+      "reference_neighbor_k": 7,
+      "retrieved_bad_refs": [],
+      "retrieved_good_refs": [
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Good_Tiles/tile_(12546.123496994018, 34565.85045090189).jpg",
+          "name": "tile_(12546.123496994018, 34565.85045090189).jpg",
+          "label": "good",
+          "similarity": 0.7600873708724976
+        },
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Good_Tiles/tile_(11777.993486973975, 14594.470190380796).jpg",
+          "name": "tile_(11777.993486973975, 14594.470190380796).jpg",
+          "label": "good",
+          "similarity": 0.7513916492462158
+        },
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Good_Tiles/tile_(9473.60345691385, 40454.84719438887).jpg",
+          "name": "tile_(9473.60345691385, 40454.84719438887).jpg",
+          "label": "good",
+          "similarity": 0.7377371788024902
+        }
+      ],
+      "center_norm": [
+        505,
+        826
+      ],
+      "bbox_norm": [
+        495,
+        816,
+        515,
+        836
+      ],
+      "center_level0": [
+        54723,
+        203167
+      ],
+      "tile_bbox_level0": [
+        54094,
+        202538,
+        55352,
+        203796
+      ],
+      "navigation_bbox_norm": [
+        476,
+        813,
+        534,
+        839
+      ],
+      "navigation_field_width_um": 1000.0
+    },
+    {
+      "rank": 14,
+      "tile_index": 127,
+      "score": 0.7083069682121277,
+      "combined_rank_score": 0.7083069682121277,
+      "retrieval_score": 0.7419680953025818,
+      "dark_roi_score": 0.3278772830963135,
+      "inside_dark_region": null,
+      "dark_region_mode": "none",
+      "bad_likelihood": 0.09744827449321747,
+      "bad_margin": 0.7419680953025818,
+      "bad_top1_similarity": 0.0,
+      "good_top1_similarity": 0.7515001893043518,
+      "quality_hint": "good_like",
+      "reference_mode": "good_bad_hnsw_knn",
+      "reference_neighbor_k": 7,
+      "retrieved_bad_refs": [],
+      "retrieved_good_refs": [
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Good_Tiles/tile_(3072.5200400801677, 35333.98046092193).jpg",
+          "name": "tile_(3072.5200400801677, 35333.98046092193).jpg",
+          "label": "good",
+          "similarity": 0.7515001893043518
+        },
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Good_Tiles/tile_(12546.123496994018, 34565.85045090189).jpg",
+          "name": "tile_(12546.123496994018, 34565.85045090189).jpg",
+          "label": "good",
+          "similarity": 0.7484585046768188
+        },
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Good_Tiles/tile_(11777.993486973975, 14594.470190380796).jpg",
+          "name": "tile_(11777.993486973975, 14594.470190380796).jpg",
+          "label": "good",
+          "similarity": 0.7476530075073242
+        }
+      ],
+      "center_norm": [
+        319,
+        759
+      ],
+      "bbox_norm": [
+        309,
+        749,
+        329,
+        769
+      ],
+      "center_level0": [
+        34595,
+        186813
+      ],
+      "tile_bbox_level0": [
+        33966,
+        186184,
+        35224,
+        187442
+      ],
+      "navigation_bbox_norm": [
+        290,
+        746,
+        348,
+        772
+      ],
+      "navigation_field_width_um": 1000.0
+    },
+    {
+      "rank": 7,
+      "tile_index": 130,
+      "score": 0.9815183281898499,
+      "combined_rank_score": 0.9815183281898499,
+      "retrieval_score": 0.7341952919960022,
+      "dark_roi_score": 0.42882296442985535,
+      "inside_dark_region": null,
+      "dark_region_mode": "none",
+      "bad_likelihood": 0.09951851516962051,
+      "bad_margin": 0.7341952919960022,
+      "bad_top1_similarity": 0.0,
+      "good_top1_similarity": 0.7415258884429932,
+      "quality_hint": "good_like",
+      "reference_mode": "good_bad_hnsw_knn",
+      "reference_neighbor_k": 7,
+      "retrieved_bad_refs": [],
+      "retrieved_good_refs": [
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Good_Tiles/tile_(12546.123496994018, 34565.85045090189).jpg",
+          "name": "tile_(12546.123496994018, 34565.85045090189).jpg",
+          "label": "good",
+          "similarity": 0.7415258884429932
+        },
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Good_Tiles/tile_(3584.6067134268624, 36614.197144288664).jpg",
+          "name": "tile_(3584.6067134268624, 36614.197144288664).jpg",
+          "label": "good",
+          "similarity": 0.7387874722480774
+        },
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Good_Tiles/tile_(3072.5200400801677, 35333.98046092193).jpg",
+          "name": "tile_(3072.5200400801677, 35333.98046092193).jpg",
+          "label": "good",
+          "similarity": 0.7363681793212891
+        }
+      ],
+      "center_norm": [
+        331,
+        765
+      ],
+      "bbox_norm": [
+        321,
+        755,
+        341,
+        775
+      ],
+      "center_level0": [
+        35853,
+        188071
+      ],
+      "tile_bbox_level0": [
+        35224,
+        187442,
+        36482,
+        188700
+      ],
+      "navigation_bbox_norm": [
+        302,
+        752,
+        360,
+        778
+      ],
+      "navigation_field_width_um": 1000.0
+    },
+    {
+      "rank": 15,
+      "tile_index": 131,
+      "score": 0.6593299508094788,
+      "combined_rank_score": 0.6593299508094788,
+      "retrieval_score": 0.6910907030105591,
+      "dark_roi_score": 0.3340606987476349,
+      "inside_dark_region": null,
+      "dark_region_mode": "none",
+      "bad_likelihood": 0.11172188073396683,
+      "bad_margin": 0.6910907030105591,
+      "bad_top1_similarity": 0.0,
+      "good_top1_similarity": 0.6982865333557129,
+      "quality_hint": "good_like",
+      "reference_mode": "good_bad_hnsw_knn",
+      "reference_neighbor_k": 7,
+      "retrieved_bad_refs": [],
+      "retrieved_good_refs": [
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Good_Tiles/tile_(12546.123496994018, 34565.85045090189).jpg",
+          "name": "tile_(12546.123496994018, 34565.85045090189).jpg",
+          "label": "good",
+          "similarity": 0.6982865333557129
+        },
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Good_Tiles/tile_(9473.60345691385, 40454.84719438887).jpg",
+          "name": "tile_(9473.60345691385, 40454.84719438887).jpg",
+          "label": "good",
+          "similarity": 0.6980131268501282
+        },
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Good_Tiles/tile_(3072.5200400801677, 35333.98046092193).jpg",
+          "name": "tile_(3072.5200400801677, 35333.98046092193).jpg",
+          "label": "good",
+          "similarity": 0.6942123174667358
+        }
+      ],
+      "center_norm": [
+        343,
+        765
+      ],
+      "bbox_norm": [
+        333,
+        755,
+        353,
+        775
+      ],
+      "center_level0": [
+        37111,
+        188071
+      ],
+      "tile_bbox_level0": [
+        36482,
+        187442,
+        37740,
+        188700
+      ],
+      "navigation_bbox_norm": [
+        314,
+        752,
+        372,
+        778
+      ],
+      "navigation_field_width_um": 1000.0
+    },
+    {
+      "rank": 26,
+      "tile_index": 15,
+      "score": 0.32709014415740967,
+      "combined_rank_score": 0.32709014415740967,
+      "retrieval_score": 0.6387401223182678,
+      "dark_roi_score": 0.23950640857219696,
+      "inside_dark_region": null,
+      "dark_region_mode": "none",
+      "bad_likelihood": 0.12828361988067627,
+      "bad_margin": 0.6387401223182678,
+      "bad_top1_similarity": 0.0,
+      "good_top1_similarity": 0.6549046635627747,
+      "quality_hint": "good_like",
+      "reference_mode": "good_bad_hnsw_knn",
+      "reference_neighbor_k": 7,
+      "retrieved_bad_refs": [],
+      "retrieved_good_refs": [
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Good_Tiles/tile_(11777.993486973975, 14594.470190380796).jpg",
+          "name": "tile_(11777.993486973975, 14594.470190380796).jpg",
+          "label": "good",
+          "similarity": 0.6549046635627747
+        },
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Good_Tiles/tile_(3328.563376753515, 33029.590430861805).jpg",
+          "name": "tile_(3328.563376753515, 33029.590430861805).jpg",
+          "label": "good",
+          "similarity": 0.6427056789398193
+        },
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Good_Tiles/tile_(9473.60345691385, 40454.84719438887).jpg",
+          "name": "tile_(9473.60345691385, 40454.84719438887).jpg",
+          "label": "good",
+          "similarity": 0.6389725208282471
+        }
+      ],
+      "center_norm": [
+        319,
+        228
+      ],
+      "bbox_norm": [
+        309,
+        218,
+        329,
+        238
+      ],
+      "center_level0": [
+        34595,
+        55981
+      ],
+      "tile_bbox_level0": [
+        33966,
+        55352,
+        35224,
+        56610
+      ],
+      "navigation_bbox_norm": [
+        290,
+        215,
+        348,
+        241
+      ],
+      "navigation_field_width_um": 1000.0
+    },
+    {
+      "rank": 44,
+      "tile_index": 147,
+      "score": 0.09650655090808868,
+      "combined_rank_score": 0.09650655090808868,
+      "retrieval_score": 0.7073230147361755,
+      "dark_roi_score": 0.2886797785758972,
+      "inside_dark_region": null,
+      "dark_region_mode": "none",
+      "bad_likelihood": 0.519170880317688,
+      "bad_margin": -0.025573670864105225,
+      "bad_top1_similarity": 0.7681446075439453,
+      "good_top1_similarity": 0.7541099786758423,
+      "quality_hint": "uncertain",
+      "reference_mode": "good_bad_hnsw_knn",
+      "reference_neighbor_k": 7,
+      "retrieved_bad_refs": [
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Bad_Tiles/tile_(4864.8233967935985, 18947.2069138277).jpg",
+          "name": "tile_(4864.8233967935985, 18947.2069138277).jpg",
+          "label": "bad",
+          "similarity": 0.7681446075439453
+        },
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Bad_Tiles/tile_(4096.693386773557, 12034.036823647324).jpg",
+          "name": "tile_(4096.693386773557, 12034.036823647324).jpg",
+          "label": "bad",
+          "similarity": 0.7651171088218689
+        },
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Bad_Tiles/tile_(7681.300100200419, 40198.803857715524).jpg",
+          "name": "tile_(7681.300100200419, 40198.803857715524).jpg",
+          "label": "bad",
+          "similarity": 0.755875289440155
+        }
+      ],
+      "retrieved_good_refs": [
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Good_Tiles/tile_(12546.123496994018, 34565.85045090189).jpg",
+          "name": "tile_(12546.123496994018, 34565.85045090189).jpg",
+          "label": "good",
+          "similarity": 0.7541099786758423
+        },
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Good_Tiles/tile_(768.1300100200419, 34309.80711422854).jpg",
+          "name": "tile_(768.1300100200419, 34309.80711422854).jpg",
+          "label": "good",
+          "similarity": 0.7182732224464417
+        },
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Good_Tiles/tile_(2304.390030060126, 39174.63051102214).jpg",
+          "name": "tile_(2304.390030060126, 39174.63051102214).jpg",
+          "label": "good",
+          "similarity": 0.7054128646850586
+        }
+      ],
+      "center_norm": [
+        505,
+        816
+      ],
+      "bbox_norm": [
+        495,
+        806,
+        515,
+        826
+      ],
+      "center_level0": [
+        54723,
+        200651
+      ],
+      "tile_bbox_level0": [
+        54094,
+        200022,
+        55352,
+        201280
+      ],
+      "navigation_bbox_norm": [
+        476,
+        803,
+        534,
+        829
+      ],
+      "navigation_field_width_um": 1000.0
+    },
+    {
+      "rank": 21,
+      "tile_index": 8,
+      "score": 0.45586976408958435,
+      "combined_rank_score": 0.45586976408958435,
+      "retrieval_score": 0.7266889214515686,
+      "dark_roi_score": 0.34355947375297546,
+      "inside_dark_region": null,
+      "dark_region_mode": "none",
+      "bad_likelihood": 0.22055606544017792,
+      "bad_margin": 0.4208095967769623,
+      "bad_top1_similarity": 0.7382261753082275,
+      "good_top1_similarity": 0.7506301403045654,
+      "quality_hint": "uncertain",
+      "reference_mode": "good_bad_hnsw_knn",
+      "reference_neighbor_k": 7,
+      "retrieved_bad_refs": [
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Bad_Tiles/tile_(6657.12675350703, 33797.72044088184).jpg",
+          "name": "tile_(6657.12675350703, 33797.72044088184).jpg",
+          "label": "bad",
+          "similarity": 0.7382261753082275
+        },
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Bad_Tiles/tile_(7425.256763527072, 38150.45716432875).jpg",
+          "name": "tile_(7425.256763527072, 38150.45716432875).jpg",
+          "label": "bad",
+          "similarity": 0.7040390968322754
+        },
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Bad_Tiles/tile_(9473.60345691385, 34053.76377755519).jpg",
+          "name": "tile_(9473.60345691385, 34053.76377755519).jpg",
+          "label": "bad",
+          "similarity": 0.6988898515701294
+        }
+      ],
+      "retrieved_good_refs": [
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Good_Tiles/tile_(12546.123496994018, 34565.85045090189).jpg",
+          "name": "tile_(12546.123496994018, 34565.85045090189).jpg",
+          "label": "good",
+          "similarity": 0.7506301403045654
+        },
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Good_Tiles/tile_(2816.4767034068204, 35333.98046092193).jpg",
+          "name": "tile_(2816.4767034068204, 35333.98046092193).jpg",
+          "label": "good",
+          "similarity": 0.7404512763023376
+        },
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Good_Tiles/tile_(6657.12675350703, 25604.33366733473).jpg",
+          "name": "tile_(6657.12675350703, 25604.33366733473).jpg",
+          "label": "good",
+          "similarity": 0.7284332513809204
+        }
+      ],
+      "center_norm": [
+        134,
+        197
+      ],
+      "bbox_norm": [
+        124,
+        187,
+        144,
+        207
+      ],
+      "center_level0": [
+        14467,
+        48433
+      ],
+      "tile_bbox_level0": [
+        13838,
+        47804,
+        15096,
+        49062
+      ],
+      "navigation_bbox_norm": [
+        105,
+        184,
+        163,
+        210
+      ],
+      "navigation_field_width_um": 1000.0
+    },
+    {
+      "rank": 13,
+      "tile_index": 6,
+      "score": 0.7622287273406982,
+      "combined_rank_score": 0.7622287273406982,
+      "retrieval_score": 0.6784840226173401,
+      "dark_roi_score": 0.4581877291202545,
+      "inside_dark_region": null,
+      "dark_region_mode": "none",
+      "bad_likelihood": 0.1922190934419632,
+      "bad_margin": 0.4785516858100891,
+      "bad_top1_similarity": 0.7053545117378235,
+      "good_top1_similarity": 0.7241338491439819,
+      "quality_hint": "uncertain",
+      "reference_mode": "good_bad_hnsw_knn",
+      "reference_neighbor_k": 7,
+      "retrieved_bad_refs": [
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Bad_Tiles/tile_(6657.12675350703, 33797.72044088184).jpg",
+          "name": "tile_(6657.12675350703, 33797.72044088184).jpg",
+          "label": "bad",
+          "similarity": 0.7053545117378235
+        },
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Bad_Tiles/tile_(7169.213426853725, 18691.163577154355).jpg",
+          "name": "tile_(7169.213426853725, 18691.163577154355).jpg",
+          "label": "bad",
+          "similarity": 0.6941717863082886
+        }
+      ],
+      "retrieved_good_refs": [
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Good_Tiles/tile_(2304.390030060126, 34821.89378757523).jpg",
+          "name": "tile_(2304.390030060126, 34821.89378757523).jpg",
+          "label": "good",
+          "similarity": 0.7241338491439819
+        },
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Good_Tiles/tile_(12546.123496994018, 34565.85045090189).jpg",
+          "name": "tile_(12546.123496994018, 34565.85045090189).jpg",
+          "label": "good",
+          "similarity": 0.6855087280273438
+        },
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Good_Tiles/tile_(2560.433366733473, 39686.717184368834).jpg",
+          "name": "tile_(2560.433366733473, 39686.717184368834).jpg",
+          "label": "good",
+          "similarity": 0.6750742197036743
+        }
+      ],
+      "center_norm": [
+        273,
+        176
+      ],
+      "bbox_norm": [
+        263,
+        166,
+        283,
+        186
+      ],
+      "center_level0": [
+        29563,
+        43401
+      ],
+      "tile_bbox_level0": [
+        28934,
+        42772,
+        30192,
+        44030
+      ],
+      "navigation_bbox_norm": [
+        244,
+        163,
+        302,
+        189
+      ],
+      "navigation_field_width_um": 1000.0
+    },
+    {
+      "rank": 71,
+      "tile_index": 123,
+      "score": -0.0917309820652008,
+      "combined_rank_score": -0.0917309820652008,
+      "retrieval_score": 0.7082022428512573,
+      "dark_roi_score": 0.22804120182991028,
+      "inside_dark_region": null,
+      "dark_region_mode": "none",
+      "bad_likelihood": 0.5253617167472839,
+      "bad_margin": -0.03384464979171753,
+      "bad_top1_similarity": 0.762831449508667,
+      "good_top1_similarity": 0.7150220274925232,
+      "quality_hint": "uncertain",
+      "reference_mode": "good_bad_hnsw_knn",
+      "reference_neighbor_k": 7,
+      "retrieved_bad_refs": [
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Bad_Tiles/tile_(9729.646793587197, 25348.290330661384).jpg",
+          "name": "tile_(9729.646793587197, 25348.290330661384).jpg",
+          "label": "bad",
+          "similarity": 0.762831449508667
+        },
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Bad_Tiles/tile_(6657.12675350703, 33797.72044088184).jpg",
+          "name": "tile_(6657.12675350703, 33797.72044088184).jpg",
+          "label": "bad",
+          "similarity": 0.7591005563735962
+        },
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Bad_Tiles/tile_(7681.300100200419, 24068.07364729465).jpg",
+          "name": "tile_(7681.300100200419, 24068.07364729465).jpg",
+          "label": "bad",
+          "similarity": 0.758550763130188
+        }
+      ],
+      "retrieved_good_refs": [
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Good_Tiles/tile_(12546.123496994018, 34565.85045090189).jpg",
+          "name": "tile_(12546.123496994018, 34565.85045090189).jpg",
+          "label": "good",
+          "similarity": 0.7150220274925232
+        },
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Good_Tiles/tile_(4608.780060120252, 36102.11047094197).jpg",
+          "name": "tile_(4608.780060120252, 36102.11047094197).jpg",
+          "label": "good",
+          "similarity": 0.7132969498634338
+        },
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Good_Tiles/tile_(6657.12675350703, 25604.33366733473).jpg",
+          "name": "tile_(6657.12675350703, 25604.33366733473).jpg",
+          "label": "good",
+          "similarity": 0.708948016166687
+        }
+      ],
+      "center_norm": [
+        296,
+        718
+      ],
+      "bbox_norm": [
+        286,
+        708,
+        306,
+        728
+      ],
+      "center_level0": [
+        32079,
+        176749
+      ],
+      "tile_bbox_level0": [
+        31450,
+        176120,
+        32708,
+        177378
+      ],
+      "navigation_bbox_norm": [
+        267,
+        705,
+        325,
+        731
+      ],
+      "navigation_field_width_um": 1000.0
+    },
+    {
+      "rank": 48,
+      "tile_index": 3,
+      "score": 0.04103206843137741,
+      "combined_rank_score": 0.04103206843137741,
+      "retrieval_score": 0.6873872876167297,
+      "dark_roi_score": 0.19895656406879425,
+      "inside_dark_region": null,
+      "dark_region_mode": "none",
+      "bad_likelihood": 0.18493029475212097,
+      "bad_margin": 0.4944315552711487,
+      "bad_top1_similarity": 0.6926547288894653,
+      "good_top1_similarity": 0.6986316442489624,
+      "quality_hint": "uncertain",
+      "reference_mode": "good_bad_hnsw_knn",
+      "reference_neighbor_k": 7,
+      "retrieved_bad_refs": [
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Bad_Tiles/tile_(7169.213426853725, 18691.163577154355).jpg",
+          "name": "tile_(7169.213426853725, 18691.163577154355).jpg",
+          "label": "bad",
+          "similarity": 0.6926547288894653
+        },
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Bad_Tiles/tile_(6657.12675350703, 33797.72044088184).jpg",
+          "name": "tile_(6657.12675350703, 33797.72044088184).jpg",
+          "label": "bad",
+          "similarity": 0.658035397529602
+        }
+      ],
+      "retrieved_good_refs": [
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Good_Tiles/tile_(9473.60345691385, 40454.84719438887).jpg",
+          "name": "tile_(9473.60345691385, 40454.84719438887).jpg",
+          "label": "good",
+          "similarity": 0.6986316442489624
+        },
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Good_Tiles/tile_(12546.123496994018, 34565.85045090189).jpg",
+          "name": "tile_(12546.123496994018, 34565.85045090189).jpg",
+          "label": "good",
+          "similarity": 0.6949813365936279
+        },
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Good_Tiles/tile_(2816.4767034068204, 34821.89378757523).jpg",
+          "name": "tile_(2816.4767034068204, 34821.89378757523).jpg",
+          "label": "good",
+          "similarity": 0.6852707862854004
+        }
+      ],
+      "center_norm": [
+        273,
+        171
+      ],
+      "bbox_norm": [
+        263,
+        161,
+        283,
+        181
+      ],
+      "center_level0": [
+        29563,
+        42143
+      ],
+      "tile_bbox_level0": [
+        28934,
+        41514,
+        30192,
+        42772
+      ],
+      "navigation_bbox_norm": [
+        244,
+        158,
+        302,
+        184
+      ],
+      "navigation_field_width_um": 1000.0
+    },
+    {
+      "rank": 36,
+      "tile_index": 4,
+      "score": 0.17878182232379913,
+      "combined_rank_score": 0.17878182232379913,
+      "retrieval_score": 0.6586941480636597,
+      "dark_roi_score": 0.3282300531864166,
+      "inside_dark_region": null,
+      "dark_region_mode": "none",
+      "bad_likelihood": 0.5020685791969299,
+      "bad_margin": -0.0027580857276916504,
+      "bad_top1_similarity": 0.6938859224319458,
+      "good_top1_similarity": 0.6770912408828735,
+      "quality_hint": "uncertain",
+      "reference_mode": "good_bad_hnsw_knn",
+      "reference_neighbor_k": 7,
+      "retrieved_bad_refs": [
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Bad_Tiles/tile_(7169.213426853725, 18691.163577154355).jpg",
+          "name": "tile_(7169.213426853725, 18691.163577154355).jpg",
+          "label": "bad",
+          "similarity": 0.6938859224319458
+        },
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Bad_Tiles/tile_(8705.473446893808, 41222.97720440892).jpg",
+          "name": "tile_(8705.473446893808, 41222.97720440892).jpg",
+          "label": "bad",
+          "similarity": 0.6729657649993896
+        },
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Bad_Tiles/tile_(7681.300100200419, 40198.803857715524).jpg",
+          "name": "tile_(7681.300100200419, 40198.803857715524).jpg",
+          "label": "bad",
+          "similarity": 0.6672567129135132
+        }
+      ],
+      "retrieved_good_refs": [
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Good_Tiles/tile_(12546.123496994018, 34565.85045090189).jpg",
+          "name": "tile_(12546.123496994018, 34565.85045090189).jpg",
+          "label": "good",
+          "similarity": 0.6770912408828735
+        },
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Good_Tiles/tile_(768.1300100200419, 34309.80711422854).jpg",
+          "name": "tile_(768.1300100200419, 34309.80711422854).jpg",
+          "label": "good",
+          "similarity": 0.6713377833366394
+        },
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Good_Tiles/tile_(2560.433366733473, 39686.717184368834).jpg",
+          "name": "tile_(2560.433366733473, 39686.717184368834).jpg",
+          "label": "good",
+          "similarity": 0.6580788493156433
+        }
+      ],
+      "center_norm": [
+        250,
+        176
+      ],
+      "bbox_norm": [
+        240,
+        166,
+        260,
+        186
+      ],
+      "center_level0": [
+        27047,
+        43401
+      ],
+      "tile_bbox_level0": [
+        26418,
+        42772,
+        27676,
+        44030
+      ],
+      "navigation_bbox_norm": [
+        221,
+        163,
+        279,
+        189
+      ],
+      "navigation_field_width_um": 1000.0
+    },
+    {
+      "rank": 46,
+      "tile_index": 5,
+      "score": 0.06921884417533875,
+      "combined_rank_score": 0.06921884417533875,
+      "retrieval_score": 0.6444279551506042,
+      "dark_roi_score": 0.272034615278244,
+      "inside_dark_region": null,
+      "dark_region_mode": "none",
+      "bad_likelihood": 0.502754271030426,
+      "bad_margin": -0.0036724209785461426,
+      "bad_top1_similarity": 0.6825984716415405,
+      "good_top1_similarity": 0.6662392616271973,
+      "quality_hint": "uncertain",
+      "reference_mode": "good_bad_hnsw_knn",
+      "reference_neighbor_k": 7,
+      "retrieved_bad_refs": [
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Bad_Tiles/tile_(7169.213426853725, 18691.163577154355).jpg",
+          "name": "tile_(7169.213426853725, 18691.163577154355).jpg",
+          "label": "bad",
+          "similarity": 0.6825984716415405
+        },
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Bad_Tiles/tile_(6657.12675350703, 33797.72044088184).jpg",
+          "name": "tile_(6657.12675350703, 33797.72044088184).jpg",
+          "label": "bad",
+          "similarity": 0.6759675741195679
+        },
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Bad_Tiles/tile_(8705.473446893808, 41222.97720440892).jpg",
+          "name": "tile_(8705.473446893808, 41222.97720440892).jpg",
+          "label": "bad",
+          "similarity": 0.6492775678634644
+        }
+      ],
+      "retrieved_good_refs": [
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Good_Tiles/tile_(768.1300100200419, 34309.80711422854).jpg",
+          "name": "tile_(768.1300100200419, 34309.80711422854).jpg",
+          "label": "good",
+          "similarity": 0.6662392616271973
+        },
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Good_Tiles/tile_(2560.433366733473, 39430.673847695485).jpg",
+          "name": "tile_(2560.433366733473, 39430.673847695485).jpg",
+          "label": "good",
+          "similarity": 0.6524096727371216
+        },
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Good_Tiles/tile_(9473.60345691385, 40454.84719438887).jpg",
+          "name": "tile_(9473.60345691385, 40454.84719438887).jpg",
+          "label": "good",
+          "similarity": 0.6475586891174316
+        }
+      ],
+      "center_norm": [
+        261,
+        176
+      ],
+      "bbox_norm": [
+        251,
+        166,
+        271,
+        186
+      ],
+      "center_level0": [
+        28305,
+        43401
+      ],
+      "tile_bbox_level0": [
+        27676,
+        42772,
+        28934,
+        44030
+      ],
+      "navigation_bbox_norm": [
+        232,
+        163,
+        290,
+        189
+      ],
+      "navigation_field_width_um": 1000.0
+    },
+    {
+      "rank": 40,
+      "tile_index": 2,
+      "score": 0.12108410894870758,
+      "combined_rank_score": 0.12108410894870758,
+      "retrieval_score": 0.5714607238769531,
+      "dark_roi_score": 0.3086196184158325,
+      "inside_dark_region": null,
+      "dark_region_mode": "none",
+      "bad_likelihood": 0.4973296821117401,
+      "bad_margin": 0.0035604238510131836,
+      "bad_top1_similarity": 0.5991150736808777,
+      "good_top1_similarity": 0.5917729735374451,
+      "quality_hint": "uncertain",
+      "reference_mode": "good_bad_hnsw_knn",
+      "reference_neighbor_k": 7,
+      "retrieved_bad_refs": [
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Bad_Tiles/tile_(8705.473446893808, 41222.97720440892).jpg",
+          "name": "tile_(8705.473446893808, 41222.97720440892).jpg",
+          "label": "bad",
+          "similarity": 0.5991150736808777
+        },
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Bad_Tiles/tile_(13314.25350701406, 42759.237224449).jpg",
+          "name": "tile_(13314.25350701406, 42759.237224449).jpg",
+          "label": "bad",
+          "similarity": 0.5780041217803955
+        },
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Bad_Tiles/tile_(10497.77680360724, 23555.98697394795).jpg",
+          "name": "tile_(10497.77680360724, 23555.98697394795).jpg",
+          "label": "bad",
+          "similarity": 0.5742971897125244
+        }
+      ],
+      "retrieved_good_refs": [
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Good_Tiles/tile_(11777.993486973975, 14594.470190380796).jpg",
+          "name": "tile_(11777.993486973975, 14594.470190380796).jpg",
+          "label": "good",
+          "similarity": 0.5917729735374451
+        },
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Good_Tiles/tile_(10753.820140280586, 28164.767034068205).jpg",
+          "name": "tile_(10753.820140280586, 28164.767034068205).jpg",
+          "label": "good",
+          "similarity": 0.5917353630065918
+        },
+        {
+          "path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/Selected_Tiles/Good_Tiles/tile_(9473.60345691385, 40454.84719438887).jpg",
+          "name": "tile_(9473.60345691385, 40454.84719438887).jpg",
+          "label": "good",
+          "similarity": 0.5845927596092224
+        }
+      ],
+      "center_norm": [
+        250,
+        171
+      ],
+      "bbox_norm": [
+        240,
+        161,
+        260,
+        181
+      ],
+      "center_level0": [
+        27047,
+        42143
+      ],
+      "tile_bbox_level0": [
+        26418,
+        41514,
+        27676,
+        42772
+      ],
+      "navigation_bbox_norm": [
+        221,
+        158,
+        279,
+        184
+      ],
+      "navigation_field_width_um": 1000.0
+    }
+  ],
+  "last_roi_candidate_meta": {
+    "bad_like_only_view": false,
+    "bad_like_hidden_count": 0,
+    "forced_min_candidate": false
+  },
+  "last_roi_candidate_source": "uni2_exact_retrieval",
+  "roi_candidate_prep": {
+    "phase": "ready",
+    "status": "done",
+    "message": "ROI index loaded from disk cache (skipping tile filtering)",
+    "started_at": "2026-05-12T08:49:36.921707Z",
+    "updated_at": "2026-05-12T08:50:26.295854Z",
+    "active": false,
+    "source": "disk_cache",
+    "candidate_source": "uni2_exact_retrieval"
+  },
+  "last_roi_candidate_overlay_path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/outputs/20260512_094930_a34e73/wsi_debug/0018_roi_candidates.jpg",
+  "case_output_dir": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/output/AML_Box10_OT02",
+  "has_fatal_error": false,
+  "last_fatal_error": null,
+  "current_agent_action": "- Hard cap reached: 2/2 kept ROI(s). Provide final AML diagnosis.\n\nTarget ROI count reached. Review ALL kept ROIs below before writing the final JSON.\n"
+}

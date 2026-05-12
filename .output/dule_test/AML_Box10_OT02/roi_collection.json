@@ -1,0 +1,137 @@
+{
+  "schema_version": 1,
+  "task": "aml_roi_collection",
+  "slide_path": "/mnt/copernicus3/PATHOLOGY/others/private/haemadata/ALL_WSIs/AML_Box10_OT02.mrxs",
+  "slide_name": "AML_Box10_OT02.mrxs",
+  "run_id": "20260511_110505_491a6a",
+  "case_id": "AML_Box10_OT02",
+  "model_name": "GPT-OSS-120B",
+  "extractor_name": "uni2",
+  "tile_filter": "hybrid",
+  "tile_size_px": 224,
+  "roi_size_px": 2048,
+  "roi_images_dir": "images",
+  "accepted_roi_count": 5,
+  "target_accepted_rois": 5,
+  "slide_overview_image": "images/slide_overview.jpg",
+  "roi_candidates_image": "images/roi_candidates.jpg",
+  "accepted_rois": [
+    {
+      "roi_id": "1",
+      "image_path": "images/roi_1.jpg",
+      "absolute_image_path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/.output/dule_test/AML_Box10_OT02/images/roi_1.jpg",
+      "bbox_level0": [
+        56217,
+        185791,
+        2048,
+        2048
+      ],
+      "field_width_um": 325.632,
+      "field_height_um": 325.632,
+      "tissue_fraction": 0.81494140625,
+      "effective_magnification": 20.0,
+      "candidate_rank": null,
+      "requested_bbox_norm": [
+        334,
+        334,
+        666,
+        666
+      ],
+      "accepted_reason": "AML_candidate"
+    },
+    {
+      "roi_id": "2",
+      "image_path": "images/roi_2.jpg",
+      "absolute_image_path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/.output/dule_test/AML_Box10_OT02/images/roi_2.jpg",
+      "bbox_level0": [
+        43951,
+        201201,
+        2048,
+        2048
+      ],
+      "field_width_um": 325.632,
+      "field_height_um": 325.632,
+      "tissue_fraction": 0.78106689453125,
+      "effective_magnification": 20.0,
+      "candidate_rank": null,
+      "requested_bbox_norm": [
+        200,
+        200,
+        800,
+        800
+      ],
+      "accepted_reason": "AML_candidate"
+    },
+    {
+      "roi_id": "3",
+      "image_path": "images/roi_3.jpg",
+      "absolute_image_path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/.output/dule_test/AML_Box10_OT02/images/roi_3.jpg",
+      "bbox_level0": [
+        36089,
+        185791,
+        2048,
+        2048
+      ],
+      "field_width_um": 325.632,
+      "field_height_um": 325.632,
+      "tissue_fraction": 0.95928955078125,
+      "effective_magnification": 20.0,
+      "candidate_rank": null,
+      "requested_bbox_norm": [
+        334,
+        334,
+        666,
+        666
+      ],
+      "accepted_reason": "AML_candidate"
+    },
+    {
+      "roi_id": "4",
+      "image_path": "images/roi_4.jpg",
+      "absolute_image_path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/.output/dule_test/AML_Box10_OT02/images/roi_4.jpg",
+      "bbox_level0": [
+        35506,
+        54275,
+        2048,
+        2048
+      ],
+      "field_width_um": 325.632,
+      "field_height_um": 325.632,
+      "tissue_fraction": 0.89581298828125,
+      "effective_magnification": 20.0,
+      "candidate_rank": null,
+      "requested_bbox_norm": [
+        300,
+        300,
+        700,
+        700
+      ],
+      "accepted_reason": "AML_candidate"
+    },
+    {
+      "roi_id": "5",
+      "image_path": "images/roi_5.jpg",
+      "absolute_image_path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/.output/dule_test/AML_Box10_OT02/images/roi_5.jpg",
+      "bbox_level0": [
+        37347,
+        178243,
+        2048,
+        2048
+      ],
+      "field_width_um": 325.632,
+      "field_height_um": 325.632,
+      "tissue_fraction": 0.75927734375,
+      "effective_magnification": 20.0,
+      "candidate_rank": null,
+      "requested_bbox_norm": [
+        334,
+        334,
+        666,
+        666
+      ],
+      "accepted_reason": "AML_candidate"
+    }
+  ],
+  "discard_summary": [],
+  "generated_at": "2026-05-11T10:06:36.849262Z"
+}
