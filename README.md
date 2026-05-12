@@ -5,7 +5,6 @@
 </p>
 
 <p align="center">
-  <strong>Slide Agent</strong><br/>
   Open-source whole-slide pathology agent for AML ROI collection and diagnosis.
 </p>
 
@@ -26,10 +25,10 @@ Evaluated on a private dataset of 372 bone marrow WSIs.
 
 ### VLM Performance (ROI Collection)
 
-Results averaged across available feature extractors. `roi5_rate` is the % of runs where the VLM successfully reached the 5 ROI target.
+Results averaged across available feature extractors. `roi5 %` is the % of runs where the VLM successfully reached the 5 ROI target.
 
 
-| Model | Success | ROI5 | Calls |
+| Model | Success % | roi5 % | Tool calls |
 |---|---:|---:|---:|
 | gemma-4-31B | 100.00 | 71.30 | 21.24 |
 | Qwen3.5-397B | 99.66 | 99.26 | 25.07 |
@@ -46,18 +45,18 @@ Results averaged across available feature extractors. `roi5_rate` is the % of ru
 > Results are not heavily affected by the AML diagnosis prompt, and are easily biased by minor changes in instruction wording.
 
 
-| Model | Ext | Acc | TP | FN | TN | FP | NPM1 | HistSim |
+| Model | Ext | Acc % | TP | FN | TN | FP | NPM1 % | HistSim |
 |---|---|---:|---:|---:|---:|---:|---:|---:|
-| gemma-4-31B | Dino | 70.16 | 234 | 85 | 27 | 26 | 74.43 | 0.8889 |
-| gemma-4-31B | H-opt | 72.85 | 246 | 73 | 25 | 28 | 71.74 | 0.8972 |
-| gemma-4-31B | UNI2 | 78.23 | 269 | 50 | 22 | 31 | 73.02 | 0.9185 |
-| gemma-4-31B | Vir2 | 77.96 | 270 | 49 | 20 | 33 | 72.00 | 0.9072 |
-| Qwen3.5-397B | Dino | 60.48 | 177 | 142 | 48 | 5 | 65.67 | 0.8851 |
-| Qwen3.5-397B | H-opt | 61.02 | 182 | 137 | 45 | 8 | 65.96 | 0.8961 |
-| Qwen3.5-397B | UNI2 | 69.09 | 215 | 104 | 42 | 11 | 64.15 | 0.9153 |
-| Qwen3.5-397B | Vir2 | 66.13 | 207 | 112 | 39 | 14 | 67.88 | 0.9060 |
+| gemma-4-31B | Dino | 70.16 | 234 | 85 | 27 | 26 | 74.43 | 0.889 |
+| gemma-4-31B | H-opt | 72.85 | 246 | 73 | 25 | 28 | 71.74 | 0.897 |
+| gemma-4-31B | UNI2 | 78.23 | 269 | 50 | 22 | 31 | 73.02 | 0.919 |
+| gemma-4-31B | Vir2 | 77.96 | 270 | 49 | 20 | 33 | 72.00 | 0.907 |
+| Qwen3.5-397B | Dino | 60.48 | 177 | 142 | 48 | 5 | 65.67 | 0.885 |
+| Qwen3.5-397B | H-opt | 61.02 | 182 | 137 | 45 | 8 | 65.96 | 0.896 |
+| Qwen3.5-397B | UNI2 | 69.09 | 215 | 104 | 42 | 11 | 64.15 | 0.915 |
+| Qwen3.5-397B | Vir2 | 66.13 | 207 | 112 | 39 | 14 | 67.88 | 0.906 |
 
-> Note: `HistSim` computes histogram similarity between manual ROIs selected by clinicians and ROIs selected by the VLM agent.
+> Note: `HistSim` computes histogram similarity between manual ROIs selected by clinicians and ROIs selected by the AML agent.
 
 
 ## Install
