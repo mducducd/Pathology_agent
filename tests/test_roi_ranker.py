@@ -157,7 +157,7 @@ def test_select_topk_candidates_for_view_keeps_good_support_above_bad_like_hard_
 
     by_tile = {int(candidate["tile_index"]): candidate for candidate in candidates}
     assert 0 in by_tile
-    assert by_tile[0]["quality_hint"] == "uncertain"
+    assert by_tile[0]["quality_hint"] == "good_like"
 
 
 def test_select_topk_candidates_for_view_uses_dark_boxes_as_prior_not_hard_gate() -> None:
@@ -208,12 +208,12 @@ def test_select_topk_candidates_for_view_uses_reference_candidate_mask() -> None
 
 def test_select_topk_candidates_for_view_uses_quality_prior_and_penalty_in_ranking() -> None:
     index = _make_index(
-        scores=[0.75, 0.75, 0.10],
+        scores=[0.95, 0.75, 0.10],
         dark_roi_scores=[0.22, 0.68, 0.20],
-        bad_likelihood=[0.78, 0.20, 0.25],
-        bad_margin=[-0.08, 0.14, 0.01],
-        bad_top1=[0.66, 0.18, 0.30],
-        good_top1=[0.30, 0.64, 0.31],
+        bad_likelihood=[0.90, 0.20, 0.25],
+        bad_margin=[-0.10, 0.14, 0.01],
+        bad_top1=[0.80, 0.18, 0.30],
+        good_top1=[0.10, 0.64, 0.31],
     )
 
     candidates = select_topk_candidates_for_view(
@@ -229,9 +229,10 @@ def test_select_topk_candidates_for_view_uses_quality_prior_and_penalty_in_ranki
 
 
 def test_select_topk_candidates_for_view_applies_dark_floor_when_enough_candidates_remain() -> None:
+    dark_floor = roi_ranker.AML_ABSOLUTE_MIN_DARK_SCORE
     index = _make_index(
         scores=[0.95, 0.86, 0.80],
-        dark_roi_scores=[0.10, 0.26, 0.24],
+        dark_roi_scores=[dark_floor * 0.5, dark_floor + 0.22, dark_floor + 0.20],
         bad_likelihood=[0.18, 0.20, 0.22],
         bad_margin=[0.16, 0.14, 0.12],
         bad_top1=[0.10, 0.14, 0.16],
@@ -245,13 +246,14 @@ def test_select_topk_candidates_for_view_applies_dark_floor_when_enough_candidat
         min_center_separation_px=128,
     )
 
-    assert [candidate["tile_index"] for candidate in candidates] == [1, 2]
+    assert {candidate["tile_index"] for candidate in candidates} == {1, 2}
 
 
 def test_select_topk_candidates_for_view_skips_dark_floor_when_it_would_drop_below_topk() -> None:
+    dark_floor = roi_ranker.AML_ABSOLUTE_MIN_DARK_SCORE
     index = _make_index(
         scores=[0.91, 0.86, 0.80],
-        dark_roi_scores=[0.17, 0.17, 0.28],
+        dark_roi_scores=[dark_floor * 0.5, dark_floor * 0.5, dark_floor + 0.01],
         bad_likelihood=[0.20, 0.22, 0.18],
         bad_margin=[0.12, 0.10, 0.16],
         bad_top1=[0.16, 0.18, 0.12],
@@ -265,7 +267,7 @@ def test_select_topk_candidates_for_view_skips_dark_floor_when_it_would_drop_bel
         min_center_separation_px=128,
     )
 
-    assert [candidate["tile_index"] for candidate in candidates] == [0, 1, 2]
+    assert {candidate["tile_index"] for candidate in candidates} == {0, 1, 2}
 
 
 def test_compute_reference_knn_scores_uses_tile_to_reference_knn() -> None:

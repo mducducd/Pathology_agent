@@ -6,7 +6,6 @@ import sys
 import types
 
 import numpy as np
-import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -47,7 +46,6 @@ def test_refine_dark_region_boxes_trims_background_padding() -> None:
     assert kept["y"] + kept["h"] <= 30
 
 
-@pytest.mark.skip(reason="Edge-touching dark-region boxes are now allowed after trimming.")
 def test_refine_dark_region_boxes_keeps_boxes_touching_tissue_edge_after_trim() -> None:
     tissue_mask = np.ones((48, 48), dtype=bool)
     yy, xx = np.indices((48, 48))

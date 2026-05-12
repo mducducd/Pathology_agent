@@ -20,10 +20,8 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 RUN_SINGLE_SLIDE = REPO_ROOT / "evaluate" / "run_single_slide.py"
 DEFAULT_OUTPUT_ROOT = REPO_ROOT / "evaluate" / "outputs" / "aml_runtime_benchmarks"
-DEFAULT_MODELS = ("GPT-OSS-120B", "GLM-4.6V-FP8", "Qwen3.5-122B-A10B-FP8")
+DEFAULT_MODELS = ("GLM-4.6V-FP8", "Qwen3.5-122B-A10B-FP8")
 MODEL_ALIASES = {
-    "GPT-OSS": "GPT-OSS-120B",
-    "GPT-OSS-120B": "GPT-OSS-120B",
     "GLM-4.6V": "GLM-4.6V-FP8",
     "GLM-4.6V-FP8": "GLM-4.6V-FP8",
     "Qwen3.5-122B": "Qwen3.5-122B-A10B-FP8",

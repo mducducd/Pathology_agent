@@ -5,9 +5,11 @@ import zipfile
 import traceback
 import asyncio
 import threading
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Optional, Tuple, List
+from urllib.parse import quote
 
 import openslide
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
@@ -22,8 +24,16 @@ from wsi_core_pkg.embeddings import (
     save_tile_features_npz,
     uni2,
 )
-from wsi_core_pkg.prompts import DEFAULT_AML_PROMPT, DEFAULT_TILE_PROMPT, DEFAULT_WSI_PROMPT
+from wsi_core_pkg.aml_output import persist_aml_slide_bundle, resolve_aml_case_output_dir
+from wsi_core_pkg.prompts import (
+    DEFAULT_AML_DIAGNOSIS_PROMPT,
+    DEFAULT_AML_PROMPT,
+    DEFAULT_AML_ROI_COLLECTION_PROMPT,
+    DEFAULT_TILE_PROMPT,
+    DEFAULT_WSI_PROMPT,
+)
 from wsi_core_pkg.config import DEFAULT_MPP_UM
+from wsi_core_pkg.runtime import load_aml_diagnosis_input
 from wsi_core import (
     run_wsi_agent_for_web,
     clear_wsi_outputs_state,
@@ -41,16 +51,18 @@ SUPPORTED_PRIMARY_EXTS = {".svs", ".tif", ".tiff", ".ndpi", ".mrxs", ".mrsx"}
 MIRAX_EXTS = {".mrxs", ".mrsx"}
 STD_EXTS = {".svs", ".tif", ".tiff", ".ndpi"}
 MODEL_OPTIONS = [
-    "GPT-OSS-120B",
-    "gpt-oss-20b",
     "GLM-4.6V-FP8",
+    "glm-4.6V-flash",
     "GLM-4.5-Air-FP8",
-    "Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled",
     "qwen3.5-35b-a3b",
     "qwen3.6-35b-a3b",
     "qwen3-vl-32b-thinking-fp8",
     "Qwen3.5-397B-A17B-FP8",
     "gemma-4-31B-it",
+    "gemma-4-31B-it-h200",
+    "medgemma-27b-it",
+    "DeepSeek-V4-Flash",
+    "GPT-OSS-120B",
 ]
 ALLOWED_MODEL_NAMES = set(MODEL_OPTIONS)
 DEFAULT_WEB_MODEL_NAME = MODEL_NAME if MODEL_NAME in ALLOWED_MODEL_NAMES else MODEL_OPTIONS[0]
@@ -60,7 +72,6 @@ EMBEDDING_EXTRACTOR_OPTIONS = [
         "label": embedding_extractor_display_name(name),
     }
     for name in available_embedding_extractors()
-    if not str(name).endswith("_onnx")
 ]
 ALLOWED_EMBEDDING_EXTRACTORS = {item["name"] for item in EMBEDDING_EXTRACTOR_OPTIONS}
 DEFAULT_EMBEDDING_EXTRACTOR = "uni2"
@@ -94,6 +105,8 @@ class RunStatus(BaseModel):
     agent_type: str
     model_name: str
     prompt: Optional[str]
+    aml_auto_roi_prompt: Optional[str] = None
+    aml_auto_diagnosis_prompt: Optional[str] = None
     extractor_name: str = "uni2"
     tile_size_px: int = 224
     tile_size_um: float = 256.0
@@ -106,6 +119,7 @@ class RunStatus(BaseModel):
     candidate_nav_field_um: Optional[float] = None
     slide_filename: str       # filled after finalize
     slide_path: Optional[str] = None
+    slide_name: Optional[str] = None  # For display (e.g., "AML_Box12_OT53")
     final_output: Optional[str] = None
     reasoning_content: Optional[str] = None
     report_path: Optional[str] = None
@@ -114,6 +128,12 @@ class RunStatus(BaseModel):
     source_mode: str = "upload"  # upload | server
     selected_source_path: Optional[str] = None
     selected_source_label: Optional[str] = None
+    output_root_path: str = "output/"
+
+    # AML ROI/diagnosis modes
+    roi_input_path: Optional[str] = None  # For aml_diagnosis: path to roi_collection.json
+    roi_collection_path: Optional[str] = None  # For aml_roi: where to write roi_collection.json
+    roi_images_dir: Optional[str] = None  # Computed during finalize for aml_roi
 
     # upload bookkeeping
     upload_count: int = 0
@@ -664,21 +684,28 @@ class ServerPathRequest(BaseModel):
 
 def run_worker(
     run_id: str,
-    slide_path: str,
+    slide_path: Optional[str],
     prompt: Optional[str],
     agent_type: str,
     model_name: str,
     terminate_event: threading.Event,
+    roi_input_path: Optional[str] = None,
+    roi_collection_path: Optional[str] = None,
+    aml_auto_roi_prompt: Optional[str] = None,
+    aml_auto_diagnosis_prompt: Optional[str] = None,
 ) -> None:
     run = RUNS.get(run_id)
     if run is None:
         return
+    normalized_agent_type = "aml_auto" if agent_type == "aml" else agent_type
+    case_output_dir = Path(roi_collection_path).parent if roi_collection_path else None
     if terminate_event.is_set() or run.status == "terminated":
         run.status = "terminated"
         if not run.error_message:
             run.error_message = "Run terminated by user."
         return
     run.status = "running"
+    started_at = time.time()
 
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
@@ -687,9 +714,11 @@ def run_worker(
         result = run_wsi_agent_for_web(
             slide_path=slide_path,
             prompt=prompt,
-            agent_type=agent_type,
+            agent_type=normalized_agent_type,
             run_id=run_id,
             model_name=model_name,
+            aml_auto_roi_prompt=aml_auto_roi_prompt,
+            aml_auto_diagnosis_prompt=aml_auto_diagnosis_prompt,
             extractor_name=run.extractor_name,
             tile_size_um=run.tile_size_um,
             tile_size_px=run.tile_size_px,
@@ -700,6 +729,9 @@ def run_worker(
             target_accepted_rois=run.target_accepted_rois,
             default_mpp_um=run.default_mpp_um,
             candidate_nav_field_um=run.candidate_nav_field_um,
+            roi_input_path=roi_input_path,
+            roi_collection_path=roi_collection_path,
+            case_output_dir=str(case_output_dir) if case_output_dir else None,
         )
         fatal_error: Optional[str] = None
         if isinstance(result, dict):
@@ -725,6 +757,35 @@ def run_worker(
             run.final_output = result["final_output"]
             run.reasoning_content = result.get("reasoning_content")
             run.report_path = result.get("report_path")
+            run.slide_name = result.get("slide_name")
+            if case_output_dir is not None and normalized_agent_type.startswith("aml"):
+                elapsed_sec = time.time() - started_at
+                persist_aml_slide_bundle(
+                    case_output_dir=case_output_dir,
+                    result=result,
+                    run_id=run_id,
+                    agent_type=normalized_agent_type,
+                    model_name=run.model_name,
+                    extractor_name=run.extractor_name,
+                    tile_filter=run.tile_prefilter_method,
+                    tile_size_px=run.tile_size_px,
+                    tile_size_um=run.tile_size_um,
+                    tile_size_um_requested=run.tile_size_um,
+                    tile_size_um_source="explicit",
+                    default_mpp_um_requested=run.default_mpp_um,
+                    slide_mpp_um=None,
+                    resolved_mpp_um=None,
+                    default_mpp_um_fallback=DEFAULT_MPP_UM,
+                    mpp_source=None,
+                    roi_size_px=run.roi_output_size_px,
+                    batch_size=run.batch_size,
+                    elapsed_sec=elapsed_sec,
+                    slide_path=slide_path,
+                    slide_name=run.slide_name,
+                    patient_name=run.slide_name or (Path(slide_path).stem if slide_path else None),
+                    roi_input_path=roi_input_path,
+                    status="ok",
+                )
 
     except Exception as exc:
         if terminate_event.is_set() or run.status == "terminated":
@@ -738,6 +799,38 @@ def run_worker(
             print("=== RUN ERROR ===")
             print(run.error_message)
             print(run.traceback)
+            if case_output_dir is not None and normalized_agent_type.startswith("aml"):
+                try:
+                    elapsed_sec = time.time() - started_at
+                    persist_aml_slide_bundle(
+                        case_output_dir=case_output_dir,
+                        result=None,
+                        run_id=run_id,
+                        agent_type=normalized_agent_type,
+                        model_name=run.model_name,
+                        extractor_name=run.extractor_name,
+                        tile_filter=run.tile_prefilter_method,
+                        tile_size_px=run.tile_size_px,
+                        tile_size_um=run.tile_size_um,
+                        tile_size_um_requested=run.tile_size_um,
+                        tile_size_um_source="explicit",
+                        default_mpp_um_requested=run.default_mpp_um,
+                        slide_mpp_um=None,
+                        resolved_mpp_um=None,
+                        default_mpp_um_fallback=DEFAULT_MPP_UM,
+                        mpp_source=None,
+                        roi_size_px=run.roi_output_size_px,
+                        batch_size=run.batch_size,
+                        elapsed_sec=elapsed_sec,
+                        slide_path=slide_path,
+                        slide_name=run.slide_name,
+                        patient_name=run.slide_name or (Path(slide_path).stem if slide_path else None),
+                        roi_input_path=roi_input_path,
+                        status="error",
+                        error=run.error_message,
+                    )
+                except Exception:
+                    pass
 
     finally:
         RUN_THREADS.pop(run_id, None)
@@ -765,6 +858,122 @@ def make_debug_image_url(abs_path: Optional[str]) -> Optional[str]:
     return f"/debug/{rel}"
 
 
+def _resolve_collection_image_path(entry: Dict[str, object], collection_dir: Optional[Path]) -> Optional[Path]:
+    rel = entry.get("image_path")
+    if collection_dir is not None and rel:
+        candidate = collection_dir / str(rel)
+        if candidate.is_file():
+            return candidate.resolve()
+
+    abs_path = entry.get("absolute_image_path")
+    if abs_path:
+        candidate = Path(str(abs_path)).expanduser()
+        if candidate.is_file():
+            return candidate.resolve()
+
+    return None
+
+
+def _resolve_collection_extra_image(
+    collection: Dict[str, object],
+    collection_dir: Optional[Path],
+    keys: Tuple[str, ...],
+) -> Optional[Path]:
+    for key in keys:
+        raw_path = collection.get(key)
+        if not raw_path:
+            continue
+        candidate = Path(str(raw_path)).expanduser()
+        if not candidate.is_absolute() and collection_dir is not None:
+            candidate = collection_dir / candidate
+        if candidate.is_file():
+            return candidate.resolve()
+    return None
+
+
+def _make_aml_asset_url(run_id: str, asset_path: Path) -> str:
+    return f"/api/runs/{quote(run_id, safe='')}/aml_asset?path={quote(str(asset_path), safe='')}"
+
+
+def _build_aml_diagnosis_view_state(run: RunStatus) -> Dict[str, object]:
+    input_path = run.roi_input_path or run.roi_collection_path
+    if not input_path:
+        return {"run_id": run.run_id, "agent_type": run.agent_type or "aml_diagnosis", "roi_marks": []}
+
+    collection, collection_dir, slide_name, _ = load_aml_diagnosis_input(input_path)
+    roi_marks: List[Dict[str, object]] = []
+    for idx, roi in enumerate(collection.get("accepted_rois") or [], start=1):
+        if not isinstance(roi, dict):
+            continue
+        image_path = _resolve_collection_image_path(roi, collection_dir)
+        if image_path is None:
+            continue
+        roi_id_raw = roi.get("roi_id", idx)
+        try:
+            roi_id = int(str(roi_id_raw))
+        except ValueError:
+            roi_id = idx
+        roi_marks.append(
+            {
+                "roi_id": roi_id,
+                "label": str(roi.get("label") or roi.get("accepted_reason") or f"roi{roi_id}"),
+                "debug_path": str(image_path),
+                "image_url": _make_aml_asset_url(run.run_id, image_path),
+                "field_width_um": roi.get("field_width_um"),
+                "field_height_um": roi.get("field_height_um"),
+                "tissue_fraction": roi.get("tissue_fraction"),
+            }
+        )
+
+    overview_path = _resolve_collection_extra_image(
+        collection,
+        collection_dir,
+        ("roi_candidates_image", "slide_overview_image"),
+    )
+    overview_url = _make_aml_asset_url(run.run_id, overview_path) if overview_path is not None else None
+
+    return {
+        "run_id": run.run_id,
+        "agent_type": run.agent_type or "aml_diagnosis",
+        "step_log": [],
+        "roi_marks": sorted(roi_marks, key=lambda item: int(item.get("roi_id", 0))),
+        "current_view": None,
+        "overview_cache": None,
+        "overview_image_url": overview_url,
+        "roi_candidates_image_url": overview_url,
+        "slide_name": slide_name,
+    }
+
+
+def _merge_saved_aml_rois_into_view_state(run: RunStatus, wsi_state: Optional[Dict[str, object]]) -> Optional[Dict[str, object]]:
+    if run.agent_type not in {"aml", "aml_auto", "aml_roi"}:
+        return wsi_state
+    # For aml_roi and aml_auto: don't preload old ROIs while actively collecting/generating new ones
+    # (only preload after completion to avoid showing stale cached results during rerun)
+    # For aml_diagnosis: always preload since saved ROIs are the input data being diagnosed, not stale cache
+    if run.agent_type in {"aml_auto", "aml_roi"} and run.status != "done":
+        return wsi_state
+    if not run.roi_collection_path or not Path(run.roi_collection_path).is_file():
+        return wsi_state
+
+    live_rois = wsi_state.get("roi_marks") if isinstance(wsi_state, dict) else None
+    if live_rois:
+        return wsi_state
+
+    saved_state = _build_aml_diagnosis_view_state(run)
+    if not isinstance(wsi_state, dict):
+        return saved_state
+
+    merged = dict(wsi_state)
+    merged["roi_marks"] = saved_state.get("roi_marks", [])
+    if saved_state.get("overview_image_url"):
+        merged["overview_image_url"] = saved_state.get("overview_image_url")
+        merged["roi_candidates_image_url"] = saved_state.get("roi_candidates_image_url")
+    if saved_state.get("slide_name") and not merged.get("slide_name"):
+        merged["slide_name"] = saved_state.get("slide_name")
+    return merged
+
+
 # -----------------------------
 # NEW API: create -> upload -> finalize
 # -----------------------------
@@ -775,7 +984,16 @@ def get_default_prompts():
         "prompts": {
             "tile": DEFAULT_TILE_PROMPT,
             "aml": DEFAULT_AML_PROMPT,
+            # aml_auto uses split stage defaults internally, so there is no
+            # single prompt string that accurately represents the whole mode.
+            "aml_auto": "",
+            "aml_roi": DEFAULT_AML_ROI_COLLECTION_PROMPT,
+            "aml_diagnosis": DEFAULT_AML_DIAGNOSIS_PROMPT,
             "wsi": DEFAULT_WSI_PROMPT,
+            "aml_auto_stage_defaults": {
+                "roi_collection": DEFAULT_AML_ROI_COLLECTION_PROMPT,
+                "diagnosis": DEFAULT_AML_DIAGNOSIS_PROMPT,
+            },
         }
     }
 
@@ -800,6 +1018,8 @@ def get_models():
 @app.post("/api/runs/create")
 async def create_run(
     prompt: str = Form(""),
+    aml_auto_roi_prompt: str = Form(""),
+    aml_auto_diagnosis_prompt: str = Form(""),
     agent_type: str = Form("wsi"),
     model_name: str = Form(DEFAULT_WEB_MODEL_NAME),
     extractor_name: str = Form(DEFAULT_EMBEDDING_EXTRACTOR),
@@ -812,10 +1032,15 @@ async def create_run(
     target_accepted_rois: int = Form(5),
     default_mpp_um: str = Form(str(DEFAULT_MPP_UM)),
     candidate_nav_field_um: str = Form(""),
+    roi_input_path: str = Form(""),
+    roi_collection_path: str = Form(""),
+    output_path: str = Form("output/"),
 ):
     agent_type_lower = agent_type.lower()
-    if agent_type_lower not in {"tile", "wsi", "aml"}:
-        raise HTTPException(status_code=400, detail="agent_type must be 'tile', 'wsi', or 'aml'")
+    if agent_type_lower == "aml":
+        agent_type_lower = "aml_auto"
+    if agent_type_lower not in {"tile", "wsi", "aml", "aml_auto", "aml_roi", "aml_diagnosis"}:
+        raise HTTPException(status_code=400, detail="agent_type must be 'tile', 'wsi', 'aml', 'aml_auto', 'aml_roi', or 'aml_diagnosis'")
     if model_name not in ALLOWED_MODEL_NAMES:
         raise HTTPException(
             status_code=400,
@@ -881,6 +1106,8 @@ async def create_run(
         agent_type=agent_type_lower,
         model_name=model_name,
         prompt=prompt or None,
+        aml_auto_roi_prompt=aml_auto_roi_prompt or None,
+        aml_auto_diagnosis_prompt=aml_auto_diagnosis_prompt or None,
         extractor_name=extractor_name,
         tile_size_px=tile_size_px,
         tile_size_um=tile_size_um,
@@ -893,6 +1120,9 @@ async def create_run(
         candidate_nav_field_um=candidate_nav_field_um_value,
         slide_filename="(upload pending)",
         slide_path=None,
+        output_root_path=output_path.strip() or "output/",
+        roi_input_path=roi_input_path.strip() or None,
+        roi_collection_path=roi_collection_path.strip() or None,
         upload_count=0,
         upload_bytes=0,
         uploaded_files=[],
@@ -1032,48 +1262,99 @@ async def finalize_and_start(run_id: str):
     run = RUNS.get(run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="Run not found")
+    normalized_agent_type = "aml_auto" if run.agent_type == "aml" else run.agent_type
     if run.status in {"pending", "running", "done", "terminated"}:
         raise HTTPException(status_code=400, detail=f"Run is already {run.status}.")
     if run.status == "error":
         raise HTTPException(status_code=400, detail="Run is in error state; create a new run.")
 
-    if run.source_mode == "server":
-        if not run.selected_source_path:
-            raise HTTPException(status_code=400, detail="No server path has been selected for this run.")
-        source_path, _ = _resolve_allowed_server_path(run.selected_source_path)
-        slide_path, slide_filename, selection_kind = _resolve_server_slide_selection(source_path)
-        run.selected_source_label = SERVER_SELECTION_LABELS.get(selection_kind, run.selected_source_label)
+    # Handle aml_diagnosis mode: use roi_input_path instead of slide
+    if normalized_agent_type == "aml_diagnosis":
+        if not run.roi_input_path:
+            raise HTTPException(status_code=400, detail="aml_diagnosis requires roi_input_path.")
+        try:
+            _, _, slide_name, resolved_input = load_aml_diagnosis_input(run.roi_input_path)
+        except FileNotFoundError as exc:
+            run.status = "error"
+            run.error_message = str(exc)
+            run.traceback = None
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except Exception as exc:
+            run.status = "error"
+            run.error_message = str(exc)
+            run.traceback = traceback.format_exc()
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        run.slide_name = slide_name
+        run.slide_filename = slide_name or resolved_input.name
+        run.slide_path = None
+        case_output_dir = resolve_aml_case_output_dir(run.output_root_path, run.slide_filename)
+        case_output_dir.mkdir(parents=True, exist_ok=True)
+        run.roi_images_dir = str(case_output_dir / "images")
+        run.roi_collection_path = str(case_output_dir / "roi_collection.json")
+        run.status = "pending"
     else:
-        run_dir = BASE_RUN_DIR / run_id / "uploads"
-        if not run_dir.exists():
-            raise HTTPException(status_code=400, detail="Run directory missing; nothing to finalize.")
-        slide_path, slide_filename = _validate_final_bundle(run_dir)
+        # Standard modes (tile, wsi, aml, aml_auto, aml_roi): require a slide
+        if run.source_mode == "server":
+            if not run.selected_source_path:
+                raise HTTPException(status_code=400, detail="No server path has been selected for this run.")
+            source_path, _ = _resolve_allowed_server_path(run.selected_source_path)
+            slide_path, slide_filename, selection_kind = _resolve_server_slide_selection(source_path)
+            run.selected_source_label = SERVER_SELECTION_LABELS.get(selection_kind, run.selected_source_label)
+        else:
+            run_dir = BASE_RUN_DIR / run_id / "uploads"
+            if not run_dir.exists():
+                raise HTTPException(status_code=400, detail="Run directory missing; nothing to finalize.")
+            slide_path, slide_filename = _validate_final_bundle(run_dir)
 
-    try:
-        _assert_slide_openable(slide_path)
-    except HTTPException as exc:
-        run.status = "error"
-        run.error_message = str(exc.detail)
-        run.traceback = None
-        raise
+        try:
+            _assert_slide_openable(slide_path)
+        except HTTPException as exc:
+            run.status = "error"
+            run.error_message = str(exc.detail)
+            run.traceback = None
+            raise
 
-    slide_path = slide_path.resolve()
-    run.slide_filename = slide_filename
-    run.slide_path = str(slide_path)
-    run.status = "pending"
+        slide_path = slide_path.resolve()
+        run.slide_name = Path(slide_path).stem
+        run.slide_filename = slide_filename
+        run.slide_path = str(slide_path)
+        run.status = "pending"
+
+        # For aml_roi mode, set up output directories
+        if normalized_agent_type in {"aml_roi", "aml_auto"}:
+            case_output_dir = resolve_aml_case_output_dir(run.output_root_path, run.slide_name or Path(slide_path).stem)
+            case_output_dir.mkdir(parents=True, exist_ok=True)
+            images_dir = case_output_dir / "images"
+            images_dir.mkdir(parents=True, exist_ok=True)
+            roi_collection_path = case_output_dir / "roi_collection.json"
+            run.roi_images_dir = str(images_dir)
+            run.roi_collection_path = str(roi_collection_path)
+
     terminate_event = RUN_TERMINATE_FLAGS.setdefault(run_id, threading.Event())
     terminate_event.clear()
+    clear_wsi_outputs_state()
 
     thread = threading.Thread(
         target=run_worker,
-        args=(run_id, str(slide_path), run.prompt or None, run.agent_type, run.model_name, terminate_event),
+        args=(
+            run_id,
+            run.slide_path,
+            run.prompt or None,
+            normalized_agent_type,
+            run.model_name,
+            terminate_event,
+            run.roi_input_path,
+            run.roi_collection_path,
+            run.aml_auto_roi_prompt,
+            run.aml_auto_diagnosis_prompt,
+        ),
         daemon=True,
     )
     RUN_THREADS[run_id] = thread
     thread.start()
 
-    print(f"[FINALIZE] run={run_id} primary={slide_path}")
-    return {"ok": True, "run_id": run_id, "primary": slide_filename}
+    print(f"[FINALIZE] run={run_id} primary={run.slide_filename}")
+    return {"ok": True, "run_id": run_id, "primary": run.slide_filename}
 
 
 @app.post("/api/runs/{run_id}/terminate")
@@ -1125,36 +1406,92 @@ def get_run(run_id: str):
     if run is None:
         raise HTTPException(status_code=404, detail="Run not found")
 
-    try:
-        wsi_state = get_public_state_snapshot()
-    except Exception:
-        wsi_state = None
+    if run.agent_type == "aml_diagnosis":
+        try:
+            wsi_state = _build_aml_diagnosis_view_state(run)
+            slide_name = wsi_state.get("slide_name")
+            if slide_name and not run.slide_name:
+                run.slide_name = str(slide_name)
+            if slide_name and run.slide_filename in {"(upload pending)", "(aml_diagnosis)"}:
+                run.slide_filename = str(slide_name)
+        except Exception:
+            wsi_state = None
+    else:
+        try:
+            wsi_state = get_public_state_snapshot()
+        except Exception:
+            wsi_state = None
+        try:
+            wsi_state = _merge_saved_aml_rois_into_view_state(run, wsi_state)
+        except Exception:
+            pass
 
-    if wsi_state and wsi_state.get("current_view"):
+    if run.agent_type != "aml_diagnosis" and wsi_state and wsi_state.get("current_view"):
         debug_path = wsi_state["current_view"].get("debug_path")
         wsi_state["current_view"]["image_url"] = make_debug_image_url(debug_path)
 
-    if wsi_state and wsi_state.get("roi_marks"):
+    if run.agent_type != "aml_diagnosis" and wsi_state and wsi_state.get("roi_marks"):
         for roi in wsi_state["roi_marks"]:
             dp = roi.get("debug_path")
-            roi["image_url"] = make_debug_image_url(dp)
+            debug_url = make_debug_image_url(dp)
+            if debug_url:
+                roi["image_url"] = debug_url
 
-    if wsi_state and wsi_state.get("last_overview_debug_path"):
+    if run.agent_type != "aml_diagnosis" and wsi_state and wsi_state.get("last_overview_debug_path"):
         overview_path = wsi_state["last_overview_debug_path"]
         wsi_state["overview_image_url"] = make_debug_image_url(overview_path)
-    elif wsi_state and wsi_state.get("last_overview_with_box_path"):
+    elif run.agent_type != "aml_diagnosis" and wsi_state and wsi_state.get("last_overview_with_box_path"):
         overview_path = wsi_state["last_overview_with_box_path"]
         wsi_state["overview_image_url"] = make_debug_image_url(overview_path)
-    elif wsi_state is not None:
+    elif run.agent_type != "aml_diagnosis" and wsi_state is not None and not wsi_state.get("overview_image_url"):
         wsi_state["overview_image_url"] = None
 
-    if wsi_state and wsi_state.get("last_roi_candidate_overlay_path"):
+    if run.agent_type != "aml_diagnosis" and wsi_state and wsi_state.get("last_roi_candidate_overlay_path"):
         candidate_path = wsi_state["last_roi_candidate_overlay_path"]
         wsi_state["roi_candidates_image_url"] = make_debug_image_url(candidate_path)
-    elif wsi_state is not None:
+    elif run.agent_type != "aml_diagnosis" and wsi_state is not None and not wsi_state.get("roi_candidates_image_url"):
         wsi_state["roi_candidates_image_url"] = None
 
     return {"run": run, "wsi_state": wsi_state}
+
+
+@app.get("/api/runs/{run_id}/aml_asset")
+def get_aml_diagnosis_asset(run_id: str, path: str):
+    run = RUNS.get(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    if run.agent_type not in {"aml", "aml_auto", "aml_roi", "aml_diagnosis"}:
+        raise HTTPException(status_code=400, detail="AML assets are only available for AML runs.")
+
+    try:
+        view_state = _build_aml_diagnosis_view_state(run)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    requested = Path(path).expanduser()
+    try:
+        requested_resolved = requested.resolve(strict=True)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=f"Asset not found: {requested}") from exc
+
+    allowed_paths: set[str] = set()
+    overview_url = view_state.get("overview_image_url")
+    if overview_url:
+        collection, collection_dir, _, _ = load_aml_diagnosis_input(run.roi_input_path or run.roi_collection_path or "")
+        overview_path = _resolve_collection_extra_image(collection, collection_dir, ("roi_candidates_image", "slide_overview_image"))
+        if overview_path is not None:
+            allowed_paths.add(str(overview_path.resolve()))
+    for roi in view_state.get("roi_marks") or []:
+        debug_path = roi.get("debug_path")
+        if debug_path:
+            allowed_paths.add(str(Path(str(debug_path)).resolve()))
+
+    if str(requested_resolved) not in allowed_paths:
+        raise HTTPException(status_code=403, detail="Requested AML diagnosis asset is not part of this run.")
+
+    return FileResponse(str(requested_resolved))
 
 
 @app.get("/api/runs/{run_id}/dark_regions")

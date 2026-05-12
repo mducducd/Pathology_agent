@@ -8,11 +8,33 @@ This appendix extracts the AML-related prompt text and prompt-like runtime guida
 
 Dynamic runtime values are shown with braces, for example `{kept_roi_count}` or `{target_roi_count}`. The wording is otherwise preserved from the source.
 
+## Prompt — Agent Assignment
+
+| Prompt constant | Agent | Pipeline mode |
+|---|---|---|
+| `DEFAULT_AML_ROI_COLLECTION_PROMPT` | `WSIAmlRoiCollectorAgent` | `aml_roi`, `aml_auto` Stage 1 |
+| `DEFAULT_AML_DIAGNOSIS_PROMPT` | `WSIAmlDiagnosisAgent` | `aml_diagnosis`, `aml_auto` Stage 2 |
+| `DEFAULT_AML_PROMPT` | `WSIAmlDetectorAgent` | `aml_detector` (legacy single-stage) |
+| `DEFAULT_TILE_PROMPT` | `WSITileSelectorAgent` | `tile` |
+| `DEFAULT_WSI_PROMPT` | `WSIPathologyAgent` | `wsi` (fallback when no prompt given) |
+
 ## 1. Base Prompt Text
 
-### 1.1 `wsi_core_pkg/prompts.py` - `DEFAULT_AML_PROMPT`
+### 1.1 `wsi_core_pkg/prompts.py` — `DEFAULT_AML_ROI_COLLECTION_PROMPT`
 
-Primary AML morphology triage prompt.
+Used by `WSIAmlRoiCollectorAgent` (Stage 1). Navigation-only — marks ROIs and stops; does not output diagnosis JSON.
+
+See source: `wsi_core_pkg/prompts.py:DEFAULT_AML_ROI_COLLECTION_PROMPT`
+
+### 1.2 `wsi_core_pkg/prompts.py` — `DEFAULT_AML_DIAGNOSIS_PROMPT`
+
+Used by `WSIAmlDiagnosisAgent` (Stage 2). Receives only ROI images; returns strict JSON.
+
+See source: `wsi_core_pkg/prompts.py:DEFAULT_AML_DIAGNOSIS_PROMPT`
+
+### 1.3 `wsi_core_pkg/prompts.py` — `DEFAULT_AML_PROMPT`
+
+Legacy single-stage prompt used by `WSIAmlDetectorAgent`. Combines navigation rules and JSON output in one prompt.
 
 ```text
 You are performing morphology-only triage on a May–Grünwald–Giemsa stained bone marrow whole-slide image (WSI).

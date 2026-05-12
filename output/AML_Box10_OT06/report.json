@@ -1,0 +1,37 @@
+{
+  "patient": "AML_Box10_OT06",
+  "slide": "/mnt/copernicus3/PATHOLOGY/others/private/haemadata/ALL_WSIs/AML_Box10_OT06.mrxs",
+  "run_id": "20260512_101746_989f07",
+  "agent_type": "aml_auto",
+  "model_name": "gemma-4-31B-it-h200",
+  "feature_extractor": {
+    "key": "uni2"
+  },
+  "tile_filter": "hybrid",
+  "tile_size": {
+    "px": 224,
+    "um": 256.0,
+    "requested_um": 256.0,
+    "source": "explicit",
+    "mpp_um": null,
+    "mpp_source": null
+  },
+  "tile_size_px": 224,
+  "tile_size_um": 256.0,
+  "tile_size_um_requested": 256.0,
+  "tile_size_um_source": "explicit",
+  "default_mpp_um_requested": 0.159,
+  "slide_mpp_um": null,
+  "resolved_mpp_um": null,
+  "default_mpp_um_fallback": 0.159,
+  "mpp_source": null,
+  "roi_size_px": 2048,
+  "batch_size": 128,
+  "elapsed_sec": 104.4,
+  "final_decision": "Acute leukemia",
+  "final_output": "{\n  \"morphology_summary\": \"The ROIs show a hypercellular marrow with a significant population of immature nucleated cells. These cells exhibit high N:C ratios, fine chromatin, and visible nucleoli, consistent with blasts.\",\n  \"accepted_rois\": [\n    {\n      \"roi_id\": \"1\",\n      \"quality_reason\": \"Contains interpretable nucleated hematopoietic cells with clear nuclear detail.\",\n      \"blast_range\": \"20-50%\",\n      \"key_features\": [\n        \"High N:C ratio\",\n        \"Fine open chromatin\",\n        \"Visible nucleoli\",\n        \"Agranular cytoplasm\"\n      ]\n    },\n    {\n      \"roi_id\": \"2\",\n      \"quality_reason\": \"Contains interpretable nucleated hematopoietic cells, though some areas are more crowded.\",\n      \"blast_range\": \"20-50%\",\n      \"key_features\": [\n        \"Expanded population of immature myeloid cells\",\n        \"Round to oval nuclei\",\n        \"Immature chromatin\"\n      ]\n    }\n  ],\n  \"discard_summary\": [],\n  \"global_blast_range\": \"20-50%\",\n  \"triage_zone\": \"aml_like\",\n  \"final_decision\": \"Acute leukemia\",\n  \"limitations_confidence\": {\n    \"limitations\": \"Small number of ROIs provided; however, the blast population is coherent and significant.\",\n    \"confidence\": \"high\"\n  },\n  \"npm1_prediction\": {\n    \"applicable\": true,\n    \"classification\": \"NPM1_wildtype\",\n    \"confidence_level\": \"moderate\",\n    \"supporting_features\": [\n      \"Predominantly classic primitive blasts\",\n      \"High N:C ratio\",\n      \"Lack of prominent cup-like nuclear invaginations or monocytic morphology\"\n    ],\n    \"comment\": \"Blasts appear relatively primitive and classic; no strong morphological evidence for NPM1 mutation is observed.\"\n  }\n}",
+  "roi_count": 2,
+  "step_count": 7,
+  "source_report_path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/outputs/20260512_101746_989f07_diag/wsi_reports/report.md",
+  "generated_at": "2026-05-12T10:19:32"
+}

@@ -38,6 +38,7 @@ EXPERIMENT_ROOT=""
 CUDA_DEVICE=""
 MODEL="GLM-4.6V-FP8"
 EXTRACTOR="uni2"
+INCLUDE_MODEL_IN_OUTPUT_NAME=false
 TILE_FILTER="hybrid"
 TILE_SIZE_PX="224"
 BATCH_SIZE="512"
@@ -70,6 +71,7 @@ PY
 AGENT="aml"
 RESUME=false
 USE_TILE_CACHE=false
+SLIDE_TIMEOUT=0
 PYTHON_BIN="python"
 
 if [[ -x "${REPO_ROOT}/.venv/bin/python" ]]; then
@@ -90,12 +92,14 @@ while [[ $# -gt 0 ]]; do
         --cuda-device)  CUDA_DEVICE="$2"; shift 2 ;;
         --model)        MODEL="$2";       shift 2 ;;
         --extractor)    EXTRACTOR="$2";   shift 2 ;;
+        --include-model-in-output-name) INCLUDE_MODEL_IN_OUTPUT_NAME=true; shift ;;
         --tile-filter)  TILE_FILTER="$2"; shift 2 ;;
         --tile-size-px) TILE_SIZE_PX="$2"; shift 2 ;;
         --batch-size)   BATCH_SIZE="$2";  shift 2 ;;
         --roi-size-px)  ROI_SIZE_PX="$2"; shift 2 ;;
         --default-mpp-um) DEFAULT_MPP_UM="$2"; shift 2 ;;
         --agent)        AGENT="$2";       shift 2 ;;
+        --slide-timeout) SLIDE_TIMEOUT="$2"; shift 2 ;;
         --use-tile-cache) USE_TILE_CACHE=true; shift ;;
         --resume)       RESUME=true;      shift   ;;
         *)  echo "Unknown arg: $1"; exit 1 ;;
@@ -189,6 +193,46 @@ PY
     echo "      reason: no summary.json error and no retry log found"
 }
 
+next_log_path() {
+    local patient="$1"
+    local candidate="${LOG_DIR}/${patient}.log"
+    local retry_number=2
+
+    if [[ ! -e "$candidate" ]]; then
+        printf '%s\n' "$candidate"
+        return
+    fi
+
+    while true; do
+        candidate="${LOG_DIR}/${patient}.retry${retry_number}.log"
+        if [[ ! -e "$candidate" ]]; then
+            printf '%s\n' "$candidate"
+            return
+        fi
+        retry_number=$((retry_number + 1))
+    done
+}
+
+output_patient_name() {
+    local patient="$1"
+    if ! $INCLUDE_MODEL_IN_OUTPUT_NAME; then
+        printf '%s\n' "$patient"
+        return
+    fi
+    "$PYTHON_BIN" - "$MODEL" "$patient" <<'PY'
+import re
+import sys
+
+def clean(value, default):
+    text = str(value or "").strip()
+    text = re.sub(r"[^\w.\-]+", "-", text)
+    text = text.strip(".-_")
+    return text or default
+
+print(f"{clean(sys.argv[1], 'model')}_{clean(sys.argv[2], 'slide')}")
+PY
+}
+
 # ── Read patient list (skip header) ─────────────────────────────────
 mapfile -t PATIENTS < <(tail -n +2 "$CSV" | sed 's/\r//g' | grep -v '^$')
 TOTAL=${#PATIENTS[@]}
@@ -201,11 +245,13 @@ echo " Base root:   $BASE_OUTPUT_ROOT"
 echo " Output dir:  $OUTPUT_DIR"
 echo " Agent:       $AGENT"
 echo " Model:       $MODEL   Extractor: $EXTRACTOR   Filter: $TILE_FILTER"
+echo " Output names include model: $INCLUDE_MODEL_IN_OUTPUT_NAME"
 echo " Tile size:   ${TILE_SIZE_PX}px"
 echo " Batch size:  $BATCH_SIZE"
 echo " ROI size:    ${ROI_SIZE_PX}px"
 echo " Default MPP: ${DEFAULT_MPP_UM}"
 echo " Tile cache:  $USE_TILE_CACHE"
+echo " Slide timeout: ${SLIDE_TIMEOUT}s (0=disabled)"
 echo " CUDA devices:${CUDA_VISIBLE_DEVICES:+ }${CUDA_VISIBLE_DEVICES:-all}"
 echo " Experiment root: $EXPERIMENT_ROOT"
 echo " Config cache dir:${CONFIG_CACHE_ROOT_DIR:+ }${CONFIG_CACHE_ROOT_DIR:-<empty>}"
@@ -219,7 +265,15 @@ mkdir -p "$LOG_DIR"
 PASSED=0
 FAILED=0
 SKIPPED=0
-RETRIED=0
+TIMEDOUT=0
+
+_run_slide() {
+    if (( SLIDE_TIMEOUT > 0 )); then
+        timeout --kill-after=15s "$SLIDE_TIMEOUT" "${RUN_CMD[@]}" "$@"
+    else
+        "${RUN_CMD[@]}" "$@"
+    fi
+}
 
 for i in "${!PATIENTS[@]}"; do
     ENTRY="${PATIENTS[$i]%%,*}"
@@ -241,8 +295,10 @@ for i in "${!PATIENTS[@]}"; do
         continue
     fi
 
+    OUTPUT_PATIENT="$(output_patient_name "$PATIENT")"
+    SUMMARY="${OUTPUT_DIR}/${OUTPUT_PATIENT}/summary.json"
+
     # ── Resume: skip if already completed ───────────────────────────
-    SUMMARY="${OUTPUT_DIR}/${PATIENT}/summary.json"
     if $RESUME && [[ -f "$SUMMARY" ]]; then
         RESUME_STATE=$("$PYTHON_BIN" - "$SUMMARY" <<'PY'
 import json
@@ -280,7 +336,10 @@ PY
     fi
 
     # ── Run (suppress all python output) ───────────────────────────
-    LOG="${LOG_DIR}/${PATIENT}.log"
+    LOG="$(next_log_path "$PATIENT")"
+    if [[ "$LOG" != "${LOG_DIR}/${PATIENT}.log" ]]; then
+        echo "[$IDX/$TOTAL] LOG   $PATIENT -> ${LOG}"
+    fi
     SLIDE_STARTED_EPOCH="$(date +%s)"
 
     RUN_CMD=(
@@ -297,6 +356,9 @@ PY
         --default-mpp-um "$DEFAULT_MPP_UM"
         --agent "$AGENT"
     )
+    if $INCLUDE_MODEL_IN_OUTPUT_NAME; then
+        RUN_CMD+=(--include-model-in-output-name)
+    fi
     if [[ -n "$CUDA_DEVICE" ]]; then
         RUN_CMD+=(--cuda-device "$CUDA_DEVICE")
     fi
@@ -305,33 +367,26 @@ PY
         RUN_CMD+=(--use-tile-cache)
     fi
 
-    if "${RUN_CMD[@]}" \
-        >"$LOG" 2>&1; then
+    _run_slide >"$LOG" 2>&1 && RUN_EXIT=0 || RUN_EXIT=$?
+
+    SLIDE_ELAPSED_SECONDS=$(( $(date +%s) - SLIDE_STARTED_EPOCH ))
+    if (( RUN_EXIT == 0 )); then
         PASSED=$((PASSED + 1))
-        SLIDE_ELAPSED_SECONDS=$(( $(date +%s) - SLIDE_STARTED_EPOCH ))
         echo "[$IDX/$TOTAL] OK    $PATIENT elapsed=$(format_elapsed "$SLIDE_ELAPSED_SECONDS")"
+    elif (( RUN_EXIT == 124 )); then
+        TIMEDOUT=$((TIMEDOUT + 1))
+        echo "[$IDX/$TOTAL] TIMEOUT $PATIENT — exceeded ${SLIDE_TIMEOUT}s, skipping"
     else
-        RETRY_LOG="${LOG_DIR}/${PATIENT}.retry.log"
-        echo "[$IDX/$TOTAL] RETRY $PATIENT — previous attempt returned error"
-        if "${RUN_CMD[@]}" \
-            >"$RETRY_LOG" 2>&1; then
-            PASSED=$((PASSED + 1))
-            RETRIED=$((RETRIED + 1))
-            SLIDE_ELAPSED_SECONDS=$(( $(date +%s) - SLIDE_STARTED_EPOCH ))
-            echo "[$IDX/$TOTAL] OK    $PATIENT retry_succeeded elapsed=$(format_elapsed "$SLIDE_ELAPSED_SECONDS")"
-        else
-            FAILED=$((FAILED + 1))
-            SLIDE_ELAPSED_SECONDS=$(( $(date +%s) - SLIDE_STARTED_EPOCH ))
-            echo "[$IDX/$TOTAL] FAIL  $PATIENT elapsed=$(format_elapsed "$SLIDE_ELAPSED_SECONDS")"
-            print_failure_reason "$SUMMARY" "$RETRY_LOG"
-        fi
+        FAILED=$((FAILED + 1))
+        echo "[$IDX/$TOTAL] FAIL  $PATIENT (exit=${RUN_EXIT}) elapsed=$(format_elapsed "$SLIDE_ELAPSED_SECONDS"), skipping"
+        print_failure_reason "$SUMMARY" "$LOG"
     fi
 
-    echo "[$IDX/$TOTAL] Progress: $PASSED ok / $FAILED fail / $SKIPPED skip / $RETRIED retried"
+    echo "[$IDX/$TOTAL] Progress: $PASSED ok / $FAILED fail / $TIMEDOUT timeout / $SKIPPED skip"
 done
 
 echo ""
 echo "═══════════════════════════════════════════════════════════════"
 echo " BATCH COMPLETE"
-echo " Total: $TOTAL  |  OK: $PASSED  |  FAIL: $FAILED  |  SKIP: $SKIPPED  |  RETRIED: $RETRIED"
+echo " Total: $TOTAL  |  OK: $PASSED  |  FAIL: $FAILED  |  TIMEOUT: $TIMEDOUT  |  SKIP: $SKIPPED"
 echo "═══════════════════════════════════════════════════════════════"

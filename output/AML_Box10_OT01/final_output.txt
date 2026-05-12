@@ -1,0 +1,46 @@
+{
+  "morphology_summary": "The ROIs show a hypercellular marrow with a monotonous population of medium-to-large cells featuring high N:C ratios, fine chromatin, and inconspicuous nucleoli. There is a lack of significant myeloid or erythroid maturation, suggesting a coherent expanded blast population.",
+  "accepted_rois": [
+    {
+      "roi_id": "1",
+      "quality_reason": "Contains numerous interpretable nucleated hematopoietic cells.",
+      "blast_range": ">50%",
+      "key_features": [
+        "High N:C ratio",
+        "Fine chromatin",
+        "Monotonous population",
+        "Lack of maturation"
+      ]
+    },
+    {
+      "roi_id": "2",
+      "quality_reason": "Contains numerous interpretable nucleated hematopoietic cells.",
+      "blast_range": ">50%",
+      "key_features": [
+        "High N:C ratio",
+        "Fine chromatin",
+        "Monotonous population",
+        "Lack of maturation"
+      ]
+    }
+  ],
+  "discard_summary": [],
+  "global_blast_range": ">50%",
+  "triage_zone": "aml_like",
+  "final_decision": "Acute leukemia",
+  "limitations_confidence": {
+    "limitations": "Assessment based on limited ROI fields; however, the monotony and blast percentage are striking.",
+    "confidence": "high"
+  },
+  "npm1_prediction": {
+    "applicable": true,
+    "classification": "NPM1_wildtype",
+    "confidence_level": "moderate",
+    "supporting_features": [
+      "Classic primitive blast morphology",
+      "Very high N:C ratio",
+      "Scant cytoplasm"
+    ],
+    "comment": "Blasts appear predominantly primitive and classic without obvious cup-like nuclei or monocytic features suggestive of NPM1 mutation."
+  }
+}

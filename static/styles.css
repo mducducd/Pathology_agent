@@ -390,35 +390,15 @@ body.is-resizing *{
   transition: border-color .2s ease, box-shadow .2s ease;
 }
 
-.panel-card > *:not(.card-head),
+.panel-card > *,
 .panel-card > .sticky-card-body > *:not(.viewer-grid){
   padding-left: 6px;
   padding-right: 6px;
 }
 
-.panel-card > .card-head + *,
-.panel-card > .card-head + .sticky-card-body > *:first-child{
-  padding-top: 8px;
-}
-
 .card.is-running{
   border-color: transparent;
   box-shadow: inset 3px 0 0 var(--accent);
-}
-
-.card-head{
-  display:flex;
-  align-items:center;
-  justify-content:space-between;
-  gap:10px;
-  padding: 9px 6px;
-  border-bottom:1px solid var(--hairline);
-  position: sticky;
-  top: 0;
-  z-index: 4;
-  background: inherit;
-  will-change: transform;
-  transform: translateZ(0);
 }
 
 h2{
@@ -916,6 +896,28 @@ select.picker-list:hover{
   border-color: var(--border-hover);
 }
 
+.text-input{
+  width: 100%;
+  min-width: 0;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: var(--field-bg);
+  color: var(--text);
+  padding: 6px 8px;
+  font-size: 12px;
+  outline: none;
+}
+
+.text-input:focus,
+.text-input:focus-visible{
+  border-color: rgba(var(--accent-rgb),.55);
+  box-shadow: 0 0 0 3px rgba(var(--accent-rgb),.14);
+}
+
+.text-input:hover{
+  border-color: var(--border-hover);
+}
+
 .agent-picker{
   min-height: 0;
 }
@@ -1195,6 +1197,12 @@ textarea{
   min-height:220px;
 }
 
+.aml-auto-prompts-field{
+  display:flex;
+  flex-direction:column;
+  gap:12px;
+}
+
 .prompt-field textarea{
   flex:1;
   min-height:220px;
@@ -1254,12 +1262,6 @@ textarea:focus{
   margin-right: -6px;
   padding-left: 6px;
   padding-right: 6px;
-}
-
-.status-head-right{
-  display:flex;
-  align-items:center;
-  gap:8px;
 }
 
 .status-actions{
@@ -1857,10 +1859,6 @@ textarea:focus{
   animation: fade-up .24s ease;
 }
 
-.topbar-copy{
-  display: none;
-}
-
 @media (max-width: 1420px){
   .workbench{
     --left-col: 285px;
@@ -1877,12 +1875,6 @@ textarea:focus{
 @media (max-width: 1160px){
   .topbar{
     padding:10px 12px;
-  }
-  .brand-tagline{
-    display:none;
-  }
-  .theme-toggle{
-    min-width:0;
   }
   .workbench{
     grid-template-columns: 1fr;

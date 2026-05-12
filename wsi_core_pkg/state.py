@@ -12,6 +12,7 @@ from .config import DEBUG_ROOT_DIR, DEFAULT_MPP_UM, DEFAULT_SLIDE_PATH, MAX_IMG_
 SLIDE_PATH = DEFAULT_SLIDE_PATH
 RUN_ID: Optional[str] = None
 AGENT_TYPE: str = "aml"
+MODEL_NAME: str = ""
 EXTRACTOR_NAME: str = "reddino_base"
 TILE_SIZE_UM: float = 256.0
 TILE_SIZE_PX: int = 224
@@ -59,6 +60,7 @@ _dark_region_cache_signature: Optional[Any] = None
 
 TRACE_DIR: Optional[str] = None
 TRACE_FILE_PATH: Optional[str] = None
+CASE_OUTPUT_DIR: Optional[str] = None
 
 DEBUG_SAVE_DIR = DEBUG_ROOT_DIR
 _debug_img_counter = 0
@@ -107,7 +109,7 @@ def reset_wsi_state(
     candidate_nav_field_um: float | None = None,
     quality_method: str = "embedding",
 ) -> None:
-    global RUN_ID, AGENT_TYPE, EXTRACTOR_NAME, TILE_SIZE_UM, TILE_SIZE_PX, BATCH_SIZE, TILE_PREFILTER_METHOD, ROI_OUTPUT_SIZE_PX, MAX_ACCEPTED_ROIS, TARGET_ACCEPTED_ROIS, DEFAULT_MPP_UM_OVERRIDE, CANDIDATE_NAV_FIELD_UM_OVERRIDE, QUALITY_METHOD, _debug_img_counter, DEBUG_SAVE_DIR
+    global RUN_ID, AGENT_TYPE, MODEL_NAME, EXTRACTOR_NAME, TILE_SIZE_UM, TILE_SIZE_PX, BATCH_SIZE, TILE_PREFILTER_METHOD, ROI_OUTPUT_SIZE_PX, MAX_ACCEPTED_ROIS, TARGET_ACCEPTED_ROIS, DEFAULT_MPP_UM_OVERRIDE, CANDIDATE_NAV_FIELD_UM_OVERRIDE, QUALITY_METHOD, _debug_img_counter, DEBUG_SAVE_DIR
     global _step_log, _roi_marks, _attempted_roi_bboxes_level0, _view_history
     global _current_view, _overview_cache, _last_overview_with_box_path, _last_overview_debug_path
     global _slide, _saved_good_tiles, _saved_bad_tiles, _example_tiles_injected, _example_rois_injected
@@ -115,11 +117,12 @@ def reset_wsi_state(
     global _last_roi_candidates, _last_roi_candidate_meta, _last_roi_candidate_source, _last_roi_candidate_overlay_path
     global _last_roi_candidate_view_key, _last_roi_candidate_top_k, _overview_roi_candidates
     global _dark_region_boxes_level0, _dark_region_slide_path, _dark_region_cache_signature
-    global TRACE_DIR, TRACE_FILE_PATH
+    global TRACE_DIR, TRACE_FILE_PATH, CASE_OUTPUT_DIR
     global HAS_FATAL_ERROR, LAST_FATAL_ERROR, CURRENT_AGENT_ACTION
 
     RUN_ID = run_id
     AGENT_TYPE = "aml"
+    MODEL_NAME = ""
     EXTRACTOR_NAME = extractor_name
     TILE_SIZE_UM = tile_size_um
     TILE_SIZE_PX = tile_size_px
@@ -139,6 +142,7 @@ def reset_wsi_state(
     TRACE_DIR = os.path.join(OUTPUTS_ROOT_DIR, RUN_ID, "traces")
     os.makedirs(TRACE_DIR, exist_ok=True)
     TRACE_FILE_PATH = os.path.join(TRACE_DIR, "trace.jsonl")
+    CASE_OUTPUT_DIR = None
 
     _step_log = []
     _roi_marks = []
@@ -193,7 +197,7 @@ def clear_wsi_outputs_state() -> None:
     global _last_roi_candidates, _last_roi_candidate_meta, _last_roi_candidate_source, _last_roi_candidate_overlay_path
     global _last_roi_candidate_view_key, _last_roi_candidate_top_k, _overview_roi_candidates
     global _dark_region_boxes_level0, _dark_region_slide_path, _dark_region_cache_signature
-    global HAS_FATAL_ERROR, LAST_FATAL_ERROR
+    global HAS_FATAL_ERROR, LAST_FATAL_ERROR, MODEL_NAME, CASE_OUTPUT_DIR
 
     _step_log = []
     AGENT_TYPE = "wsi"
@@ -230,12 +234,15 @@ def clear_wsi_outputs_state() -> None:
     _dark_region_cache_signature = None
     HAS_FATAL_ERROR = False
     LAST_FATAL_ERROR = None
+    MODEL_NAME = ""
+    CASE_OUTPUT_DIR = None
 
 
 def get_public_state_snapshot() -> Dict[str, Any]:
     return {
         "run_id": RUN_ID,
         "agent_type": AGENT_TYPE,
+        "model_name": MODEL_NAME,
         "current_view": dict(_current_view) if _current_view else None,
         "batch_size": BATCH_SIZE,
         "tile_prefilter_method": TILE_PREFILTER_METHOD,
@@ -256,6 +263,7 @@ def get_public_state_snapshot() -> Dict[str, Any]:
         "last_roi_candidate_source": _last_roi_candidate_source,
         "roi_candidate_prep": dict(_roi_candidate_prep) if _roi_candidate_prep else None,
         "last_roi_candidate_overlay_path": _last_roi_candidate_overlay_path,
+        "case_output_dir": CASE_OUTPUT_DIR,
         "has_fatal_error": HAS_FATAL_ERROR,
         "last_fatal_error": LAST_FATAL_ERROR,
         "current_agent_action": CURRENT_AGENT_ACTION,

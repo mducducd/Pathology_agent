@@ -10,12 +10,46 @@ An illustration of AML agent
 
 ![Slide Agent demo](static/assets/demo.png)
 
-> **Info**
+## Performance Benchmarks
+
+Evaluated on a private dataset of 372 bone marrow WSIs.
+
+### VLM Performance (ROI Collection)
+
+Results averaged across available feature extractors. `roi5_rate` is the % of runs where the VLM successfully reached the 5 ROI target.
+
+<div style="font-size: 0.78em; line-height: 1.25;">
+
+| Model | task_success (%) | roi5_rate (%) | avg_tool_calls |
+|---|---:|---:|---:|
+| [gemma-4-31B-it](https://huggingface.co/google/gemma-4-31B-it) | 100.00 | 71.30 | 21.24 |
+| [Qwen3.5-397B-A17B-FP8](https://huggingface.co/Qwen/Qwen3.5-397B-A22B) | 99.66 | 99.26 | 25.07 |
+| [DeepSeek-V4-Flash](https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash) | 100.00 | 99.73 | 27.10 |
+| [GLM-4.6V-FP8](https://huggingface.co/THUDM/GLM-4.6V-FP8) | 92.14 | 95.63 | 26.28 |
+| GPT-OSS-120B | 99.63 | 23.99 | 37.36 |
+
+
+
+### AML Detector Results
+
+> We empirically chose gemma-4 and Qwen3.5 as the diagnosis models — gemma-4 demonstrates specific recognition of AML morphology, while Qwen3.5 is more general in blood cell image understanding.
 >
-> Evaluation on a private dataset (50 AML, 50 normal marrow):  
-> [**Gemma-4-31B-it**](https://huggingface.co/google/gemma-4-31B-it) achieves the highest decision accuracy.
-> [**UNI-2**](https://github.com/mahmoodlab/UNI) provides the strongest visual embeddings, outperforming domain-specific blood cell DINO variants.
-> Benchmarks will come soon
+> Results are not heavily affected by the AML diagnosis prompt, and are easily biased by minor changes in instruction wording.
+
+<div style="font-size: 0.78em; line-height: 1.25;">
+
+| Model | Extractor | Accuracy (%) | AML TP | AML FN | Normal TN | Normal FP | NPM1 Acc (%) |
+|---|---|---|---|---|---|---|---|
+| [gemma-4-31B-it](https://huggingface.co/google/gemma-4-31B-it) | DinoBloom-G | 70.16 | 234 | 85 | 27 | 26 | 74.43 |
+| [gemma-4-31B-it](https://huggingface.co/google/gemma-4-31B-it) | H-optimus-1 | 72.85 | 246 | 73 | 25 | 28 | 71.74 |
+| [gemma-4-31B-it](https://huggingface.co/google/gemma-4-31B-it) | UNI-2 | 78.23 | 269 | 50 | 22 | 31 | 73.02 |
+| [gemma-4-31B-it](https://huggingface.co/google/gemma-4-31B-it) | Virchow2 | 77.96 | 270 | 49 | 20 | 33 | 72.00 |
+| [Qwen3.5-397B-A17B-FP8](https://huggingface.co/Qwen/Qwen3.5-397B-A22B) | DinoBloom-G | 60.48 | 177 | 142 | 48 | 5 | 65.67 |
+| [Qwen3.5-397B-A17B-FP8](https://huggingface.co/Qwen/Qwen3.5-397B-A22B) | H-optimus-1 | 61.02 | 182 | 137 | 45 | 8 | 65.96 |
+| [Qwen3.5-397B-A17B-FP8](https://huggingface.co/Qwen/Qwen3.5-397B-A22B) | UNI-2 | 69.09 | 215 | 104 | 42 | 11 | 64.15 |
+| [Qwen3.5-397B-A17B-FP8](https://huggingface.co/Qwen/Qwen3.5-397B-A22B) | Virchow2 | 66.13 | 207 | 112 | 39 | 14 | 67.88 |
+
+</div>
 
 ## Install
 
@@ -69,115 +103,7 @@ The web app starts on port `3008` by default. If that port is already in use, th
 
 ## CLI Runs
 
-The repo also includes headless CLI entrypoints for AML runs.
-
-### Single slide
-
-Run one slide without the web UI:
-
-```bash
-.venv/bin/python evaluate/run_single_slide.py \
-    --slide /path/to/patient.mrxs \
-    --output-dir ./batch_outputs \
-    --model GPT-OSS-120B \
-    --extractor reddino_large \
-    --tile-filter hybrid \
-    --tile-size-px 224 \
-    --batch-size 512 \
-    --agent aml
-```
-
-Useful flags:
-
-- `--model`: VLM name, for example `GPT-OSS-120B`, `gemma-4-31B-it`, `Qwen3.5-397B-A17B-FP8`, `GLM-4.6V-FP8`
-- `--extractor`: embedding extractor key such as `uni2`, `h_optimus_1`, `virchow2`, `dinobloom`, `dinobloom_giant`, `reddino`, `reddino_base`, `reddino_large`
-- `--tile-filter`: one of `hybrid`, `quality`, `coarse`, `none`
-- `--experiment-root`: shared cache/output root for repeated runs
-- `--use-tile-cache`: reuse persisted tile cache across runs
-
-Outputs are written under `--output-dir/<patient>/` and include:
-
-- `summary.json`
-- `final_output.txt`
-- `report.json`
-- copied ROI/debug images when available
-
-### Batch AML run
-
-Run the AML detector across a CSV of patients or slide stems:
-
-```bash
-bash evaluate/run_batch_aml.sh \
-    --csv /path/to/patients.csv \
-    --slides-root /mnt/copernicus3/PATHOLOGY/others/private/haemadata/ALL_WSIs \
-    --output-dir ./batch_result_qwen_reddino_large \
-    --experiment-root ./batch_result_qwen_reddino_large \
-    --model Qwen3.5-397B-A17B-FP8 \
-    --extractor reddino_large \
-    --tile-filter hybrid \
-    --tile-size-px 224 \
-    --batch-size 512 \
-    --agent aml \
-    --resume \
-    --use-tile-cache
-```
-
-Notes:
-
-- The CSV is read line-by-line after the header.
-- Each row can be either a patient stem or a full `.mrxs` path.
-- `--resume` skips patients whose `summary.json` has `status="ok"` and a non-empty `final_decision`.
-- If a run fails during the current batch, the script automatically retries that slide once.
-
-### Pre-extract shared cache
-
-If you plan to run a large batch with `--use-tile-cache`, you can prewarm the shared AML tile cache first:
-
-```bash
-.venv/bin/python evaluate/preextract_hybrid_cache.py \
-    --csv /path/to/patients.csv \
-    --slides-root /mnt/copernicus3/PATHOLOGY/others/private/haemadata/ALL_WSIs \
-    --experiment-root ./aml_reddino_large_suite \
-    --extractor reddino_large \
-    --tile-filter hybrid \
-    --agent aml \
-    --tile-size-px 224 \
-    --tile-size-um 256 \
-    --batch-size 512 \
-    --skip-existing-cache
-```
-
-Notes:
-
-- This populates the shared cache under `<experiment-root>/_cache/tile_cache/<extractor>/`.
-- It also prepares the AML reference cache under `<experiment-root>/_cache/reference_hnsw/<extractor>/`.
-- `--skip-existing-cache` avoids recomputing slides that already have at least one cache zip for that extractor.
-- `--limit N` is useful for a quick dry run on a subset of slides.
-- This cache layout is the same one reused by `run_batch_aml.sh` and `run_batch_aml_suite.sh` when `--use-tile-cache` is enabled.
-
-### Batch suite
-
-`evaluate/run_batch_aml_suite.sh` is a wrapper for launching multiple model/extractor combinations defined in the script's `RUNS` array:
-
-```bash
-bash evaluate/run_batch_aml_suite.sh \
-    --output-parent /mnt/bulk-neptune/nguyenmin/stamp-dev/experiments/Narmin \
-    --experiment-name aml_gemma4_embedding_suite \
-    --cuda-device 0 \
-    --extractors h_optimus_1 \
-    --resume \
-    --use-tile-cache
-```
-
-Notes:
-
-- `--extractors` accepts a comma-separated list of extractor keys and filters the `RUNS` array to only those matching entries.
-- The suite script forwards into `evaluate/run_batch_aml.sh` for each selected run.
-- Edit the `RUNS` array in [evaluate/run_batch_aml_suite.sh](evaluate/run_batch_aml_suite.sh) to choose which model/extractor combinations are launched.
-- Edit `tools.slide` in [configs/config.yaml](configs/config.yaml) to change the suite defaults for `TILE_FILTER`, `TILE_SIZE_PX`, `BATCH_SIZE`, `ROI_SIZE_PX`, and `AGENT`. These can also be overridden per-invocation with `--tile-filter`, `--roi-size-px`, and `--default-mpp-um`.
-- Each `RUNS` entry has the form `"MODEL|EXTRACTOR|OUTPUT_DIR_NAME"`.
-- `MODEL` is passed to `--model`, `EXTRACTOR` is passed to `--extractor`, and `OUTPUT_DIR_NAME` becomes the subdirectory created under `--output-parent/--experiment-name` or `--base-output-root`.
-- The current checked-in `RUNS` array launches `GLM-4.6V-FP8` paired with `uni2`, `virchow2`, `h_optimus_1`, and `dinobloom_giant`.
+See [evaluate/README.md](evaluate/README.md) for full documentation on headless CLI entrypoints: single-slide runs, batch AML, pre-extracting shared cache, the batch suite, and batch diagnosis.
 
 ## Workbench
 
@@ -197,7 +123,7 @@ You can start a run from:
 
 ### Run Controls
 
-- **Agent**: choose between Tile Selector, AML Detector, and General WSI Agent.
+- **Agent**: choose between AML Auto (two-stage, recommended), AML ROI Collector (Stage 1 only), AML Diagnosis (Stage 2 only), AML Detector (legacy single-stage), Tile Selector, and General WSI Agent.
 - **Model**: choose which VLM is exposed in the workbench.
 - **Feature Extractor**: choose the embedding backbone used for ROI candidate preparation.
 - **Tile size (px)**: controls the patch size used by the extractor path.
@@ -217,6 +143,135 @@ Tile filter options:
 2. Pick the agent, model, feature extractor, tile size, batch size, and tile filter.
 3. Click **Start run**.
 4. Follow live status updates in the right panel while reviewing the overview and ROI panes.
+
+## Agents
+
+The system provides five agents, each exposed via the `agent_type` parameter in the web UI, CLI, and API.
+
+---
+
+### WSIAmlRoiCollectorAgent — `aml_roi`
+
+**Role:** Stage-1 of the two-stage AML pipeline. Navigates the WSI and marks exactly 5 high-quality high-power ROIs for downstream diagnosis.
+
+**Tools:** `wsi_get_overview_view`, `wsi_zoom_current_norm`, `wsi_zoom_full_norm`, `wsi_pan_current`, `wsi_get_view_info`, `wsi_open_candidate`, `wsi_mark_candidate`, `wsi_mark_roi_norm`, `wsi_discard_last_roi`
+
+**Inputs:** A WSI file path plus the shared candidate pipeline (tile extraction, embeddings, reference retrieval).
+
+**Outputs:**
+- `roi_collection.json` — manifest with ROI ids, image paths, bounding boxes, tissue fraction, and metadata.
+- `images/roi_N.jpg` — high-resolution ROI crops at `ROI_SIZE_PX` (default 2048 px).
+- `images/slide_overview.jpg` — overview with marked ROI positions.
+- `images/roi_candidates.jpg` — candidate ranking overlay.
+- A navigation summary report (`report.md`).
+
+**Key behaviour:**
+- Opens candidates with `wsi_open_candidate(rank)` and zooms systematically within each candidate field before marking.
+- Marks exactly 5 accepted ROIs from reasonably distinct regions.
+- Discards ROIs that are background-only, hemodilute, out-of-focus, or artifact-dominated.
+- Stops immediately once 5 ROIs are accepted; does not perform diagnosis.
+
+---
+
+### WSIAmlDiagnosisAgent — `aml_diagnosis`
+
+**Role:** Stage-2 of the two-stage AML pipeline. Receives only ROI images (no slide file, no navigation) and returns a strict morphology-only JSON diagnosis.
+
+**Tools:** none — runs as a direct chat-completion call, not through the Runner loop.
+
+**Inputs:** A `roi_collection.json` (or a directory containing one) produced by `aml_roi`, or a single ROI image file.
+
+**Outputs:** A strict JSON object with the following fields:
+
+```json
+{
+  "morphology_summary": "...",
+  "accepted_rois": [
+    { "roi_id": "1", "quality_reason": "...", "blast_range": "<5% | 5-9% | 10-19% | 20-50% | >50%", "key_features": ["..."] }
+  ],
+  "discard_summary": ["..."],
+  "global_blast_range": "<5% | 5-9% | 10-19% | 20-50% | >50%",
+  "triage_zone": "normal_like | borderline_suspicious | aml_like",
+  "final_decision": "Normal marrow | Acute leukemia",
+  "limitations_confidence": { "limitations": "...", "confidence": "low | medium | high" },
+  "npm1_prediction": { "applicable": true, "classification": "NPM1_mutated | NPM1_wildtype", ... }
+}
+```
+
+**Key behaviour:**
+- Completely blind — receives only base64-encoded ROI images plus the system prompt. No filenames, no metadata.
+- Re-evaluates each ROI for suitability before estimating blasts.
+- NPM1 prediction is gated: only performed when `final_decision = "Acute leukemia"`.
+- Temperature is fixed at 0.0 for deterministic output.
+
+---
+
+### aml_auto (two-stage pipeline) — `aml_auto` (alias: `aml`)
+
+**Role:** Full end-to-end AML pipeline that chains `aml_roi` then `aml_diagnosis` automatically.
+
+**Flow:**
+```
+WSI file
+  → WSIAmlRoiCollectorAgent (aml_roi stage)
+      → roi_collection.json + ROI images
+  → WSIAmlDiagnosisAgent (aml_diagnosis stage)
+      → final JSON diagnosis + report.md
+```
+
+**When to use:** Default for the web UI and batch scripts. Runs Stage 1 with the default ROI collection prompt (ignoring any custom prompt), then runs Stage 2 with the user-supplied or default diagnosis prompt.
+
+---
+
+### WSIAmlDetectorAgent — `aml_detector` (legacy single-stage)
+
+**Role:** Single-stage AML agent that combines navigation and morphology diagnosis in one pass. Uses `DEFAULT_AML_PROMPT` which instructs the VLM to both collect ROIs and output the final JSON.
+
+**Tools:** Same as `WSIAmlRoiCollectorAgent` plus `wsi_rebuild_reference_index`.
+
+**When to use:** For single-turn debugging or when the two-stage split is not needed. The two-stage `aml_auto` pipeline is the production default.
+
+---
+
+### WSITileSelectorAgent — `tile`
+
+**Role:** Systematic tile-selection agent. Navigates the WSI and saves individual tiles classified as `good` or `bad` for downstream model training or analysis.
+
+**Tools:** `wsi_get_overview_view`, `wsi_zoom_current_norm`, `wsi_zoom_full_norm`, `wsi_pan_current`, `wsi_get_view_info`, `wsi_save_tile_norm`
+
+**Outputs:** Tiles saved under `SELECTED_TILES_ROOT` with quality labels, up to `MAX_GOOD_TILES` (default 200) good tiles and `MAX_BAD_TILES` (default 50) bad tiles per run.
+
+**Key behaviour:**
+- Prioritizes deep blue-purple nucleated marrow over pink-red RBC-rich material and pale background.
+- Uses example good/bad tiles provided at run start as visual guidance.
+- Stops when the good-tile limit is reached or no further good tiles can be found.
+
+---
+
+### WSIPathologyAgent — `wsi`
+
+**Role:** General-purpose WSI exploration agent for any pathology task (tumour description, MSI screening, inflammation assessment, etc.).
+
+**Tools:** All navigation tools plus `wsi_mark_roi_norm`, `wsi_save_tile_norm`, `wsi_discard_last_roi`, `wsi_rebuild_reference_index`.
+
+**When to use:** When the task is not AML-specific. The user prompt defines the clinical task; the agent adapts its navigation and reporting accordingly.
+
+**MSI guidance:** When the prompt requests MSI screening, the agent samples at least three distinct tumour regions, marks representative ROIs, and provides a qualitative MSI-H/MSS assessment with the caveat that definitive status requires IHC or molecular testing.
+
+---
+
+### Agent — Pipeline Mode Summary
+
+| `agent_type` | Python agent class | Stage | Slide required | ROI collection input |
+|---|---|---|---|---|
+| `wsi` | `WSIPathologyAgent` | single | yes | — |
+| `tile` | `WSITileSelectorAgent` | single | yes | — |
+| `aml_roi` | `WSIAmlRoiCollectorAgent` | Stage 1 | yes | — |
+| `aml_diagnosis` | `WSIAmlDiagnosisAgent` | Stage 2 | no | `roi_collection.json` |
+| `aml_auto` / `aml` | both (chained) | 1 → 2 | yes | auto |
+| `aml_detector` | `WSIAmlDetectorAgent` | single | yes | — |
+
+---
 
 ## Reference Embeddings (AML Mode)
 

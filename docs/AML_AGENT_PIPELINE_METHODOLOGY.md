@@ -2,8 +2,8 @@
 
 ## Abstract
 
-This document describes the acute myeloid leukemia (AML) whole-slide-image
-(WSI) agent implemented in this repository. The system is designed as a
+This appendix describes the acute myeloid leukemia (AML) whole-slide-image
+(WSI) agent used for morphology-based slide triage. The system is designed as a
 retrieval-guided, morphology-first agent for bone marrow slide triage. Rather
 than presenting an entire gigapixel WSI directly to a vision-language model
 (VLM), the pipeline first constructs a compact candidate map using deterministic
@@ -21,7 +21,7 @@ from a small number of accepted ROIs.
 ## Scope And Output
 
 The agent performs morphology-based triage for bone marrow WSI analysis. Its
-final output is a constrained JSON report containing per-ROI blast estimates, a
+final output is a constrained report containing per-ROI blast estimates, a
 global blast range, a binary decision selected from `Normal marrow` or
 `Acute leukemia`, confidence and limitations, and an NPM1 morphology prediction
 only when acute leukemia is morphologically established.
@@ -31,25 +31,9 @@ metadata. The reference tile bank is used as an ROI-quality prior, not as a
 disease-label classifier. Consequently, the final AML decision remains an
 ROI-based morphology judgment rather than a direct nearest-neighbor label.
 
-## Implementation Provenance
-
-| Component | Principal files |
-| --- | --- |
-| Runtime entry points | `main.py`, `evaluate/run_single_slide.py`, `evaluate/run_batch_aml.sh` |
-| Agent selection and tool dispatch | `wsi_core_pkg/runtime.py`, `wsi_core_pkg/agents.py`, `wsi_core_pkg/tools.py` |
-| AML task instructions | `wsi_core_pkg/prompts.py` |
-| Context and image injection | `wsi_core_pkg/context_injection.py` |
-| Dark/cellularity overlay | `wsi_core_pkg/dark_regions.py` |
-| Tiling and embedding extraction | `wsi_core_pkg/embeddings/tiling.py` |
-| Raw tile quality model | `wsi_core_pkg/embeddings/tile_prefilter.py` |
-| Coarse OpenSlide prefilter | `wsi_core_pkg/embeddings/openslide_prefilter.py` |
-| Candidate retrieval and ranking | `wsi_core_pkg/embeddings/roi_ranker.py` |
-| Report generation | `wsi_core_pkg/reporting.py` |
-| Default configuration | `configs/config.yaml` |
-
 ## Method Overview
 
-The AML agent is implemented as a cascade of increasingly semantic operations:
+The AML agent follows a cascade of increasingly semantic operations:
 
 ```text
 WSI input
@@ -66,10 +50,10 @@ WSI input
 ```
 
 This cascade is intentionally asymmetric. High-throughput slide reduction is
-performed by inexpensive deterministic and embedding-based stages that can be
-cached and audited. The VLM is reserved for the operations that require visual
-interpretation: selecting readable cellular ROIs, estimating blast burden, and
-synthesizing the final morphology report.
+performed by deterministic and embedding-based stages that produce a compact,
+reviewable candidate set. The VLM is reserved for the operations that require
+visual interpretation: selecting readable cellular ROIs, estimating blast
+burden, and synthesizing the final morphology report.
 
 ## Notation
 
@@ -114,7 +98,7 @@ synthesizing the final morphology report.
 3. Acquire the whole-slide overview:
    $v_0 \gets \operatorname{Overview}(S)$.
 
-4. Construct or load the ROI index:
+4. Construct the ROI candidate index:
    $\mathcal{I} \gets
    \operatorname{EnsureROIIndex}(S,\theta,m_{\mathrm{pp}},\Omega)$.
 
@@ -157,11 +141,10 @@ synthesizing the final morphology report.
       discard it, update $\mathcal{U}$, and refresh $\mathcal{C}_{v}$.
 
    h. If $r$ is accepted, update
-      $\mathcal{A} \gets \mathcal{A} \cup \{r\}$ and optionally save a centered
-      good tile for future reference enrichment.
+      $\mathcal{A} \gets \mathcal{A} \cup \{r\}$.
 
 8. Return the final report:
-   $\hat{Y} \gets \operatorname{FinalAMLJson}(\mathcal{A},\Omega)$.
+   $\hat{Y} \gets \operatorname{FinalOutput}(\mathcal{A},\Omega)$.
 
 Algorithm 1 formalizes the interactive agent loop. Candidate regions are treated
 as navigation priors rather than final ROIs. The VLM must inspect each opened
@@ -175,57 +158,46 @@ configuration $\Omega$.
 
 **Output:** ROI index $\mathcal{I}$.
 
-1. Define a reproducibility key:
-
-$$
-\kappa =
-\operatorname{Hash}
-(S_{\mathrm{path}},\theta,\Omega_{\mathrm{filter}},s_{\mathrm{tile}},\mathrm{AML}).
-$$
-
-2. If an index exists for $\kappa$, return the cached
-   $\mathcal{I}_{\kappa}$.
-
-3. Select foreground supertiles:
+1. Select foreground supertiles:
    $\mathcal{T} \gets
    \operatorname{ForegroundSupertiles}(S,m_{\mathrm{pp}},\Omega)$.
 
-4. For each $t \in \mathcal{T}$, split $t$ into tiles
+2. For each $t \in \mathcal{T}$, split $t$ into tiles
    $\mathcal{P}_t$, remove low-texture and edge-dominated tiles, and apply the
    quality filter when $\Omega_{\mathrm{filter}}\in\{\mathrm{quality},
    \mathrm{hybrid}\}$.
 
-5. Aggregate all retained tiles:
+3. Aggregate all retained tiles:
    $\mathcal{P} \gets \bigcup_{t\in\mathcal{T}} \mathcal{P}_t$.
 
-6. Extract normalized embeddings:
+4. Extract normalized embeddings:
    $Z \gets \{z_i = \operatorname{norm}_2(f_{\theta}(p_i)) :
    p_i \in \mathcal{P}\}$.
 
-7. Compute dark/cellularity scores:
+5. Compute dark/cellularity scores:
    $D \gets \{D_i : p_i \in \mathcal{P}\}$.
 
-8. Embed curated reference banks:
+6. Embed curated reference banks:
    $Z^{+} \gets \{\operatorname{norm}_2(f_{\theta}(r)) :
    r \in \mathcal{R}^{+}\}$ and
    $Z^{-} \gets \{\operatorname{norm}_2(f_{\theta}(r)) :
    r \in \mathcal{R}^{-}\}$.
 
-9. Compute retrieval evidence:
+7. Compute retrieval evidence:
    $(G,N,M,B,h) \gets
    \operatorname{ReferenceRetrieval}(Z,Z^{+},Z^{-},\Omega)$.
 
-10. Construct and cache:
+8. Construct the candidate index:
 
 $$
 \mathcal{I} =
 \{(p_i, x_i, y_i, z_i, D_i, G_i, N_i, M_i, B_i, h_i)\}_{i=1}^{|\mathcal{P}|}.
 $$
 
-The ROI index is the principal computational artifact of the backend. It stores
-tile coordinates, embeddings, dark/cellularity scores, reference retrieval
-evidence, and quality hints. Reusing this index makes repeated VLM runs
-substantially cheaper and improves reproducibility.
+The ROI index summarizes where the slide contains promising, readable marrow
+fields. It combines tile coordinates, dark/cellularity scores, reference
+retrieval evidence, and quality hints so the VLM can focus on interpretable
+regions instead of scanning the whole slide exhaustively.
 
 ### Algorithm 3: Tile Quality Function
 
@@ -415,13 +387,14 @@ $$
 \mathbb{1}[\hat{y}=\text{Acute leukemia}].
 $$
 
-7. Return $\hat{Y}$ as strict JSON containing ROI-level morphology, global blast
-   burden, final decision, limitations, confidence, and gated NPM1 assessment.
+7. Return $\hat{Y}$ as a constrained output containing ROI-level morphology,
+   global blast burden, final decision, limitations, confidence, and gated NPM1
+   assessment.
 
 ## Slide Scale And Tiling
 
-The pipeline resolves slide scale from OpenSlide metadata when available and
-falls back to `DEFAULT_MPP_UM` otherwise. Physical tile size is converted to
+The pipeline resolves slide scale from available microns-per-pixel metadata and
+falls back to a nominal default otherwise. Physical tile size is converted to
 level-0 pixels as:
 
 $$
@@ -500,7 +473,7 @@ The AML heuristic deliberately avoids the simplistic assumption that dark tissue
 is diagnostic. Darkness is used only when accompanied by chromaticity,
 hematoxylin-like signal, local texture, and preserved cellular structure.
 
-`dark_regions.py` computes a thumbnail-level cellularity score:
+The dark/cellularity prior computes a thumbnail-level cellularity score:
 
 $$
 \begin{aligned}
@@ -527,12 +500,10 @@ S_{\mathrm{dark}} &=
 \end{aligned}
 $$
 
-The module thresholds this score by percentile, expands high-scoring regions
-inside tissue, refines connected components, trims boxes to tissue support, and
-writes both a JPEG overview and a soft alpha mask. In the active AML candidate
-path, per-tile dark/cellularity scores contribute to ranking, while explicit
-dark-region boxes are available as an optional prior rather than a mandatory
-hard gate.
+The score is thresholded by percentile, expanded within tissue, refined by
+connected components, and trimmed to tissue support. In the AML candidate path,
+per-tile dark/cellularity scores contribute to ranking as a soft prior rather
+than as a mandatory diagnostic gate.
 
 ## Tile Quality Model
 
@@ -624,8 +595,8 @@ helps retain atypical but potentially informative morphology.
 ## Foundation Embeddings
 
 Each retained tile is transformed and passed through the selected feature
-extractor in batches. CUDA automatic mixed precision is used when available.
-The extractor output is reshaped to an `[N, D]` matrix and L2-normalized:
+extractor in batches. The extractor output is reshaped to an $[N,D]$ matrix and
+L2-normalized:
 
 $$
 z_i =
@@ -638,16 +609,13 @@ $$
 \operatorname{sim}(z_i, z_j) = z_i^\top z_j .
 $$
 
-Supported extractors include `uni2`, `virchow2`, `h_optimus_1`,
-`dinobloom*`, `reddino*`, and ONNX variants when installed. Feature caches are
-keyed by slide path, extractor identity, tile size, filter settings, AMP mode,
-cache format, and relevant code/configuration hashes.
+Supported extractors include UNI2, Virchow2, H-optimus-1, DINO/Bloom-style
+models, RedDINO-style models, and compatible ONNX variants.
 
 ## Curated Reference Retrieval
 
-In AML mode, the candidate ranker embeds curated examples from
-`Selected_Tiles/Good_Tiles` and `Selected_Tiles/Bad_Tiles`. These examples
-represent ROI-quality prototypes:
+In AML mode, the candidate ranker embeds curated good-quality and bad-quality
+reference examples. These examples represent ROI-quality prototypes:
 
 | Reference set | Interpretation |
 | --- | --- |
@@ -673,7 +641,8 @@ B_i &= \sigma(-\lambda M_i).
 $$
 
 Here $Z^{+}$ and $Z^{-}$ denote embedded good and bad reference banks, and
-$\lambda$ corresponds to `AML_REFERENCE_LOGIT_SCALE`.
+$\lambda$ is a scale parameter controlling the sharpness of the bad-like
+likelihood.
 
 The available aggregation operators are:
 
@@ -809,15 +778,15 @@ does not contribute disease evidence by itself.
 
 The VLM is exposed to the current view image, a compact candidate list,
 ROI-quality examples, progress reminders, and relevant navigation state. The
-intended tool sequence is:
+intended acquisition sequence is:
 
 ```text
-wsi_get_overview_view
+open whole-slide overview
 repeat until target ROI count:
-  wsi_open_candidate(rank)
+  open the next ranked candidate field
   inspect locally with limited zoom/pan
-  wsi_mark_roi_norm(...) or wsi_mark_candidate(...)
-final JSON
+  mark a readable local ROI
+produce the final morphology report
 ```
 
 The prompt explicitly frames each candidate as a search region rather than a
@@ -825,13 +794,13 @@ fixed target. The model should select a readable high-cellularity field inside
 the opened view, not blindly mark the candidate center. Guardrails enforce an
 overview-first workflow, discourage repeated same-region navigation, warn on
 low-tissue fields, prevent duplicate ROIs, and require finalization after the
-configured ROI target or cap is reached. The default AML configuration uses a
-target of five accepted ROIs and a hard cap of five accepted ROIs.
+ROI target or cap is reached. The default AML setting uses a target of five
+accepted ROIs and a hard cap of five accepted ROIs.
 
 ## ROI Marking And Evidence Capture
 
-`wsi_mark_roi_norm()` accepts normalized coordinates `[0, 999]` in the current
-view. The center is mapped to level-0 slide coordinates:
+ROI marking uses normalized coordinates in the current view. The center is
+mapped to level-0 slide coordinates:
 
 $$
 \begin{aligned}
@@ -846,7 +815,7 @@ The final evidence crop is a fixed square:
 
 $$
 \begin{aligned}
-s_{\mathrm{roi}} &= \mathrm{ROI\_OUTPUT\_SIZE\_PX}, \\
+s_{\mathrm{roi}} &= \text{fixed ROI side length}, \\
 x_0 &= \operatorname{clamp}
 \left(c^{(0)}_x - \frac{s_{\mathrm{roi}}}{2}, 0, W_S - s_{\mathrm{roi}}\right), \\
 y_0 &= \operatorname{clamp}
@@ -881,10 +850,6 @@ with rejection when:
 $$
 \operatorname{mean}(\mathbb{1}_{\mathrm{flood}}) > 0.30 .
 $$
-
-For early accepted AML ROIs, the system can auto-save a centered good tile.
-These saved tiles may subsequently be incorporated into the dynamic reference
-index with `wsi_rebuild_reference_index(include_saved_tiles=True)`.
 
 ## Diagnostic Decision Rule
 
@@ -930,32 +895,6 @@ using morphology-only supportive evidence such as cup-like nuclear
 invaginations, folded or irregular nuclei, monocytic differentiation, and
 relatively abundant cytoplasm.
 
-## Reproducibility And Caching
-
-The pipeline caches expensive intermediate artifacts:
-
-| Cache | Purpose |
-| --- | --- |
-| Tile cache ZIP | persists selected image tiles |
-| Feature cache NPZ | persists embeddings, coordinates, and dark ROI scores |
-| Reference embedding cache | persists good/bad reference embeddings |
-| Reference HNSW cache | persists approximate nearest-neighbor structures |
-| ROI index pickle | persists the full ranked slide index |
-
-The ROI index key includes:
-
-```text
-slide_path
-extractor_name
-tile_prefilter_method
-tile_size_px
-aml_mode
-```
-
-Feature caches additionally encode tiler settings, extractor id, AMP mode,
-cache format, and code/configuration hashes. Reference caches are invalidated by
-reference paths and file modification times.
-
 ## Methodological Contributions
 
 1. The method formulates AML WSI analysis as retrieval-guided microscopy rather
@@ -972,44 +911,6 @@ reference paths and file modification times.
    toward promising fields, but only accepted ROI crops contribute to the final
    report.
 
-5. The agent loop is bounded and reportable. The implementation records
-   candidate metadata, retrieval evidence, ROI images, navigation actions,
-   final JSON, and Markdown/text reports.
-
-## Practical Defaults
-
-| Setting | Default | Interpretation |
-| --- | --- | --- |
-| `TILE_FILTER` | `hybrid` | coarse screening plus raw tile quality filtering |
-| `TILE_SIZE_PX` | `224` | extractor input tile side |
-| `BATCH_SIZE` | `512` | embedding batch size in suite defaults |
-| `ROI_SIZE_PX` | `2048` | final ROI crop side |
-| `ROI_CANDIDATE_TOP_K` | `72` | raw candidates per view |
-| `ROI_CANDIDATE_TOP_K_AML` | `30` | AML-facing candidate cap |
-| `TARGET_ACCEPTED_ROIS` | `5` | preferred number of accepted ROIs |
-| `MAX_ACCEPTED_ROIS` | `5` | hard accepted ROI cap |
-| `CANDIDATE_NAV_FIELD_UM` | `600.0` | field width for candidate jumps |
-| `AML_REFERENCE_TOP_K` | `7` | reference neighbors per tile |
-| `AML_REFERENCE_AGGREGATION` | `mean` | neighbor similarity aggregation |
-| `AML_ABSOLUTE_MIN_DARK_SCORE` | `0.04` | minimum dark/cellularity score in AML reference mode |
-
-## Current Implementation Note
-
-Some checked-in strings describe the pipeline as "dark-guided supertile coarse
-filtering." The lower-level tiling and ranking code does support explicit
-dark-region boxes as a prior. In the main interactive AML path in `tools.py`,
-however, `build_unsupervised_roi_index()` is currently invoked with
-`dark_region_boxes_level0=None`, and `select_topk_candidates_for_view()` is
-invoked with `focus_boxes_level0=None`. Therefore, the active pipeline should be
-understood as:
-
-```text
-foreground/coarse/quality tile filtering
-  -> per-tile dark/cellularity scores
-  -> embedding/reference retrieval
-  -> morphology-aware AML candidate ranking
-```
-
-Explicit dark-region boxes remain available as a visualization layer and an
-optional ranking hook, but they are not a mandatory hard gate in the active
-interactive AML agent path.
+5. The agent loop is bounded and reportable. It produces a concise trail of
+   selected ROIs, morphology observations, final decision, confidence, and
+   limitations.

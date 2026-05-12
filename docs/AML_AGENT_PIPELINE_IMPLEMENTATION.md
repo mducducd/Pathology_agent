@@ -1,84 +1,140 @@
-# AML Agent Pipeline Methodology
+# AML Agent Pipeline Implementation
 
-This document describes the end-to-end AML detector agent implemented in this
-repository. It focuses on the active methodology: how the system opens a bone
-marrow WSI, reduces it to candidate high-power regions, guides the VLM through a
-bounded ROI collection policy, and produces a morphology-only AML triage report.
+This document describes the end-to-end AML pipeline implemented in this
+repository. It focuses on the production two-stage architecture: how the system
+opens a bone marrow WSI, reduces it to candidate high-power regions, guides the
+VLM through a bounded ROI collection stage, and then passes the collected ROI
+images to a separate diagnosis stage for a strict morphology-only AML report.
 
-The key design idea is not to ask the VLM to scan an entire WSI unaided. The
-backend first builds a compact, morphology-aware candidate map from cheap stain
-heuristics, foundation-model embeddings, and curated ROI-quality references.
-The VLM then acts like a pathologist using a digital slide viewer: it jumps to
-promising regions, inspects locally, keeps exactly the configured number of
-interpretable ROIs, and makes a final morphology-only decision from those ROIs.
+The key design idea is not to ask the VLM to scan an entire gigapixel WSI
+unaided. The backend first builds a compact, morphology-aware candidate map from
+cheap stain heuristics, foundation-model embeddings, and curated ROI-quality
+references. Stage-1 (`WSIAmlRoiCollectorAgent`) acts like a pathologist using a
+digital slide viewer: it jumps to promising regions, inspects locally, and keeps
+exactly 5 interpretable ROIs. Stage-2 (`WSIAmlDiagnosisAgent`) receives only the
+ROI images — completely blind to filenames and metadata — and returns a strict
+JSON morphology report.
 
 ## Source Map
 
-The pipeline is spread across these files:
-
 | Area | Main files |
 | --- | --- |
-| Runtime entrypoints | `main.py`, `evaluate/run_single_slide.py`, `evaluate/run_batch_aml.sh` |
-| Agent selection and tools | `wsi_core_pkg/runtime.py`, `wsi_core_pkg/agents.py`, `wsi_core_pkg/tools.py` |
-| AML task prompt | `wsi_core_pkg/prompts.py` |
+| Runtime entrypoints | `main.py`, `evaluate/run_single_slide.py`, `evaluate/run_batch_aml.sh`, `evaluate/run_batch_aml_diagnosis.sh` |
+| Agent definitions | `wsi_core_pkg/agents.py` |
+| Pipeline runners and ROI collection | `wsi_core_pkg/runtime.py` |
+| Navigation tools | `wsi_core_pkg/tools.py` |
+| AML prompts (collection and diagnosis) | `wsi_core_pkg/prompts.py` |
 | Context/image injection | `wsi_core_pkg/context_injection.py` |
+| AML output validation | `wsi_core_pkg/aml_validation.py` |
 | Dark/cellularity overlay | `wsi_core_pkg/dark_regions.py` |
 | Tiling and embedding extraction | `wsi_core_pkg/embeddings/tiling.py` |
 | Raw tile quality heuristics | `wsi_core_pkg/embeddings/tile_prefilter.py` |
 | Coarse thumbnail prefilter | `wsi_core_pkg/embeddings/openslide_prefilter.py` |
 | Candidate ranking/retrieval | `wsi_core_pkg/embeddings/roi_ranker.py` |
 | Reports | `wsi_core_pkg/reporting.py` |
+| Post-hoc ROI collection from prior runs | `create_roi_collections.py` |
 | Tunable defaults | `configs/config.yaml` |
 
-## End-to-End Flow
+## Agents
 
-1. The user selects a WSI, AML agent, VLM model, embedding extractor, tile size,
-   batch size, ROI crop size, and tile prefilter mode in the web UI or CLI.
+### WSIAmlRoiCollectorAgent (Stage 1 — `aml_roi`)
 
-2. `run_wsi_agent_for_web()` resets global WSI state with the selected slide,
-   extractor, tile prefilter, ROI target, and cache settings. It selects
-   `WSIAmlDetectorAgent`, whose instructions are `DEFAULT_AML_PROMPT`.
+Instructions: `DEFAULT_AML_ROI_COLLECTION_PROMPT`
 
-3. The agent must call `wsi_get_overview_view()` first. That renders the
-   whole-slide overview and lazily triggers ROI candidate preparation through
-   `_attach_roi_candidates()` -> `_refresh_roi_candidates_for_current_view()` ->
+Tools: `wsi_get_overview_view`, `wsi_zoom_current_norm`, `wsi_zoom_full_norm`,
+`wsi_pan_current`, `wsi_get_view_info`, `wsi_open_candidate`, `wsi_mark_candidate`,
+`wsi_mark_roi_norm`, `wsi_discard_last_roi`
+
+Goal: Mark exactly 5 high-quality, distinct high-power ROIs. Produces
+`roi_collection.json` and `images/roi_N.jpg` for the diagnosis stage.
+
+### WSIAmlDiagnosisAgent (Stage 2 — `aml_diagnosis`)
+
+Instructions: `DEFAULT_AML_DIAGNOSIS_PROMPT`
+
+Tools: none — direct chat-completion call at temperature 0.0.
+
+Goal: Receive ROI images (blind — no filenames or metadata) and return a strict
+JSON object with per-ROI blast ranges, global blast range, `final_decision`
+(`Normal marrow` or `Acute leukemia`), confidence, and NPM1 prediction when AML
+is established.
+
+### aml_auto / aml (full two-stage pipeline)
+
+Chains Stage 1 then Stage 2: `_run_aml_roi()` → `roi_collection.json` →
+`_run_aml_diagnosis()`. The primary production mode.
+
+### WSIAmlDetectorAgent (`aml_detector` — legacy)
+
+Instructions: `DEFAULT_AML_PROMPT`
+
+Single-stage agent that combines navigation and diagnosis. Included for
+comparison and debugging; the two-stage `aml_auto` pipeline is the default.
+
+## End-to-End Flow (aml_auto)
+
+1. The user selects a WSI, agent type (`aml_auto`), VLM model, embedding
+   extractor, tile size, batch size, ROI crop size, and tile prefilter mode in
+   the web UI or CLI.
+
+2. `run_wsi_agent_for_web()` dispatches to `_run_aml_auto()`, which calls
+   `_run_aml_roi()` then `_run_aml_diagnosis()`.
+
+### Stage 1 — ROI Collection
+
+3. `_run_aml_roi()` resets global WSI state with `AGENT_TYPE="aml"` (so AML
+   ranking, context injection, and tools all activate). It instantiates
+   `WSIAmlRoiCollectorAgent` via `_agent_with_model()`.
+
+4. `Runner.run_sync()` starts the agent loop. The agent must call
+   `wsi_get_overview_view()` first, which renders the whole-slide overview and
+   lazily triggers ROI candidate preparation through `_attach_roi_candidates()`
+   → `_refresh_roi_candidates_for_current_view()` →
    `_ensure_unsupervised_roi_index()`.
 
-4. Candidate preparation checks disk caches. If a matching ROI index or feature
+5. Candidate preparation checks disk caches. If a matching ROI index or feature
    matrix already exists for the slide/extractor/filter/tile-size setting, it is
    loaded. Otherwise the slide is tiled, filtered, embedded, reference-scored,
    and indexed.
 
-5. The current view receives `roi_candidates`. In AML mode the candidates are
-   ranked by dark/cellularity score, reference retrieval support, and bad-quality
+6. The current view receives `roi_candidates`. In AML mode candidates are ranked
+   by dark/cellularity score, reference retrieval support, and bad-quality
    penalties. Bad-like candidates are hidden when non-bad alternatives exist.
 
-6. The VLM opens a candidate with `wsi_open_candidate(rank)`. This jumps to a
-   configured candidate navigation field, commonly around 600 um unless
-   overridden. The candidate is only a region-level hint, not the final ROI.
+7. The VLM opens a candidate with `wsi_open_candidate(rank)`, jumping to the
+   configured candidate navigation field (default 600 µm). The candidate is a
+   region-level hint, not a fixed target.
 
-7. Inside that field, the VLM locally zooms/pans or directly marks a usable ROI.
-   The final ROI crop is created at native level 0 with fixed side length
-   `ROI_OUTPUT_SIZE_PX` and stored in `state._roi_marks`.
+8. Inside that field, the VLM zooms/pans to inspect sub-areas and calls
+   `wsi_mark_roi_norm()` at the best discovered position. The final ROI crop is
+   created at native level 0 with fixed side length `ROI_OUTPUT_SIZE_PX` and
+   stored in `state._roi_marks`.
 
-8. The system blocks duplicate ROIs, warns on empty/background fields, rejects
-   saturated dark-blue flood artifacts, auto-saves one representative good tile
-   from early kept AML ROIs, and guides the VLM toward the next unattempted
-   candidate.
+9. The system blocks duplicate ROIs, warns on empty/background fields, rejects
+   saturated dark-blue flood artifacts, and guides the VLM toward the next
+   unattempted candidate.
 
-9. The agent repeats candidate opening and local inspection until the configured
-   AML target is reached. The default config uses target 5 and hard cap 5; the
-   prompt asks for exactly 5 accepted ROIs.
+10. The agent repeats until 5 ROIs are accepted. Navigation guards stop further
+    tool calls once the hard cap is reached.
 
-10. Once the target/cap is reached, navigation guards stop further tool calls.
-    Context injection shows all kept ROI images and asks the model for strict
-    JSON: per-ROI blast range, global blast range, final decision, confidence,
-    and NPM1 prediction only if AML is morphologically established.
+11. `_run_aml_roi()` builds `roi_collection.json` from `state._roi_marks`,
+    copies ROI images and overlay images into `<case_output_dir>/images/`, and
+    writes a navigation report.
 
-11. `write_markdown_report()` writes `report.md` and `report.txt`, including the
-    prompt, final output, ROI images/metadata, navigation steps, and AML
-    retrieval summaries. CLI wrappers also export `summary.json`, `report.json`,
-    `final_output.txt`, ROI images, and state.
+### Stage 2 — Diagnosis
+
+12. `_run_aml_diagnosis()` loads the `roi_collection.json` produced in Stage 1.
+    State is re-initialized minimally (no slide loaded).
+
+13. Each accepted ROI image is encoded as a base64 data URL. The diagnosis agent
+    receives only the encoded images — no filenames, no metadata, no ROI labels.
+
+14. A single chat-completion call at temperature 0.0 returns the strict JSON
+    diagnosis. `_extract_json_from_text()` strips any prose wrapper.
+
+15. `write_markdown_report()` writes `report.md` and `report.txt`. CLI wrappers
+    also export `summary.json`, `report.json`, `final_output.txt`, ROI images,
+    and state.
 
 ## Methodology Overview
 
@@ -438,10 +494,6 @@ tiles for the embedding extractor.
 
 The first pass builds one thumbnail cell per supertile. A supertile is
 foreground when:
-
-```text
-thumbnail_gray < ROI_INDEX_BUILD_BRIGHTNESS_CUTOFF
-```
 
 OpenSlide non-empty bounds, when present, further restrict the grid.
 

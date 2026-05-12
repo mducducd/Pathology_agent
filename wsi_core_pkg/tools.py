@@ -11,6 +11,7 @@ from agents import function_tool
 from PIL import Image, ImageDraw
 
 from . import state
+from .aml_output import persist_current_aml_roi_collection
 from .config import (
     DEFAULT_MPP_UM,
     EXAMPLE_TILES_ROOT,
@@ -22,6 +23,7 @@ from .config import (
     TILE_SIZE_UM,
 )
 from .embeddings import embedding_extractor_display_name, get_embedding_extractor
+from .exceptions import AmlRoiCollectionComplete
 from .embeddings.roi_ranker import (
     build_unsupervised_roi_index,
     select_topk_candidates_for_view,
@@ -36,7 +38,6 @@ from .slide_utils import (
     _render_view_from_base_bbox,
     _save_debug_image,
     _safe,
-    _safe_filename,
 )
 from .tuning_config import tuning_value
 
@@ -92,11 +93,9 @@ def _tools_str(key: str, section: str = "tools.cache", default: str = "") -> str
 
 
 ROI_CANDIDATE_TOP_K = _tools_int("ROI_CANDIDATE_TOP_K", "tools.candidates", 72)
-ROI_MARK_CANDIDATE_TOLERANCE_NORM = _tools_int("ROI_MARK_CANDIDATE_TOLERANCE_NORM", "tools.candidates", 170)
 ROI_CANDIDATE_ALLOW_FALLBACK = _tools_bool("ROI_CANDIDATE_ALLOW_FALLBACK", "tools.candidates", True)
 # Hard cap on how many candidates the VLM sees in AML mode after raw retrieval ranking.
 ROI_CANDIDATE_TOP_K_AML = _tools_int("ROI_CANDIDATE_TOP_K_AML", "tools.candidates", 30)
-ROI_RANKER_BATCH_SIZE = _tools_int("ROI_RANKER_BATCH_SIZE", "tools.candidates", 64)
 ROI_RANKER_MAX_WORKERS = _tools_int("ROI_RANKER_MAX_WORKERS", "tools.candidates", 8)
 ROI_COARSE_PREFILTER_TRIGGER_SUPERTILES = _tools_int("ROI_COARSE_PREFILTER_TRIGGER_SUPERTILES", "tools.prefilter.coarse", 128)
 ROI_COARSE_PREFILTER_KEEP_RATIO = _tools_float("ROI_COARSE_PREFILTER_KEEP_RATIO", "tools.prefilter.coarse", 0.22)
@@ -108,10 +107,6 @@ ROI_QUALITY_PREFILTER_TRIGGER_TILES = _tools_int("ROI_QUALITY_PREFILTER_TRIGGER_
 ROI_QUALITY_PREFILTER_RANDOM_RESERVE_RATIO = _tools_float("ROI_QUALITY_PREFILTER_RANDOM_RESERVE_RATIO", "tools.prefilter.quality", 0.05)
 _cache_root_from_config = _tools_str("CACHE_ROOT_DIR", "tools.cache", "")
 CACHE_ROOT_DIR = os.getenv("CACHE_ROOT_DIR", _cache_root_from_config).strip() or os.path.abspath("./outputs/_cache")
-
-ROI_TILE_CACHE_DIR = os.getenv("ROI_TILE_CACHE_DIR", "").strip()
-if not ROI_TILE_CACHE_DIR:
-    ROI_TILE_CACHE_DIR = os.path.join(CACHE_ROOT_DIR, "feature_cache")
 
 ROI_FEATURE_CACHE_DIR = os.getenv("ROI_FEATURE_CACHE_DIR", "").strip()
 if not ROI_FEATURE_CACHE_DIR:
@@ -131,13 +126,6 @@ LOW_TISSUE_WARNING_STEPS = _tools_int("LOW_TISSUE_WARNING_STEPS", "tools.navigat
 SAME_REGION_LOOKBACK_STEPS = _tools_int("SAME_REGION_LOOKBACK_STEPS", "tools.navigation", 0)
 SAME_REGION_RADIUS_MULTIPLIER = _tools_float("SAME_REGION_RADIUS_MULTIPLIER", "tools.navigation", 1.5)
 SAME_REGION_WARNING_STEPS = _tools_int("SAME_REGION_WARNING_STEPS", "tools.navigation", 1)
-
-
-def _selected_batch_size() -> int:
-    try:
-        return max(1, int(getattr(state, "BATCH_SIZE", ROI_RANKER_BATCH_SIZE) or ROI_RANKER_BATCH_SIZE))
-    except Exception:
-        return int(ROI_RANKER_BATCH_SIZE)
 
 
 def _selected_extractor_label() -> str:
@@ -166,13 +154,8 @@ def _selected_target_accepted_rois() -> int:
     return min(_selected_max_accepted_rois(), max(1, raw_target))
 
 
-def _is_weak_planner_model() -> bool:
-    name = str(getattr(state, "MODEL_NAME", "") or "").lower()
-    return "gpt-oss" in name
-
-
 def _allow_discard_last_roi(roi: Dict[str, Any]) -> tuple[bool, str]:
-    """Near the AML target ROI count, allow discard only for clearly bad ROIs. Weak planner models have looser criteria."""
+    """Near the AML target ROI count, allow discard only for clearly bad ROIs."""
     if not _agent_is_aml():
         return True, ""
 
@@ -180,10 +163,6 @@ def _allow_discard_last_roi(roi: Dict[str, Any]) -> tuple[bool, str]:
     target_accepted_rois = _selected_target_accepted_rois()
     tissue_fraction = roi.get("tissue_fraction")
     clearly_empty = isinstance(tissue_fraction, (int, float)) and float(tissue_fraction) < 0.15
-
-    # For weak planners, allow discards even near target
-    if d():
-        return True, ""
 
     if kept_roi_count >= max(1, target_accepted_rois - 1) and not clearly_empty:
         return (
@@ -196,98 +175,6 @@ def _allow_discard_last_roi(roi: Dict[str, Any]) -> tuple[bool, str]:
         )
 
     return True, ""
-
-
-def _save_tile_from_current_view_center(
-    *,
-    label: str,
-    quality: str = "good",
-    nav_reason: str = "Auto-save diagnostic tile from kept ROI",
-) -> Dict[str, Any]:
-    if not state._current_view:
-        raise RuntimeError("Tile save requested before any current view exists.")
-
-    quality = (quality or "good").strip().lower()
-    if quality not in {"good", "bad"}:
-        raise ValueError("quality must be 'good' or 'bad'")
-
-    if quality == "good" and len(state._saved_good_tiles) >= MAX_GOOD_TILES:
-        return {"ok": False, "reason": "max_good_tiles_reached"}
-    if quality == "bad" and len(state._saved_bad_tiles) >= MAX_BAD_TILES:
-        return {"ok": False, "reason": "max_bad_tiles_reached"}
-
-    slide = _load_slide()
-    mpp = _effective_slide_mpp_um(slide)
-    tile_px = int(round(TILE_SIZE_UM / mpp))
-    tile_px = max(32, tile_px)
-
-    cv_x0 = int(state._current_view["x0"])
-    cv_y0 = int(state._current_view["y0"])
-    cv_w = int(state._current_view["w"])
-    cv_h = int(state._current_view["h"])
-    slide_w0, slide_h0 = slide.level_dimensions[0]
-    tile_px = min(tile_px, slide_w0, slide_h0)
-
-    cx_base = cv_x0 + (cv_w // 2)
-    cy_base = cv_y0 + (cv_h // 2)
-    x0 = cx_base - (tile_px // 2)
-    y0 = cy_base - (tile_px // 2)
-    x0 = max(0, min(x0, slide_w0 - tile_px))
-    y0 = max(0, min(y0, slide_h0 - tile_px))
-
-    region = slide.read_region((x0, y0), 0, (tile_px, tile_px)).convert("RGB")
-    region = region.resize((TILE_PX, TILE_PX), Image.BILINEAR)
-
-    run_id = state.RUN_ID or datetime.now().strftime("%Y%m%d_%H%M%S")
-    out_dir = os.path.join(SELECTED_TILES_ROOT, run_id, "Selected_Tiles", quality)
-    os.makedirs(out_dir, exist_ok=True)
-
-    idx = (len(state._saved_good_tiles) + 1) if quality == "good" else (len(state._saved_bad_tiles) + 1)
-    x_um = x0 * mpp
-    y_um = y0 * mpp
-    out_path = os.path.join(out_dir, f"{quality}_{idx:04d}_tile_({x_um}, {y_um}).jpg")
-    region.save(out_path, format="JPEG", quality=95)
-
-    record = {
-        "quality": quality,
-        "label": label,
-        "path": out_path,
-        "bbox_level0": [x0, y0, tile_px, tile_px],
-        "tile_px": TILE_PX,
-        "tile_um": TILE_SIZE_UM,
-        "mpp_used": mpp,
-    }
-    if quality == "good":
-        state._saved_good_tiles.append(record)
-    else:
-        state._saved_bad_tiles.append(record)
-
-    try:
-        from wsi_core_pkg.embeddings.roi_ranker import _clear_reference_hnsw_cache
-        _clear_reference_hnsw_cache()
-    except Exception:
-        pass
-
-    _log_step(
-        "wsi_save_tile_norm",
-        nav_reason,
-        {
-            "view_bbox_level0": record["bbox_level0"],
-            "field_width_um": TILE_SIZE_UM,
-            "field_height_um": TILE_SIZE_UM,
-        },
-    )
-
-    return {
-        "ok": True,
-        "quality": quality,
-        "path": out_path,
-        "count_good": len(state._saved_good_tiles),
-        "count_bad": len(state._saved_bad_tiles),
-        "tile_px": TILE_PX,
-        "tile_um": TILE_SIZE_UM,
-        "mpp_used": mpp,
-    }
 
 
 def _selected_candidate_nav_field_um() -> float:
@@ -373,7 +260,7 @@ def _aml_navigation_guard() -> Optional[Dict[str, Any]]:
         return None
     if _roi_cap_reached():
         return _roi_cap_response()
-    if _roi_target_reached() and not _is_weak_planner_model():
+    if _roi_target_reached():
         return _finalization_required_response()
     return None
 
@@ -523,16 +410,6 @@ def _use_coarse_prefilter(method: str | None = None) -> bool:
 
 def _use_quality_prefilter(method: str | None = None) -> bool:
     return (method or _selected_tile_prefilter_method()) in {"quality", "hybrid"}
-
-
-def _tile_prefilter_label(method: str | None = None) -> str:
-    value = method or _selected_tile_prefilter_method()
-    return {
-        "none": "No extra prefilter",
-        "coarse": "Thumbnail coarse-to-fine",
-        "quality": "Raw-tile quality score",
-        "hybrid": "Hybrid coarse + quality",
-    }.get(value, "Raw-tile quality score")
 
 
 def _selected_candidate_source(aml_mode: bool) -> str:
@@ -778,7 +655,7 @@ def _ensure_unsupervised_roi_index():
             phase="ready",
             status="done",
             message="ROI candidates already prepared for this run.",
-            extra={"source": "cache", "candidate_source": candidate_source, "slide_path": state.SLIDE_PATH},
+            extra={"source": "cache", "candidate_source": candidate_source},
         )
         return cached
     if aml_mode:
@@ -817,7 +694,6 @@ def _ensure_unsupervised_roi_index():
         message="Preparing ROI candidates from slide tiles...",
         extra={
             "source": candidate_source,
-            "slide_path": state.SLIDE_PATH,
             "tile_prefilter_method": tile_prefilter_method,
         },
     )
@@ -911,7 +787,7 @@ def _ensure_unsupervised_roi_index():
             extractor_name=state.EXTRACTOR_NAME,
             tile_size_um=state.TILE_SIZE_UM,
             tile_size_px=state.TILE_SIZE_PX,
-            batch_size=_selected_batch_size(),
+            batch_size=state.BATCH_SIZE,
             cache_dir=None,
             feature_cache_dir=feature_cache_dir,
             max_workers=ROI_RANKER_MAX_WORKERS,
@@ -1001,7 +877,7 @@ def _ensure_unsupervised_roi_index():
             {
                 "roi_candidate_stage": "index_built",
                 "roi_candidate_pipeline": pipeline_desc,
-                "roi_candidate_index_meta": dict(state._roi_ranker_meta),
+                "roi_candidate_index_meta": {k: v for k, v in state._roi_ranker_meta.items() if k != "slide_path"},
                 "roi_candidate_count": 0,
             },
         )
@@ -1028,7 +904,7 @@ def _ensure_unsupervised_roi_index():
                 {
                     "roi_candidate_stage": "index_failed",
                     "roi_candidate_pipeline": pipeline_desc,
-                    "roi_candidate_index_meta": dict(state._roi_ranker_meta),
+                    "roi_candidate_index_meta": {k: v for k, v in state._roi_ranker_meta.items() if k != "slide_path"},
                     "roi_candidate_warning": f"Candidate index build failed: {err_text}",
                     "roi_candidate_count": 0,
                 },
@@ -1573,7 +1449,7 @@ def _attach_roi_candidates(info: Dict[str, Any], top_k: int = ROI_CANDIDATE_TOP_
 
     info["roi_candidate_source"] = state._last_roi_candidate_source
     info["roi_candidate_prep"] = dict(state._roi_candidate_prep) if state._roi_candidate_prep else None
-    info["roi_candidate_overlay_path"] = state._last_roi_candidate_overlay_path
+    info["roi_candidate_overlay_path"] = None
     extractor_label = _selected_extractor_label()
     tile_prefilter_method = _selected_tile_prefilter_method()
 
@@ -1584,7 +1460,7 @@ def _attach_roi_candidates(info: Dict[str, Any], top_k: int = ROI_CANDIDATE_TOP_
     else:
         info["roi_candidate_pipeline"] = f"{extractor_label} tile embeddings -> kNN novelty ranking -> top-K per current view"
     if state._roi_ranker_meta:
-        info["roi_candidate_index_meta"] = dict(state._roi_ranker_meta)
+        info["roi_candidate_index_meta"] = {k: v for k, v in state._roi_ranker_meta.items() if k != "slide_path"}
         ref_stats = state._roi_ranker_meta.get("reference_stats")
         if aml_mode and isinstance(ref_stats, dict):
             info["aml_reference_stats"] = dict(ref_stats)
@@ -1632,45 +1508,17 @@ def _attach_roi_candidates(info: Dict[str, Any], top_k: int = ROI_CANDIDATE_TOP_
             guidance_intro = (
                 "Treat roi_candidates as candidate blast-suspected ROIs selected from tissue, nucleated-cell, focus, RBC, and artifact heuristics across the current view. Prioritize deep dark blue-purple cellular fields; dark red-pink is only a rare fallback when clearly cellular, and gray-black low-chroma junk should be rejected. "
             )
-            if _is_weak_planner_model():
-                info["roi_candidate_guidance"] = (
-                    guidance_intro +
-                    "Follow a standard practical hierarchy: tissue first, then nucleated-cell-rich interpretable marrow over RBC-rich/empty areas, then blast-suspected morphology. "
-                    f"Collect as many accepted ROIs as feasible; stop as soon as you have enough evidence — even 1 ROI is acceptable if the slide yields no interpretable tissue. Hard cap is {_selected_max_accepted_rois()}. "
-                    "Use roi_candidates to jump into a promising region. Once inside a candidate, mark it immediately with wsi_mark_roi_norm if tissue is interpretable — do NOT zoom/pan first. "
-                    "Accept borderline ROIs rather than skipping them. Only discard if tissue is clearly unusable (background-only, severe artifact, or stain pool)."
-                )
-            else:
-                info["roi_candidate_guidance"] = (
-                    guidance_intro +
-                    "Follow a standard practical hierarchy: tissue first, then nucleated-cell-rich interpretable marrow over RBC-rich/empty areas, then blast-suspected morphology. Prefer ROIs with adequate nucleated cells, readable single-cell detail, acceptable focus, and limited artifact. Moderate cellularity is acceptable if morphology is still assessable; do not reject a usable ROI only because it is not the single densest field in the region. "
-                    f"A single ROI is screening evidence only. For AML, soft target is {_selected_target_accepted_rois()} kept ROIs from representative distinct slide regions when feasible; hard cap is {_selected_max_accepted_rois()}. "
-                    "Use roi_candidates only to jump into a promising region quickly. After opening a candidate region, search within that field by zooming/panning until you find a representative high-power ROI. Choose a nearby area with better readability or less artifact when available, but do not over-search indefinitely for a marginally denser patch. Then use wsi_mark_roi_norm."
-                )
+            info["roi_candidate_guidance"] = (
+                guidance_intro +
+                "Follow a standard practical hierarchy: tissue first, then nucleated-cell-rich interpretable marrow over RBC-rich/empty areas, then blast-suspected morphology. Prefer ROIs with adequate nucleated cells, readable single-cell detail, acceptable focus, and limited artifact. Moderate cellularity is acceptable if morphology is still assessable; do not reject a usable ROI only because it is not the single densest field in the region. "
+                f"A single ROI is screening evidence only. For AML, soft target is {_selected_target_accepted_rois()} kept ROIs from representative distinct slide regions when feasible; hard cap is {_selected_max_accepted_rois()}. "
+                "Use roi_candidates only to jump into a promising region quickly. After opening a candidate region, search within that field by zooming/panning until you find a representative high-power ROI. Choose a nearby area with better readability or less artifact when available, but do not over-search indefinitely for a marginally denser patch. Then use wsi_mark_roi_norm."
+            )
         else:
             info["roi_candidate_guidance"] = (
                 "Use roi_candidates as region-level guidance, then search locally within the opened field before choosing a final ROI with wsi_mark_roi_norm."
             )
     return info
-
-
-def _closest_candidate(
-    cx_999: float,
-    cy_999: float,
-) -> tuple[Optional[Dict[str, Any]], float]:
-    if not state._last_roi_candidates:
-        return None, float("inf")
-    best: Optional[Dict[str, Any]] = None
-    best_dist = float("inf")
-    for cand in state._last_roi_candidates:
-        cc = cand.get("center_norm") or [0, 0]
-        dx = float(cx_999) - float(cc[0])
-        dy = float(cy_999) - float(cc[1])
-        dist = float((dx * dx + dy * dy) ** 0.5)
-        if dist < best_dist:
-            best = cand
-            best_dist = dist
-    return best, best_dist
 
 
 def _candidate_by_rank(rank: int, *, top_k: int = ROI_CANDIDATE_TOP_K) -> Optional[Dict[str, Any]]:
@@ -1867,7 +1715,7 @@ def _mark_roi_from_candidate(
             flood_frac = _dark_blue_flood_fraction(Image.open(roi_img_path)) if roi_img_path else 0.0
         except Exception:
             flood_frac = 0.0
-        if flood_frac > 0.30:
+        if flood_frac > 0.40:
             return {
                 "ok": False,
                 "reason": "dark_blue_flood_rejected",
@@ -1913,16 +1761,6 @@ def _mark_roi_from_candidate(
     state.CURRENT_AGENT_ACTION = f"Marked ROI #{roi_id}: {label}"
     _record_attempted_roi_bbox(roi.get("view_bbox_level0"))
 
-    if _agent_is_aml() and len(state._saved_good_tiles) < 5:
-        auto_tile = _save_tile_from_current_view_center(
-            label=label or f"roi_{roi_id}",
-            quality="good",
-            nav_reason=f"Auto-save one good tile for kept AML ROI #{roi_id}",
-        )
-        roi["auto_saved_tile"] = dict(auto_tile)
-        if auto_tile.get("ok"):
-            roi["auto_saved_tile_path"] = auto_tile.get("path")
-
     next_rank_hint = _next_unattempted_candidate_rank()
     roi["next_candidate_rank_hint"] = next_rank_hint
     roi["next_action_hint"] = (
@@ -1957,6 +1795,13 @@ def _mark_roi_from_candidate(
     )
 
     _make_overview_with_current_box(draw_current_box=True)
+    if _agent_is_aml():
+        persist_current_aml_roi_collection()
+        if _roi_cap_reached():
+            cap = _selected_max_accepted_rois()
+            raise AmlRoiCollectionComplete(
+                f"AML ROI collection completed after reaching MAX_ACCEPTED_ROIS ({cap})."
+            )
     # Do not auto clear candidate cache - allow continued exploration within current region
 
     return roi
@@ -2040,6 +1885,99 @@ def _open_candidate_by_rank(
     return info
 
 
+def _normalize_tile_quality(quality: str) -> str:
+    normalized = (quality or "good").strip().lower()
+    if normalized not in {"good", "bad"}:
+        raise ValueError("quality must be 'good' or 'bad'")
+    return normalized
+
+
+def _tile_save_limit_response(quality: str) -> Optional[Dict[str, Any]]:
+    if quality == "good" and len(state._saved_good_tiles) >= MAX_GOOD_TILES:
+        return {"ok": False, "reason": "max_good_tiles_reached"}
+    if quality == "bad" and len(state._saved_bad_tiles) >= MAX_BAD_TILES:
+        return {"ok": False, "reason": "max_bad_tiles_reached"}
+    return None
+
+
+def _tile_bbox_from_current_view_norm(
+    *,
+    slide,
+    mpp: float,
+    x0_999: int,
+    y0_999: int,
+    x1_999: int,
+    y1_999: int,
+) -> tuple[int, int, int]:
+    tile_px = max(32, int(round(TILE_SIZE_UM / mpp)))
+
+    x0_999_cl = max(0, min(999, x0_999))
+    x1_999_cl = max(0, min(999, x1_999))
+    y0_999_cl = max(0, min(999, y0_999))
+    y1_999_cl = max(0, min(999, y1_999))
+
+    cx_999 = (x0_999_cl + x1_999_cl) / 2.0
+    cy_999 = (y0_999_cl + y1_999_cl) / 2.0
+
+    cv_x0 = state._current_view["x0"]
+    cv_y0 = state._current_view["y0"]
+    cv_w = state._current_view["w"]
+    cv_h = state._current_view["h"]
+    slide_w0, slide_h0 = slide.level_dimensions[0]
+    tile_px = min(tile_px, slide_w0, slide_h0)
+
+    cx_base = cv_x0 + int(round((cx_999 / 999.0) * cv_w))
+    cy_base = cv_y0 + int(round((cy_999 / 999.0) * cv_h))
+
+    x0 = max(0, min(cx_base - tile_px // 2, slide_w0 - tile_px))
+    y0 = max(0, min(cy_base - tile_px // 2, slide_h0 - tile_px))
+    return x0, y0, tile_px
+
+
+def _save_selected_tile_record(
+    *,
+    slide,
+    mpp: float,
+    bbox_level0: tuple[int, int, int],
+    label: str,
+    quality: str,
+) -> Dict[str, Any]:
+    x0, y0, tile_px = bbox_level0
+    region = slide.read_region((x0, y0), 0, (tile_px, tile_px)).convert("RGB")
+    region = region.resize((TILE_PX, TILE_PX), Image.BILINEAR)
+
+    run_id = state.RUN_ID or datetime.now().strftime("%Y%m%d_%H%M%S")
+    out_dir = os.path.join(SELECTED_TILES_ROOT, run_id, "Selected_Tiles", quality)
+    os.makedirs(out_dir, exist_ok=True)
+
+    idx = (len(state._saved_good_tiles) + 1) if quality == "good" else (len(state._saved_bad_tiles) + 1)
+    x_um = x0 * mpp
+    y_um = y0 * mpp
+    out_path = os.path.join(out_dir, f"{quality}_{idx:04d}_tile_({x_um}, {y_um}).jpg")
+    region.save(out_path, format="JPEG", quality=95)
+
+    record = {
+        "quality": quality,
+        "label": label,
+        "path": out_path,
+        "bbox_level0": [x0, y0, tile_px, tile_px],
+        "tile_px": TILE_PX,
+        "tile_um": TILE_SIZE_UM,
+        "mpp_used": mpp,
+    }
+    if quality == "good":
+        state._saved_good_tiles.append(record)
+    else:
+        state._saved_bad_tiles.append(record)
+    return record
+
+
+def _invalidate_reference_tile_cache() -> None:
+    try:
+        from wsi_core_pkg.embeddings.roi_ranker import _clear_reference_hnsw_cache
+        _clear_reference_hnsw_cache()
+    except Exception:
+        pass
 
 
 @function_tool
@@ -2572,82 +2510,29 @@ def wsi_save_tile_norm(
         if not state._current_view:
             raise RuntimeError("wsi_save_tile_norm called before wsi_get_overview_view.")
 
-        quality = (quality or "good").strip().lower()
-        if quality not in {"good", "bad"}:
-            raise ValueError("quality must be 'good' or 'bad'")
-
-        if quality == "good" and len(state._saved_good_tiles) >= MAX_GOOD_TILES:
-            return {"ok": False, "reason": "max_good_tiles_reached"}
-        if quality == "bad" and len(state._saved_bad_tiles) >= MAX_BAD_TILES:
-            return {"ok": False, "reason": "max_bad_tiles_reached"}
+        quality = _normalize_tile_quality(quality)
+        limit_response = _tile_save_limit_response(quality)
+        if limit_response is not None:
+            return limit_response
 
         slide = _load_slide()
         mpp = _effective_slide_mpp_um(slide)
-        tile_px = int(round(TILE_SIZE_UM / mpp))
-        tile_px = max(32, tile_px)
-
-        x0_999_cl = max(0, min(999, x0_999))
-        x1_999_cl = max(0, min(999, x1_999))
-        y0_999_cl = max(0, min(999, y0_999))
-        y1_999_cl = max(0, min(999, y1_999))
-
-        cx_999 = (x0_999_cl + x1_999_cl) / 2.0
-        cy_999 = (y0_999_cl + y1_999_cl) / 2.0
-
-        cv_x0 = state._current_view["x0"]
-        cv_y0 = state._current_view["y0"]
-        cv_w = state._current_view["w"]
-        cv_h = state._current_view["h"]
-        slide_w0, slide_h0 = slide.level_dimensions[0]
-        tile_px = min(tile_px, slide_w0, slide_h0)
-
-        cx_base = cv_x0 + int(round((cx_999 / 999.0) * cv_w))
-        cy_base = cv_y0 + int(round((cy_999 / 999.0) * cv_h))
-
-        x0 = cx_base - tile_px // 2
-        y0 = cy_base - tile_px // 2
-        x0 = max(0, min(x0, slide_w0 - tile_px))
-        y0 = max(0, min(y0, slide_h0 - tile_px))
-
-        region = slide.read_region((x0, y0), 0, (tile_px, tile_px)).convert("RGB")
-        region = region.resize((TILE_PX, TILE_PX), Image.BILINEAR)
-
-        run_id = state.RUN_ID or datetime.now().strftime("%Y%m%d_%H%M%S")
-        out_dir = os.path.join(SELECTED_TILES_ROOT, run_id, "Selected_Tiles", quality)
-        os.makedirs(out_dir, exist_ok=True)
-
-        idx = (len(state._saved_good_tiles) + 1) if quality == "good" else (len(state._saved_bad_tiles) + 1)
-        label_safe = _safe_filename(label)
-        x_um = x0 * mpp
-        y_um = y0 * mpp
-        out_path = os.path.join(
-            out_dir,
-            f"{quality}_{idx:04d}_tile_({x_um}, {y_um}).jpg",
+        bbox_level0 = _tile_bbox_from_current_view_norm(
+            slide=slide,
+            mpp=mpp,
+            x0_999=x0_999,
+            y0_999=y0_999,
+            x1_999=x1_999,
+            y1_999=y1_999,
         )
-        region.save(out_path, format="JPEG", quality=95)
-
-        record = {
-            "quality": quality,
-            "label": label,
-            "path": out_path,
-            "bbox_level0": [x0, y0, tile_px, tile_px],
-            "tile_px": TILE_PX,
-            "tile_um": TILE_SIZE_UM,
-            "mpp_used": mpp,
-        }
-        _ = label_safe
-
-        if quality == "good":
-            state._saved_good_tiles.append(record)
-        else:
-            state._saved_bad_tiles.append(record)
-
-        # Invalidate HNSW cache so new tiles are included in future retrievals
-        try:
-            from wsi_core_pkg.embeddings.roi_ranker import _clear_reference_hnsw_cache
-            _clear_reference_hnsw_cache()
-        except Exception:
-            pass  # Non-critical - cache will rebuild naturally
+        record = _save_selected_tile_record(
+            slide=slide,
+            mpp=mpp,
+            bbox_level0=bbox_level0,
+            label=label,
+            quality=quality,
+        )
+        _invalidate_reference_tile_cache()
 
         _log_step(
             "wsi_save_tile_norm",
@@ -2722,6 +2607,8 @@ def wsi_discard_last_roi(
             nav_reason,
             {"view_bbox_level0": roi.get("view_bbox_level0")},
         )
+        if _agent_is_aml():
+            persist_current_aml_roi_collection()
         response = {
             "ok": True,
             "discarded_roi_id": roi["roi_id"],
