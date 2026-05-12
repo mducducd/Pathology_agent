@@ -1,12 +1,6 @@
 # Slide Agent
 
-<p align="center">
-  <img src="static/assets/aml_agent_logo.png" alt="AML Agent Logo" width="160" />
-</p>
-
-<p align="center">
-  Open-source whole-slide pathology agent for AML ROI collection and diagnosis.
-</p>
+Open-source whole-slide pathology agent for AML ROI collection and diagnosis.
 
 ## Project Visuals
 
