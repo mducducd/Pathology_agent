@@ -1,5 +1,5 @@
 {
-  "run_id": "20260512_105514_f7bfac",
+  "run_id": "20260512_120412_9728f8",
   "agent_type": "aml",
   "model_name": "gemma-4-31B-it",
   "current_view": {
@@ -11,7 +11,7 @@
     "level_downsample": 1.0,
     "shown_w": 2048,
     "shown_h": 2048,
-    "debug_path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/outputs/20260512_105514_f7bfac/wsi_debug/0013_roi.jpg",
+    "debug_path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/outputs/20260512_120412_9728f8/wsi_debug/0013_roi.jpg",
     "view_tag": "roi",
     "field_width_um": 325.632,
     "field_height_um": 325.632,
@@ -39,7 +39,7 @@
       "step_index": 1,
       "tool": "wsi_get_overview_view",
       "nav_reason": "Initial overview to identify cellular regions.",
-      "debug_path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/outputs/20260512_105514_f7bfac/wsi_debug/0001_overview.jpg",
+      "debug_path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/outputs/20260512_120412_9728f8/wsi_debug/0001_overview.jpg",
       "view_level": 6,
       "view_bbox_level0": [
         0,
@@ -68,7 +68,7 @@
       "step_index": 2,
       "tool": "wsi_open_candidate",
       "nav_reason": "Opening the top-ranked candidate to find a high-cellularity region for ROI collection.",
-      "debug_path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/outputs/20260512_105514_f7bfac/wsi_debug/0004_zoom.jpg",
+      "debug_path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/outputs/20260512_120412_9728f8/wsi_debug/0004_zoom.jpg",
       "view_level": 0,
       "view_bbox_level0": [
         93092,
@@ -97,7 +97,7 @@
       "step_index": 3,
       "tool": "wsi_mark_roi_norm",
       "nav_reason": "High cellularity with clear nucleated cells and readable morphology.",
-      "debug_path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/outputs/20260512_105514_f7bfac/wsi_debug/0007_roi.jpg",
+      "debug_path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/outputs/20260512_120412_9728f8/wsi_debug/0007_roi.jpg",
       "view_level": 0,
       "view_bbox_level0": [
         93201,
@@ -123,8 +123,8 @@
     {
       "step_index": 4,
       "tool": "wsi_open_candidate",
-      "nav_reason": "Moving to a distinct region of the slide to collect the second ROI.",
-      "debug_path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/outputs/20260512_105514_f7bfac/wsi_debug/0010_zoom.jpg",
+      "nav_reason": "Moving to a different region of the slide to ensure ROIs are from distinct areas. Candidate #2 is a high-ranked promising region.",
+      "debug_path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/outputs/20260512_120412_9728f8/wsi_debug/0010_zoom.jpg",
       "view_level": 0,
       "view_bbox_level0": [
         93092,
@@ -153,7 +153,7 @@
       "step_index": 5,
       "tool": "wsi_mark_roi_norm",
       "nav_reason": "High cellularity with clear nucleated cells and readable morphology in a distinct region.",
-      "debug_path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/outputs/20260512_105514_f7bfac/wsi_debug/0013_roi.jpg",
+      "debug_path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/outputs/20260512_120412_9728f8/wsi_debug/0013_roi.jpg",
       "view_level": 0,
       "view_bbox_level0": [
         94712,
@@ -181,7 +181,7 @@
     {
       "roi_id": 1,
       "label": "AML_ROI_1",
-      "note": "Dense cellular area with suspected blasts.",
+      "note": "Dense cellular area with interpretable chromatin.",
       "importance": 5,
       "view_level": 0,
       "view_bbox_level0": [
@@ -193,7 +193,7 @@
       "downsample": 1.0,
       "objective_power": 20.0,
       "effective_magnification": 20.0,
-      "debug_path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/outputs/20260512_105514_f7bfac/wsi_debug/0007_roi.jpg",
+      "debug_path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/outputs/20260512_120412_9728f8/wsi_debug/0007_roi.jpg",
       "field_width_um": 325.632,
       "field_height_um": 325.632,
       "tissue_fraction": 0.99932861328125,
@@ -217,12 +217,12 @@
       "next_candidate_rank_hint": 1,
       "next_action_hint": "You just requested a high-power ROI. In AML mode, discard only if this ROI is clearly bad on review, such as mostly background/empty glass. If it is borderline but interpretable, keep it and continue searching for additional ROIs. If you still need more evidence, use candidate #1 next instead of continuing local search inside this ROI. ",
       "guidance_for_next_action": "ROI #1 has been marked and saved. You can now:\n1) Continue searching WITHIN THIS CANDIDATE REGION for additional strong ROIs by using wsi_zoom_current_norm to explore other sub-areas.\n2) When this candidate region is exhausted (no more strong tissue), call wsi_open_candidate(rank=1) to move to the next candidate.\nIf you just discarded an ROI, you can search for a different position in this region OR jump to the next candidate.",
-      "image_url": "/debug/20260512_105514_f7bfac/wsi_debug/0007_roi.jpg"
+      "image_url": "/debug/20260512_120412_9728f8/wsi_debug/0007_roi.jpg"
     },
     {
       "roi_id": 2,
       "label": "AML_ROI_2",
-      "note": "Dense cellular area with suspected blasts.",
+      "note": "Dense cellular area with interpretable chromatin.",
       "importance": 5,
       "view_level": 0,
       "view_bbox_level0": [
@@ -234,7 +234,7 @@
       "downsample": 1.0,
       "objective_power": 20.0,
       "effective_magnification": 20.0,
-      "debug_path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/outputs/20260512_105514_f7bfac/wsi_debug/0013_roi.jpg",
+      "debug_path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/outputs/20260512_120412_9728f8/wsi_debug/0013_roi.jpg",
       "field_width_um": 325.632,
       "field_height_um": 325.632,
       "tissue_fraction": 0.99835205078125,
@@ -258,7 +258,7 @@
       "next_candidate_rank_hint": 1,
       "next_action_hint": "You just requested a high-power ROI. In AML mode, discard only if this ROI is clearly bad on review, such as mostly background/empty glass. If it is borderline but interpretable, keep it and continue searching for additional ROIs. If you still need more evidence, use candidate #1 next instead of continuing local search inside this ROI. ",
       "guidance_for_next_action": "ROI #2 has been marked and saved. You can now:\n1) Continue searching WITHIN THIS CANDIDATE REGION for additional strong ROIs by using wsi_zoom_current_norm to explore other sub-areas.\n2) When this candidate region is exhausted (no more strong tissue), call wsi_open_candidate(rank=1) to move to the next candidate.\nIf you just discarded an ROI, you can search for a different position in this region OR jump to the next candidate.",
-      "image_url": "/debug/20260512_105514_f7bfac/wsi_debug/0013_roi.jpg"
+      "image_url": "/debug/20260512_120412_9728f8/wsi_debug/0013_roi.jpg"
     }
   ],
   "attempted_roi_bboxes_level0": [
@@ -275,8 +275,8 @@
       2048
     ]
   ],
-  "last_overview_with_box_path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/outputs/20260512_105514_f7bfac/wsi_debug/0015_overview_with_current.jpg",
-  "last_overview_debug_path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/outputs/20260512_105514_f7bfac/wsi_debug/0001_overview.jpg",
+  "last_overview_with_box_path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/outputs/20260512_120412_9728f8/wsi_debug/0015_overview_with_current.jpg",
+  "last_overview_debug_path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/outputs/20260512_120412_9728f8/wsi_debug/0001_overview.jpg",
   "last_roi_candidates": [
     {
       "rank": 1,
@@ -3630,13 +3630,13 @@
     "phase": "ready",
     "status": "done",
     "message": "ROI index loaded from disk cache (skipping tile filtering)",
-    "started_at": "2026-05-12T09:55:20.043952Z",
-    "updated_at": "2026-05-12T09:56:24.706868Z",
+    "started_at": "2026-05-12T11:04:17.467090Z",
+    "updated_at": "2026-05-12T11:05:06.483832Z",
     "active": false,
     "source": "disk_cache",
     "candidate_source": "uni2_exact_retrieval"
   },
-  "last_roi_candidate_overlay_path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/outputs/20260512_105514_f7bfac/wsi_debug/0012_roi_candidates.jpg",
+  "last_roi_candidate_overlay_path": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/outputs/20260512_120412_9728f8/wsi_debug/0012_roi_candidates.jpg",
   "case_output_dir": "/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/output/AML_Box10_OT01",
   "has_fatal_error": false,
   "last_fatal_error": null,

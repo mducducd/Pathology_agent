@@ -951,7 +951,7 @@ def _merge_saved_aml_rois_into_view_state(run: RunStatus, wsi_state: Optional[Di
     # For aml_roi and aml_auto: don't preload old ROIs while actively collecting/generating new ones
     # (only preload after completion to avoid showing stale cached results during rerun)
     # For aml_diagnosis: always preload since saved ROIs are the input data being diagnosed, not stale cache
-    if run.agent_type in {"aml_auto", "aml_roi"} and run.status in {"created", "uploading", "pending", "running"}:
+    if run.agent_type in {"aml_auto", "aml_roi"} and run.status != "done":
         return wsi_state
     if not run.roi_collection_path or not Path(run.roi_collection_path).is_file():
         return wsi_state
