@@ -25,6 +25,7 @@ from .aml_auto_fallback import (
     load_saved_aml_roi_collection_summary as _load_saved_aml_roi_collection_summary,
 )
 from .aml_output import (
+    FINAL_DECISION_LOOKUP,
     materialize_aml_case_collection,
     persist_current_aml_roi_collection,
     write_roi_collection_json,
@@ -47,11 +48,6 @@ from .reporting import write_markdown_report
 from .state import get_public_state_snapshot, reset_wsi_state, set_slide_path
 from .tuning_config import tuning_value
 
-_FINAL_DIAGNOSIS_LABELS = (
-    "Normal marrow",
-    "Acute leukemia",
-)
-_FINAL_DIAGNOSIS_LOOKUP = {label.lower(): label for label in _FINAL_DIAGNOSIS_LABELS}
 _ROI_COLLECTION_FILENAMES = ("roi_collection.json", "roi_location.json")
 _ROI_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp"}
 
@@ -162,7 +158,7 @@ def _recover_final_output_from_tool_error(
         return None
 
     recovered_name = _normalize_recovered_tool_name(match.group(1))
-    canonical = _FINAL_DIAGNOSIS_LOOKUP.get(recovered_name.lower())
+    canonical = FINAL_DECISION_LOOKUP.get(recovered_name.lower())
     if canonical is None:
         return None
 

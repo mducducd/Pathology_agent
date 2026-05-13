@@ -2542,7 +2542,7 @@ def wsi_save_tile_norm(
         return {
             "ok": True,
             "quality": quality,
-            "path": out_path,
+            "path": record["path"],
             "count_good": len(state._saved_good_tiles),
             "count_bad": len(state._saved_bad_tiles),
             "tile_px": TILE_PX,
