@@ -70,7 +70,6 @@
   const btnDarkToggle = document.getElementById("btn-dark-toggle");
   const finalSection = document.getElementById("final-section");
   const finalText = document.getElementById("final-text");
-  const slideNameDisplay = document.getElementById("slide-name-display");
   const reasoningSection = document.getElementById("reasoning-section");
   const reasoningText = document.getElementById("reasoning-text");
   const reportLink = document.getElementById("report-link");
@@ -213,10 +212,27 @@
   function setSelectValueIfPresent(selectEl, value) {
     if (!selectEl) return false;
     const text = String(value);
-    const hasOption = Array.from(selectEl.options).some((opt) => opt.value === text);
-    if (!hasOption) return false;
+    if (!Array.from(selectEl.options).some((opt) => opt.value === text)) return false;
     selectEl.value = text;
     return true;
+  }
+
+  function restoreStoredSelectValue(selectEl, storageKey) {
+    if (!selectEl) return false;
+    const storedValue = loadStoredValue(storageKey);
+    if (!storedValue) return false;
+    return setSelectValueIfPresent(selectEl, storedValue);
+  }
+
+  function bindStoredSelect(selectEl, storageKey, getValue, onChange) {
+    if (!selectEl) return;
+    restoreStoredSelectValue(selectEl, storageKey);
+    selectEl.addEventListener("change", () => {
+      if (typeof onChange === "function") {
+        onChange(selectEl);
+      }
+      saveStoredValue(storageKey, String(getValue()));
+    });
   }
 
   function syncAcceptedRoiSelectors(changedBy = "") {
@@ -2832,8 +2848,7 @@
       }
       if (roiOutputSizeSelect && roiOutputSizePx) {
         const nextRoiValue = String(Math.round(roiOutputSizePx));
-        if (Array.from(roiOutputSizeSelect.options).some((opt) => opt.value === nextRoiValue)) {
-          roiOutputSizeSelect.value = nextRoiValue;
+        if (setSelectValueIfPresent(roiOutputSizeSelect, nextRoiValue)) {
           saveStoredValue(roiOutputSizeStorageKey, nextRoiValue);
         }
       }
@@ -3452,51 +3467,14 @@
       batchSizeSelect.value = String(next);
     });
   }
-  if (tilePrefilterMethodSelect) {
-    const storedTilePrefilterMethod = loadStoredValue(tilePrefilterMethodStorageKey);
-    if (storedTilePrefilterMethod) {
-      tilePrefilterMethodSelect.value = storedTilePrefilterMethod;
-    }
-    tilePrefilterMethodSelect.addEventListener("change", () => {
-      saveStoredValue(tilePrefilterMethodStorageKey, selectedTilePrefilterMethod());
-    });
-  }
-  if (roiOutputSizeSelect) {
-    const storedRoiOutputSize = loadStoredValue(roiOutputSizeStorageKey);
-    if (
-      storedRoiOutputSize &&
-      Array.from(roiOutputSizeSelect.options).some((opt) => opt.value === storedRoiOutputSize)
-    ) {
-      roiOutputSizeSelect.value = storedRoiOutputSize;
-    }
-    roiOutputSizeSelect.addEventListener("change", () => {
-      saveStoredValue(roiOutputSizeStorageKey, String(selectedRoiOutputSizePx()));
-    });
-  }
-  if (targetAcceptedRoisSelect) {
-    const storedTargetAcceptedRois = loadStoredValue(targetAcceptedRoisStorageKey);
-    if (
-      storedTargetAcceptedRois &&
-      Array.from(targetAcceptedRoisSelect.options).some((opt) => opt.value === storedTargetAcceptedRois)
-    ) {
-      targetAcceptedRoisSelect.value = storedTargetAcceptedRois;
-    }
-    targetAcceptedRoisSelect.addEventListener("change", () => {
-      syncAcceptedRoiSelectors("target");
-    });
-  }
-  if (maxAcceptedRoisSelect) {
-    const storedMaxAcceptedRois = loadStoredValue(maxAcceptedRoisStorageKey);
-    if (
-      storedMaxAcceptedRois &&
-      Array.from(maxAcceptedRoisSelect.options).some((opt) => opt.value === storedMaxAcceptedRois)
-    ) {
-      maxAcceptedRoisSelect.value = storedMaxAcceptedRois;
-    }
-    maxAcceptedRoisSelect.addEventListener("change", () => {
-      syncAcceptedRoiSelectors("max");
-    });
-  }
+  bindStoredSelect(tilePrefilterMethodSelect, tilePrefilterMethodStorageKey, selectedTilePrefilterMethod);
+  bindStoredSelect(roiOutputSizeSelect, roiOutputSizeStorageKey, selectedRoiOutputSizePx);
+  bindStoredSelect(targetAcceptedRoisSelect, targetAcceptedRoisStorageKey, selectedTargetAcceptedRois, () => {
+    syncAcceptedRoiSelectors("target");
+  });
+  bindStoredSelect(maxAcceptedRoisSelect, maxAcceptedRoisStorageKey, selectedMaxAcceptedRois, () => {
+    syncAcceptedRoiSelectors("max");
+  });
   syncAcceptedRoiSelectors();
   if (defaultMppInput) {
     const storedDefaultMpp = loadStoredValue(defaultMppStorageKey);

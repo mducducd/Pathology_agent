@@ -42,54 +42,50 @@ from .slide_utils import (
 from .tuning_config import tuning_value
 
 
-def _tools_int(key: str, section: str = "tools.candidates", default: int = 0) -> int:
+def _env_or_tuning_value(key: str, section: str, default: Any) -> Any:
     env = os.getenv(key)
     if env is not None:
-        try:
-            return int(env)
-        except Exception:
-            pass
+        return env
     try:
-        return int(tuning_value(section, key))
+        return tuning_value(section, key)
+    except Exception:
+        return default
+
+
+def _tools_int(key: str, section: str = "tools.candidates", default: int = 0) -> int:
+    raw_value = _env_or_tuning_value(key, section, default)
+    try:
+        return int(raw_value)
     except Exception:
         return default
 
 
 def _tools_float(key: str, section: str = "tools.candidates", default: float = 0.0) -> float:
-    env = os.getenv(key)
-    if env is not None:
-        try:
-            return float(env)
-        except Exception:
-            pass
+    raw_value = _env_or_tuning_value(key, section, default)
     try:
-        return float(tuning_value(section, key))
+        return float(raw_value)
     except Exception:
         return default
 
 
 def _tools_bool(key: str, section: str = "tools.candidates", default: bool = True) -> bool:
-    env = os.getenv(key)
-    if env is not None:
-        text = env.strip().lower()
+    raw_value = _env_or_tuning_value(key, section, default)
+    if isinstance(raw_value, bool):
+        return raw_value
+    if isinstance(raw_value, str):
+        text = raw_value.strip().lower()
         if text in {"1", "true", "yes", "y", "on"}:
             return True
         if text in {"0", "false", "no", "n", "off"}:
             return False
-    try:
-        return bool(tuning_value(section, key))
-    except Exception:
-        return default
+    return bool(raw_value)
 
 
 def _tools_str(key: str, section: str = "tools.cache", default: str = "") -> str:
-    env = os.getenv(key)
-    if env is not None:
-        return env.strip()
-    try:
-        return str(tuning_value(section, key))
-    except Exception:
+    raw_value = _env_or_tuning_value(key, section, default)
+    if raw_value is None:
         return default
+    return str(raw_value).strip()
 
 
 ROI_CANDIDATE_TOP_K = _tools_int("ROI_CANDIDATE_TOP_K", "tools.candidates", 72)

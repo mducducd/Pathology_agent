@@ -24,7 +24,7 @@ def _aml_pipeline_config(key: str, default: Any) -> Any:
 
 
 def resolve_aml_output_root(path_text: str | None) -> Path:
-    raw = str(path_text or "output/").strip() or "output/"
+    raw = str(path_text or "outputs/").strip() or "outputs/"
     return Path(raw).expanduser().resolve()
 
 

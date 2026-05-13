@@ -17,7 +17,7 @@ EXTRACTOR_NAME: str = "reddino_base"
 TILE_SIZE_UM: float = 256.0
 TILE_SIZE_PX: int = 224
 BATCH_SIZE: int = 128
-TILE_PREFILTER_METHOD: str = "hyvrid"
+TILE_PREFILTER_METHOD: str = "quality"
 ROI_OUTPUT_SIZE_PX: int = 1024
 MAX_ACCEPTED_ROIS: int = 10
 TARGET_ACCEPTED_ROIS: int = 5
@@ -69,6 +69,57 @@ HAS_FATAL_ERROR = False
 LAST_FATAL_ERROR: Optional[str] = None
 
 CURRENT_AGENT_ACTION: str = ""
+
+
+def _close_loaded_slide() -> None:
+    global _slide
+    if _slide is None:
+        return
+    try:
+        _slide.close()
+    except Exception:
+        pass
+    _slide = None
+
+
+def _reset_runtime_state() -> None:
+    global _step_log, _roi_marks, _attempted_roi_bboxes_level0, _view_history
+    global _current_view, _overview_cache, _last_overview_with_box_path, _last_overview_debug_path
+    global _saved_good_tiles, _saved_bad_tiles, _example_tiles_injected, _example_rois_injected
+    global _roi_ranker_index, _roi_ranker_meta, _roi_candidate_prep
+    global _last_roi_candidates, _last_roi_candidate_meta, _last_roi_candidate_source, _last_roi_candidate_overlay_path
+    global _last_roi_candidate_view_key, _last_roi_candidate_top_k, _overview_roi_candidates
+    global _dark_region_boxes_level0, _dark_region_slide_path, _dark_region_cache_signature
+    global HAS_FATAL_ERROR, LAST_FATAL_ERROR, CURRENT_AGENT_ACTION
+
+    _step_log = []
+    _roi_marks = []
+    _attempted_roi_bboxes_level0 = []
+    _view_history = []
+    _current_view = {}
+    _overview_cache = {}
+    _last_overview_with_box_path = None
+    _last_overview_debug_path = None
+    _saved_good_tiles = []
+    _saved_bad_tiles = []
+    _example_tiles_injected = False
+    _example_rois_injected = False
+    _roi_ranker_index = None
+    _roi_ranker_meta = {}
+    _roi_candidate_prep = {}
+    _last_roi_candidates = []
+    _last_roi_candidate_meta = {}
+    _last_roi_candidate_source = None
+    _last_roi_candidate_overlay_path = None
+    _last_roi_candidate_view_key = None
+    _last_roi_candidate_top_k = None
+    _overview_roi_candidates = []
+    _dark_region_boxes_level0 = []
+    _dark_region_slide_path = None
+    _dark_region_cache_signature = None
+    HAS_FATAL_ERROR = False
+    LAST_FATAL_ERROR = None
+    CURRENT_AGENT_ACTION = ""
 
 
 def _loaded_slide_mpp_um() -> float | None:
@@ -144,41 +195,8 @@ def reset_wsi_state(
     TRACE_FILE_PATH = os.path.join(TRACE_DIR, "trace.jsonl")
     CASE_OUTPUT_DIR = None
 
-    _step_log = []
-    _roi_marks = []
-    _attempted_roi_bboxes_level0 = []
-    _view_history = []
-    _current_view = {}
-    _overview_cache = {}
-    _last_overview_with_box_path = None
-    _last_overview_debug_path = None
-    _saved_good_tiles = []
-    _saved_bad_tiles = []
-    _example_tiles_injected = False
-    _example_rois_injected = False
-    _roi_ranker_index = None
-    _roi_ranker_meta = {}
-    _roi_candidate_prep = {}
-    _last_roi_candidates = []
-    _last_roi_candidate_meta = {}
-    _last_roi_candidate_source = None
-    _last_roi_candidate_overlay_path = None
-    _last_roi_candidate_view_key = None
-    _last_roi_candidate_top_k = None
-    _overview_roi_candidates = []
-    _dark_region_boxes_level0 = []
-    _dark_region_slide_path = None
-    _dark_region_cache_signature = None
-    HAS_FATAL_ERROR = False
-    LAST_FATAL_ERROR = None
-    CURRENT_AGENT_ACTION = ""
-
-    if _slide is not None:
-        try:
-            _slide.close()
-        except Exception:
-            pass
-    _slide = None
+    _reset_runtime_state()
+    _close_loaded_slide()
 
 
 def set_slide_path(path: str) -> None:
@@ -199,7 +217,6 @@ def clear_wsi_outputs_state() -> None:
     global _dark_region_boxes_level0, _dark_region_slide_path, _dark_region_cache_signature
     global HAS_FATAL_ERROR, LAST_FATAL_ERROR, MODEL_NAME, CASE_OUTPUT_DIR
 
-    _step_log = []
     AGENT_TYPE = "wsi"
     BATCH_SIZE = 128
     TILE_PREFILTER_METHOD = "quality"
@@ -208,32 +225,7 @@ def clear_wsi_outputs_state() -> None:
     TARGET_ACCEPTED_ROIS = 5
     DEFAULT_MPP_UM_OVERRIDE = None
     QUALITY_METHOD = "embedding"
-    _roi_marks = []
-    _attempted_roi_bboxes_level0 = []
-    _view_history = []
-    _current_view = {}
-    _overview_cache = {}
-    _last_overview_with_box_path = None
-    _last_overview_debug_path = None
-    _saved_good_tiles = []
-    _saved_bad_tiles = []
-    _example_tiles_injected = False
-    _example_rois_injected = False
-    _roi_ranker_index = None
-    _roi_ranker_meta = {}
-    _roi_candidate_prep = {}
-    _last_roi_candidates = []
-    _last_roi_candidate_meta = {}
-    _last_roi_candidate_source = None
-    _last_roi_candidate_overlay_path = None
-    _last_roi_candidate_view_key = None
-    _last_roi_candidate_top_k = None
-    _overview_roi_candidates = []
-    _dark_region_boxes_level0 = []
-    _dark_region_slide_path = None
-    _dark_region_cache_signature = None
-    HAS_FATAL_ERROR = False
-    LAST_FATAL_ERROR = None
+    _reset_runtime_state()
     MODEL_NAME = ""
     CASE_OUTPUT_DIR = None
 

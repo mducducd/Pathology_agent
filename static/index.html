@@ -21,7 +21,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" />
-  <link rel="stylesheet" href="/static/styles.css?v=82" />
+  <link rel="stylesheet" href="/static/styles.css?v=83" />
 </head>
 <body>
   <header class="topbar">
@@ -31,8 +31,6 @@
         <span class="topbar-name">Pathology Agent</span>
         <span class="topbar-tag">Clinical WSI</span>
       </div>
-    </div>
-    <div class="topbar-center">
     </div>
     <div class="topbar-right">
       <div id="status-pill" class="pill pill-idle" hidden>Idle</div>
@@ -141,8 +139,8 @@
                   id="output-path"
                   type="text"
                   class="text-input"
-                  value="output/"
-                  placeholder="output/"
+                  value="outputs/"
+                  placeholder="outputs/"
                   aria-label="AML output path"
                 />
               </div>
@@ -153,7 +151,6 @@
                 <label>Model</label>
                 <select id="model-select" class="picker-list model-picker" aria-label="Model selector">
                   <option value="GLM-4.6V-FP8">GLM-4.6V-FP8</option>
-                  <option value="glm-4.6V-flash">glm-4.6V-flash</option>
                   <option value="GLM-4.5-Air-FP8">GLM-4.5-Air-FP8</option>
                   <option value="qwen3.5-35b-a3b">qwen3.5-35b-a3b</option>
                   <option value="qwen3.6-35b-a3b">qwen3.6-35b-a3b</option>
@@ -456,6 +453,6 @@
     </section>
   </div>
 
-  <script src="/static/app.js?v=117"></script>
+  <script src="/static/app.js?v=118"></script>
 </body>
 </html>

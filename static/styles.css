@@ -194,17 +194,11 @@ html[data-theme="dark"] .topbar-logo{
   letter-spacing:.1em;
   text-transform:uppercase;
 }
-.topbar-center{
-  flex:1;
-  display:flex;
-  align-items:center;
-  justify-content:center;
-  gap:8px;
-}
 .topbar-right{
   display:flex;
   align-items:center;
   gap:8px;
+  margin-left:auto;
   flex-shrink:0;
 }
 

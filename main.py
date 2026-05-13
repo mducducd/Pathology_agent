@@ -52,7 +52,6 @@ MIRAX_EXTS = {".mrxs", ".mrsx"}
 STD_EXTS = {".svs", ".tif", ".tiff", ".ndpi"}
 MODEL_OPTIONS = [
     "GLM-4.6V-FP8",
-    "glm-4.6V-flash",
     "GLM-4.5-Air-FP8",
     "qwen3.5-35b-a3b",
     "qwen3.6-35b-a3b",
@@ -128,7 +127,7 @@ class RunStatus(BaseModel):
     source_mode: str = "upload"  # upload | server
     selected_source_path: Optional[str] = None
     selected_source_label: Optional[str] = None
-    output_root_path: str = "output/"
+    output_root_path: str = "outputs/"
 
     # AML ROI/diagnosis modes
     roi_input_path: Optional[str] = None  # For aml_diagnosis: path to roi_collection.json
@@ -1034,7 +1033,7 @@ async def create_run(
     candidate_nav_field_um: str = Form(""),
     roi_input_path: str = Form(""),
     roi_collection_path: str = Form(""),
-    output_path: str = Form("output/"),
+    output_path: str = Form("outputs/"),
 ):
     agent_type_lower = agent_type.lower()
     if agent_type_lower == "aml":
@@ -1120,7 +1119,7 @@ async def create_run(
         candidate_nav_field_um=candidate_nav_field_um_value,
         slide_filename="(upload pending)",
         slide_path=None,
-        output_root_path=output_path.strip() or "output/",
+        output_root_path=output_path.strip() or "outputs/",
         roi_input_path=roi_input_path.strip() or None,
         roi_collection_path=roi_collection_path.strip() or None,
         upload_count=0,
