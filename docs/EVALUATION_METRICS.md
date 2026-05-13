@@ -81,7 +81,7 @@ Field: `total_cases`
 Formula:
 
 $$
-\text{total\_cases} = N
+N_{\mathrm{cases}} = N
 $$
 
 Interpretation:
@@ -100,8 +100,7 @@ final AML/Normal prediction.
 Formula:
 
 $$
-\text{evaluated}
-= |\mathcal{P}|
+N_{\mathrm{eval}} = |\mathcal{P}|
 $$
 
 Interpretation:
@@ -125,25 +124,20 @@ $$
 Count:
 
 $$
-\text{correct}
-= \sum_{i \in \mathcal{P}} \mathrm{Correct}_i
+C_{\mathrm{correct}} = \sum_{i \in \mathcal{P}} \mathrm{Correct}_i
 $$
 
 Rate:
 
 $$
-\text{accuracy\_all\_pct}
-=
-100 \times \frac{\text{correct}}{|\mathcal{P}|}
+\mathrm{Acc}_{\mathrm{all}}(\%) = 100 \times \frac{C_{\mathrm{correct}}}{|\mathcal{P}|}
 $$
 
 In the standard benchmark where all slides have ground truth and parseable
 predictions are expected for every slide:
 
 $$
-\text{accuracy\_all\_pct}
-=
-100 \times \frac{\text{correct}}{\text{total\_cases}}
+\mathrm{Acc}_{\mathrm{all}}(\%) = 100 \times \frac{C_{\mathrm{correct}}}{N_{\mathrm{cases}}}
 $$
 
 Interpretation:
@@ -174,17 +168,13 @@ availability errors are not counted against this metric.
 Count:
 
 $$
-\text{task\_success\_count}
-=
-\sum_{i=1}^{N} \mathbb{1}[s_i=1 \land r_i=0]
+C_{\mathrm{succ}} = \sum_{i=1}^{N} \mathbb{1}[s_i=1 \land r_i=0]
 $$
 
 Rate:
 
 $$
-\text{task\_success\_pct}
-=
-100 \times \frac{\text{task\_success\_count}}{N}
+R_{\mathrm{succ}}(\%) = 100 \times \frac{C_{\mathrm{succ}}}{N}
 $$
 
 Interpretation:
@@ -197,9 +187,7 @@ Relationship to error rate:
 The run-level error rate is the complement of task success:
 
 $$
-\text{error\_rate\_pct}
-=
-100 - \text{task\_success\_pct}
+R_{\mathrm{err}}(\%) = 100 - R_{\mathrm{succ}}(\%)
 $$
 
 Important distinction:
@@ -218,27 +206,19 @@ positive class and Normal as the negative class.
 Definitions:
 
 $$
-\text{aml\_tp}
-=
-\sum_{i \in \mathcal{P}} \mathbb{1}[y_i=\mathrm{AML} \land \hat{y}_i=\mathrm{AML}]
+\mathrm{TP}_{\mathrm{AML}} = \sum_{i \in \mathcal{P}} \mathbb{1}[y_i=\mathrm{AML} \land \hat{y}_i=\mathrm{AML}]
 $$
 
 $$
-\text{aml\_fn}
-=
-\sum_{i \in \mathcal{P}} \mathbb{1}[y_i=\mathrm{AML} \land \hat{y}_i=\mathrm{Normal}]
+\mathrm{FN}_{\mathrm{AML}} = \sum_{i \in \mathcal{P}} \mathbb{1}[y_i=\mathrm{AML} \land \hat{y}_i=\mathrm{Normal}]
 $$
 
 $$
-\text{normal\_tn}
-=
-\sum_{i \in \mathcal{P}} \mathbb{1}[y_i=\mathrm{Normal} \land \hat{y}_i=\mathrm{Normal}]
+\mathrm{TN}_{\mathrm{Normal}} = \sum_{i \in \mathcal{P}} \mathbb{1}[y_i=\mathrm{Normal} \land \hat{y}_i=\mathrm{Normal}]
 $$
 
 $$
-\text{normal\_fp}
-=
-\sum_{i \in \mathcal{P}} \mathbb{1}[y_i=\mathrm{Normal} \land \hat{y}_i=\mathrm{AML}]
+\mathrm{FP}_{\mathrm{Normal}} = \sum_{i \in \mathcal{P}} \mathbb{1}[y_i=\mathrm{Normal} \land \hat{y}_i=\mathrm{AML}]
 $$
 
 Interpretation:
@@ -264,17 +244,13 @@ $$
 Count:
 
 $$
-\text{roi5\_count}
-=
-\sum_{i=1}^{N} \mathrm{ROI5}_i
+C_{\mathrm{roi5}} = \sum_{i=1}^{N} \mathrm{ROI5}_i
 $$
 
 Rate:
 
 $$
-\text{roi5\_rate\_pct}
-=
-100 \times \frac{\text{roi5\_count}}{N}
+R_{\mathrm{roi5}}(\%) = 100 \times \frac{C_{\mathrm{roi5}}}{N}
 $$
 
 Interpretation:
@@ -299,25 +275,19 @@ A slide passes if all conditions are true:
 Slide-level definition:
 
 $$
-\mathrm{FlowPass}_i
-=
-\mathbb{1}[s_i=1 \land p_i=1 \land m_i \ge 5 \land q_i \ge 0.75]
+\mathrm{FlowPass}_i = \mathbb{1}[s_i=1 \land p_i=1 \land m_i \ge 5 \land q_i \ge 0.75]
 $$
 
 Count:
 
 $$
-\text{flow\_pass\_count}
-=
-\sum_{i=1}^{N} \mathrm{FlowPass}_i
+C_{\mathrm{flow}} = \sum_{i=1}^{N} \mathrm{FlowPass}_i
 $$
 
 Rate:
 
 $$
-\text{flow\_pass\_pct}
-=
-100 \times \frac{\text{flow\_pass\_count}}{N}
+R_{\mathrm{flow}}(\%) = 100 \times \frac{C_{\mathrm{flow}}}{N}
 $$
 
 Interpretation:
@@ -339,10 +309,7 @@ $N_s = |\mathcal{S}|$.
 Formula:
 
 $$
-\text{avg\_tool\_calls}
-=
-\frac{1}{N_s}
-\sum_{i \in \mathcal{S}} T_i
+\overline{T} = \frac{1}{N_s}\sum_{i \in \mathcal{S}} T_i
 $$
 
 Interpretation:
@@ -390,18 +357,13 @@ $$
 Number of stable slides:
 
 $$
-\text{stable\_elapsed\_n}
-=
-|\mathcal{I}_{\mathrm{stable}}|
+N_{\mathrm{stable}} = |\mathcal{I}_{\mathrm{stable}}|
 $$
 
 Stable average runtime:
 
 $$
-\text{avg\_elapsed\_stable\_sec}
-=
-\frac{1}{|\mathcal{I}_{\mathrm{stable}}|}
-\sum_{i \in \mathcal{I}_{\mathrm{stable}}} t_i
+\overline{t}_{\mathrm{stable}} = \frac{1}{|\mathcal{I}_{\mathrm{stable}}|}\sum_{i \in \mathcal{I}_{\mathrm{stable}}} t_i
 $$
 
 Interpretation:
@@ -432,17 +394,13 @@ $$
 Number of successful runs:
 
 $$
-\text{elapsed\_ok\_n}
-=
-|\mathcal{I}_{\mathrm{ok}}|
+N_{\mathrm{ok}} = |\mathcal{I}_{\mathrm{ok}}|
 $$
 
 Median successful runtime:
 
 $$
-\text{median\_elapsed\_all\_ok\_sec}
-=
-\operatorname{median}(\{t_i : i \in \mathcal{I}_{\mathrm{ok}}\})
+\widetilde{t}_{\mathrm{ok}} = \mathrm{median}(\{t_i : i \in \mathcal{I}_{\mathrm{ok}}\})
 $$
 
 Interpretation:
@@ -461,9 +419,7 @@ is parseable.
 For scored NPM1 case $j$:
 
 $$
-\mathrm{NPM1Correct}_j
-=
-\mathbb{1}[\widehat{z}_j=z_j]
+\mathrm{NPM1Correct}_j = \mathbb{1}[\widehat{z}_j=z_j]
 $$
 
 where $z_j$ is the ground-truth NPM1 label and $\widehat{z}_j$ is the predicted
@@ -472,23 +428,19 @@ NPM1 label.
 Scored-case count:
 
 $$
-\text{npm1\_scored} = N_{\mathrm{npm1}}
+N_{\mathrm{npm1,scored}} = N_{\mathrm{npm1}}
 $$
 
 Count:
 
 $$
-\text{npm1\_correct}
-=
-\sum_{j=1}^{N_{\mathrm{npm1}}} \mathrm{NPM1Correct}_j
+C_{\mathrm{npm1}} = \sum_{j=1}^{N_{\mathrm{npm1}}} \mathrm{NPM1Correct}_j
 $$
 
 Accuracy:
 
 $$
-\text{npm1\_accuracy\_pct}
-=
-100 \times \frac{\text{npm1\_correct}}{\text{npm1\_scored}}
+\mathrm{Acc}_{\mathrm{npm1}}(\%) = 100 \times \frac{C_{\mathrm{npm1}}}{N_{\mathrm{npm1,scored}}}
 $$
 
 Interpretation:

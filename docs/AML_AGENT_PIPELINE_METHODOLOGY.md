@@ -64,7 +64,7 @@ burden, and synthesizing the final morphology report.
 | $\theta$ | selected foundation-model feature extractor |
 | $\mathcal{T}$ | set of foreground supertiles |
 | $\mathcal{P} = \{p_i\}_{i=1}^{n}$ | set of candidate tiles |
-| $z_i = \operatorname{norm}_2(f_\theta(p_i))$ | L2-normalized embedding for tile $p_i$ |
+| $z_i = \mathrm{norm}_2(f_\theta(p_i))$ | L2-normalized embedding for tile $p_i$ |
 | $\mathcal{R}^{+}$ | curated good ROI-quality reference tiles |
 | $\mathcal{R}^{-}$ | curated bad ROI-quality reference tiles |
 | $D_i$ | dark/cellularity score for tile $p_i$ |
@@ -89,22 +89,22 @@ burden, and synthesizing the final morphology report.
 **Output:** constrained AML report $\hat{Y}$.
 
 1. Initialize the viewer state:
-   $\mathcal{S}_0 \gets \operatorname{ResetState}(S,\Omega)$.
+   $\mathcal{S}_0 \gets \mathrm{ResetState}(S,\Omega)$.
 
 2. Load the embedding extractor and slide scale:
-   $\theta \gets \operatorname{LoadExtractor}(\Omega_{\mathrm{extractor}})$ and
-   $m_{\mathrm{pp}} \gets \operatorname{ResolveMPP}(S,\Omega)$.
+   $\theta \gets \mathrm{LoadExtractor}(\Omega_{\mathrm{extractor}})$ and
+   $m_{\mathrm{pp}} \gets \mathrm{ResolveMPP}(S,\Omega)$.
 
 3. Acquire the whole-slide overview:
-   $v_0 \gets \operatorname{Overview}(S)$.
+   $v_0 \gets \mathrm{Overview}(S)$.
 
 4. Construct the ROI candidate index:
    $\mathcal{I} \gets
-   \operatorname{EnsureROIIndex}(S,\theta,m_{\mathrm{pp}},\Omega)$.
+   \mathrm{EnsureROIIndex}(S,\theta,m_{\mathrm{pp}},\Omega)$.
 
 5. Retrieve the initial candidate list:
    $\mathcal{C}_{v_0} \gets
-   \operatorname{RankCandidates}(\mathcal{I},\operatorname{bbox}(v_0),K)$.
+   \mathrm{RankCandidates}(\mathcal{I},\mathrm{bbox}(v_0),K)$.
 
 6. Initialize accepted and attempted sets:
    $\mathcal{A} \gets \varnothing$ and
@@ -116,26 +116,26 @@ burden, and synthesizing the final morphology report.
 
    a. Select the highest-ranked unattempted candidate:
       $c^\star \gets
-      \operatorname{NextBest}(\mathcal{C}_{v},\mathcal{U},\mathcal{A})$.
+      \mathrm{NextBest}(\mathcal{C}_{v},\mathcal{U},\mathcal{A})$.
 
    b. If $c^\star = \varnothing$, compute fallback candidates
       $\mathcal{C}_{v}^{\mathrm{fb}}$ from the current view and repeat the
       selection. Terminate if no candidate is available.
 
    c. Open the candidate field:
-      $v_c \gets \operatorname{OpenCandidate}
+      $v_c \gets \mathrm{OpenCandidate}
       (c^\star,\Omega_{\mathrm{field}})$.
 
    d. Ask the VLM to inspect $v_c$ and propose a local ROI:
       $\tilde{r} \gets
-      \operatorname{VLMInspect}(v_c,c^\star,\Omega)$.
+      \mathrm{VLMInspect}(v_c,c^\star,\Omega)$.
 
    e. If $\tilde{r} = \varnothing$, update
       $\mathcal{U} \gets \mathcal{U} \cup \{c^\star\}$ and refresh
       $\mathcal{C}_{v}$.
 
    f. Otherwise, mark the normalized ROI:
-      $r \gets \operatorname{MarkROI}(\tilde{r})$.
+      $r \gets \mathrm{MarkROI}(\tilde{r})$.
 
    g. If $r$ is duplicate, artifact-flooded, or otherwise unusable, reject or
       discard it, update $\mathcal{U}$, and refresh $\mathcal{C}_{v}$.
@@ -144,7 +144,7 @@ burden, and synthesizing the final morphology report.
       $\mathcal{A} \gets \mathcal{A} \cup \{r\}$.
 
 8. Return the final report:
-   $\hat{Y} \gets \operatorname{FinalOutput}(\mathcal{A},\Omega)$.
+   $\hat{Y} \gets \mathrm{FinalOutput}(\mathcal{A},\Omega)$.
 
 Algorithm 1 formalizes the interactive agent loop. Candidate regions are treated
 as navigation priors rather than final ROIs. The VLM must inspect each opened
@@ -160,7 +160,7 @@ configuration $\Omega$.
 
 1. Select foreground supertiles:
    $\mathcal{T} \gets
-   \operatorname{ForegroundSupertiles}(S,m_{\mathrm{pp}},\Omega)$.
+   \mathrm{ForegroundSupertiles}(S,m_{\mathrm{pp}},\Omega)$.
 
 2. For each $t \in \mathcal{T}$, split $t$ into tiles
    $\mathcal{P}_t$, remove low-texture and edge-dominated tiles, and apply the
@@ -171,21 +171,21 @@ configuration $\Omega$.
    $\mathcal{P} \gets \bigcup_{t\in\mathcal{T}} \mathcal{P}_t$.
 
 4. Extract normalized embeddings:
-   $Z \gets \{z_i = \operatorname{norm}_2(f_{\theta}(p_i)) :
+   $Z \gets \{z_i = \mathrm{norm}_2(f_{\theta}(p_i)) :
    p_i \in \mathcal{P}\}$.
 
 5. Compute dark/cellularity scores:
    $D \gets \{D_i : p_i \in \mathcal{P}\}$.
 
 6. Embed curated reference banks:
-   $Z^{+} \gets \{\operatorname{norm}_2(f_{\theta}(r)) :
+   $Z^{+} \gets \{\mathrm{norm}_2(f_{\theta}(r)) :
    r \in \mathcal{R}^{+}\}$ and
-   $Z^{-} \gets \{\operatorname{norm}_2(f_{\theta}(r)) :
+   $Z^{-} \gets \{\mathrm{norm}_2(f_{\theta}(r)) :
    r \in \mathcal{R}^{-}\}$.
 
 7. Compute retrieval evidence:
    $(G,N,M,B,h) \gets
-   \operatorname{ReferenceRetrieval}(Z,Z^{+},Z^{-},\Omega)$.
+   \mathrm{ReferenceRetrieval}(Z,Z^{+},Z^{-},\Omega)$.
 
 8. Construct the candidate index:
 
@@ -206,7 +206,7 @@ regions instead of scanning the whole slide exhaustively.
 **Output:** quality-filtered tile set $\mathcal{P}_{\mathrm{selected}}$.
 
 1. For every $p_i \in \mathcal{P}$, compute the feature vector
-   $x_i = \operatorname{TileMetrics}(p_i)$.
+   $x_i = \mathrm{TileMetrics}(p_i)$.
 
 2. Define the hard-retention indicator:
 
@@ -234,9 +234,9 @@ $$
 
 $$
 \mathcal{P}_{\mathrm{selected}} =
-\operatorname{TopK}(\mathcal{P}_{\mathrm{pool}},Q,k_{\mathrm{keep}})
+\mathrm{TopK}(\mathcal{P}_{\mathrm{pool}},Q,k_{\mathrm{keep}})
 \cup
-\operatorname{Reserve}(\mathcal{P}_{\mathrm{pool}},r_{\mathrm{reserve}}).
+\mathrm{Reserve}(\mathcal{P}_{\mathrm{pool}},r_{\mathrm{reserve}}).
 $$
 
 The quality function rejects non-informative or artifactual image patches before
@@ -256,16 +256,16 @@ For each query tile embedding $z_i \in Z$:
 
 $$
 \mathcal{N}^{+}_i =
-\operatorname{TopK}_{z \in Z^{+}}\operatorname{sim}(z_i,z), \quad
+\mathrm{TopK}_{z \in Z^{+}}\mathrm{sim}(z_i,z), \quad
 \mathcal{N}^{-}_i =
-\operatorname{TopK}_{z \in Z^{-}}\operatorname{sim}(z_i,z).
+\mathrm{TopK}_{z \in Z^{-}}\mathrm{sim}(z_i,z).
 $$
 
 2. Aggregate neighbor support:
 
 $$
-G_i = \operatorname{Agg}(\mathcal{N}^{+}_i), \quad
-N_i = \operatorname{Agg}(\mathcal{N}^{-}_i).
+G_i = \mathrm{Agg}(\mathcal{N}^{+}_i), \quad
+N_i = \mathrm{Agg}(\mathcal{N}^{-}_i).
 $$
 
 3. Compute reference margin and bad-like likelihood:
@@ -278,7 +278,7 @@ $$
 4. Assign the quality hint:
 
 $$
-h_i = \operatorname{Hint}(M_i,B_i,g_i^{(1)},n_i^{(1)}).
+h_i = \mathrm{Hint}(M_i,B_i,g_i^{(1)},n_i^{(1)}).
 $$
 
 ### Algorithm 5: Candidate Ranking
@@ -292,7 +292,7 @@ candidate count $K$.
 
 $$
 \mathcal{P}_v =
-\{p_i \in \mathcal{I}: \operatorname{center}(p_i) \in b_v\}.
+\{p_i \in \mathcal{I}: \mathrm{center}(p_i) \in b_v\}.
 $$
 
 2. Apply the AML dark/cellularity floor:
@@ -304,28 +304,28 @@ $$
 
 3. For every $p_i \in \mathcal{P}_v$, compute:
 
-$$
+```math
 \begin{aligned}
 \Delta_i &= g_i^{(1)} - n_i^{(1)}, \\
-P^{\mathrm{qual}}_i &= w_M M_i + w_{\Delta}\Delta_i, \\
-L^{\mathrm{bad}}_i &=
+P_i^{\mathrm{qual}} &= w_M M_i + w_{\Delta}\Delta_i, \\
+L_i^{\mathrm{bad}} &=
   \operatorname{clip}_{[0,1]}
   \left(\frac{B_i-b_0}{1-b_0}\right), \\
-L^{\mathrm{match}}_i &=
+L_i^{\mathrm{match}} &=
   \operatorname{clip}_{[0,1]}
   \left(\frac{n_i^{(1)}-g_i^{(1)}+\delta}{\alpha}\right), \\
-L^{\mathrm{qual}}_i &=
-  w_{\mathrm{bad}}L^{\mathrm{bad}}_i
-  + w_{\mathrm{match}}L^{\mathrm{match}}_i, \\
-S^{\mathrm{cand}}_i &=
+L_i^{\mathrm{qual}} &=
+  w_{\mathrm{bad}}L_i^{\mathrm{bad}}
+  + w_{\mathrm{match}}L_i^{\mathrm{match}}, \\
+S_i^{\mathrm{cand}} &=
   w_D z(D_i)
   + w_G z(G_i)
-  + w_P z(P^{\mathrm{qual}}_i)
-  - w_L L^{\mathrm{qual}}_i
-  + w_S \mathbb{1}[\mathrm{StrongGood}_i]
-  + w_R \mathbb{1}[\mathrm{DarkRegion}_i].
+  + w_P z(P_i^{\mathrm{qual}})
+  - w_L L_i^{\mathrm{qual}}
+  + w_S \mathbf{1}[\mathrm{StrongGood}_i]
+  + w_R \mathbf{1}[\mathrm{DarkRegion}_i].
 \end{aligned}
-$$
+```
 
 4. Sort candidates by $S^{\mathrm{cand}}_i$ in descending order.
 
@@ -336,7 +336,7 @@ $$
 
 $$
 \mathcal{C}_v =
-\operatorname{TopK}(\operatorname{SortDesc}(\mathcal{P}_v,S^{\mathrm{cand}}),K).
+\mathrm{TopK}(\mathrm{SortDesc}(\mathcal{P}_v,S^{\mathrm{cand}}),K).
 $$
 
 ### Algorithm 6: Final Diagnostic Synthesis
@@ -358,14 +358,14 @@ $$
 3. Map each $\hat{b}_j$ into the required tier:
 
 $$
-\tau_j \in \{<5\%, 5\text{-}9\%, 10\text{-}19\%, 20\text{-}50\%, >50\%\}.
+\tau_j \in \{<5\%, 5\mathrm{-}9\%, 10\mathrm{-}19\%, 20\mathrm{-}50\%, >50\%\}.
 $$
 
 4. Synthesize global blast burden:
 
 $$
 \hat{b}_{\mathrm{global}} =
-\operatorname{Synthesize}(\{\tau_j\}_{j=1}^{m},\mathcal{A}).
+\mathrm{Synthesize}(\{\tau_j\}_{j=1}^{m},\mathcal{A}).
 $$
 
 5. Assign the binary morphology decision:
@@ -373,18 +373,18 @@ $$
 $$
 \hat{y} =
 \begin{cases}
-\text{Acute leukemia}, &
+\mathrm{AcuteLeukemia}, &
   \hat{b}_{\mathrm{global}} \geq 0.20
   \land \mathrm{DiffuseImmaturity}(\mathcal{A}), \\
-\text{Normal marrow}, & \text{otherwise}.
+\mathrm{NormalMarrow}, & \mathrm{otherwise}.
 \end{cases}
 $$
 
 6. Set:
 
 $$
-\operatorname{NPM1Applicable} =
-\mathbb{1}[\hat{y}=\text{Acute leukemia}].
+\mathrm{NPM1Applicable} =
+\mathbb{1}[\hat{y}=\mathrm{AcuteLeukemia}].
 $$
 
 7. Return $\hat{Y}$ as a constrained output containing ROI-level morphology,
@@ -448,17 +448,7 @@ $$
 The screening score is:
 
 $$
-\begin{aligned}
-S_{\mathrm{screen}} = \operatorname{clip}_{[0,1]}(&
-  0.34 F_{\mathrm{tissue}}
-+ 0.33 F_{\mathrm{purple}}
-+ 0.23 H_{\mathrm{purple}} \\
-&- 0.16 F_{\mathrm{red}}
-- 0.18 F_{\mathrm{gray}}
-- 0.12 F_{\mathrm{dark}} \\
-&- 0.10 F_{\mathrm{sat}}
-- 0.15 A_{\mathrm{artifact}}).
-\end{aligned}
+S_screen = clip01(0.34 F_tissue + 0.33 F_purple + 0.23 H_purple - 0.16 F_red - 0.18 F_gray - 0.12 F_dark - 0.10 F_sat - 0.15 A_artifact)
 $$
 
 This stage enriches for stained, basophilic, cellular marrow while suppressing
@@ -476,28 +466,23 @@ hematoxylin-like signal, local texture, and preserved cellular structure.
 The dark/cellularity prior computes a thumbnail-level cellularity score:
 
 $$
-\begin{aligned}
-P_{\mathrm{blue}} &=
-\operatorname{normalize}_{95}\left(
-  \rho_{B/R} \, c_{\mathrm{gate}} \, d_{\mathrm{mid}}
-  (0.35 + 0.65 t_{\mathrm{gate}})
-\right), \\
-C_{\mathrm{cell}} &=
-\operatorname{normalize}_{95}\left(
-  c_{\mathrm{gate}} \, d_{\mathrm{mid}} \, t_{\mathrm{gate}}
-  \frac{\max(0, \max(R,B) - G + 18)}{60}
-\right), \\
-S_{\mathrm{dark}} &=
-  0.56 P_{\mathrm{blue}}
-+ 0.08 C_{\mathrm{cell}}
-+ 0.15 \rho_{\mathrm{density}}
-+ 0.08 t_{\mathrm{gate}} \\
-&\quad
-- 0.18 R_{\mathrm{smooth}}
-- 0.14 A_{\mathrm{dark}}
-- 0.18 A_{\mathrm{gray/black}}
-- 0.12 L_{\mathrm{penalty}} .
-\end{aligned}
+P_{\mathrm{blue}} =
+\mathrm{normalize}_{95}\left(
+\rho_{B/R} \, c_{\mathrm{gate}} \, d_{\mathrm{mid}} \,
+(0.35 + 0.65 t_{\mathrm{gate}})
+\right)
+$$
+
+$$
+C_{\mathrm{cell}} =
+\mathrm{normalize}_{95}\left(
+c_{\mathrm{gate}} \, d_{\mathrm{mid}} \, t_{\mathrm{gate}} \,
+\frac{\max(0, \max(R,B) - G + 18)}{60}
+\right)
+$$
+
+$$
+S_{\mathrm{dark}} = 0.56 P_{\mathrm{blue}} + 0.08 C_{\mathrm{cell}} + 0.15 \rho_{\mathrm{density}} + 0.08 t_{\mathrm{gate}} - 0.18 R_{\mathrm{smooth}} - 0.14 A_{\mathrm{dark}} - 0.18 A_{\mathrm{gray/black}} - 0.12 L_{\mathrm{penalty}} .
 $$
 
 The score is thresholded by percentile, expanded within tissue, refined by
@@ -525,23 +510,14 @@ dominance, edge effects, and artifact burden.
 The coarse tile score is:
 
 $$
-\begin{aligned}
-S_{\mathrm{coarse}} =
-&\; 0.26 F_{\mathrm{tissue}}
-+ 0.28 F_{\mathrm{purple}}
-+ 0.06 F_{\mathrm{eosinophilic}} \\
-&+ 0.15 F_{\mathrm{focus}}
-- 0.16 F_{\mathrm{rbc}}
-- 0.15 F_{\mathrm{artifact}}
-- 0.18 F_{\mathrm{gray/black}} .
-\end{aligned}
+S_{\mathrm{coarse}} = 0.26 F_{\mathrm{tissue}} + 0.28 F_{\mathrm{purple}} + 0.06 F_{\mathrm{eosinophilic}} + 0.15 F_{\mathrm{focus}} - 0.16 F_{\mathrm{rbc}} - 0.15 F_{\mathrm{artifact}} - 0.18 F_{\mathrm{gray/black}} .
 $$
 
 After hard rejection, retained feature values are robustly scaled:
 
 $$
-\operatorname{robust\_unit}(x)
-= \operatorname{clip}_{[0,1]}
+\mathrm{robustunit}(x)
+= \mathrm{clip}_{[0,1]}
 \left(
   \frac{x - P_{10}(x)}{P_{90}(x) - P_{10}(x)}
 \right).
@@ -550,29 +526,7 @@ $$
 The final quality score is:
 
 $$
-\begin{aligned}
-Q_i =
-&\; 0.38 S_{\mathrm{coarse}}
-+ 0.08 P_{\mathrm{cell}}
-+ 0.04 D_{\mathrm{cell}}
-+ 0.03 D_{\mathrm{very}} \\
-&+ 0.04 D_{\mathrm{focus}}
-+ 0.09 F_{\mathrm{nuclear}}
-+ 0.10 F_{\mathrm{packed}}
-+ 0.06 F_{\mathrm{focus}} \\
-&+ 0.04 E_{\mathrm{focus}}
-+ 0.02 \rho_{\mathrm{component}}
-+ 0.01 U_{\mathrm{component}}
-+ 0.03 F_{\mathrm{round}} \\
-&+ 0.02 F_{\mathrm{eosinophilic}}
-+ 0.06 R_{\mathrm{nucleated/red}}
-- 0.12 A_{\mathrm{artifact}}
-- 0.12 A_{\mathrm{stringy}} \\
-&- 0.16 A_{\mathrm{gray/black}}
-- 0.06 F_{\mathrm{red}}
-- 0.07 F_{\mathrm{empty}}
-- 0.16 B_{\mathrm{brightness}} .
-\end{aligned}
+Q_i = 0.38 S_{\mathrm{coarse}} + 0.08 P_{\mathrm{cell}} + 0.04 D_{\mathrm{cell}} + 0.03 D_{\mathrm{very}} + 0.04 D_{\mathrm{focus}} + 0.09 F_{\mathrm{nuclear}} + 0.10 F_{\mathrm{packed}} + 0.06 F_{\mathrm{focus}} + 0.04 E_{\mathrm{focus}} + 0.02 \rho_{\mathrm{component}} + 0.01 U_{\mathrm{component}} + 0.03 F_{\mathrm{round}} + 0.02 F_{\mathrm{eosinophilic}} + 0.06 R_{\mathrm{nucleated/red}} - 0.12 A_{\mathrm{artifact}} - 0.12 A_{\mathrm{stringy}} - 0.16 A_{\mathrm{gray/black}} - 0.06 F_{\mathrm{red}} - 0.07 F_{\mathrm{empty}} - 0.16 B_{\mathrm{brightness}} .
 $$
 
 The selected tile set is:
@@ -583,9 +537,9 @@ k_{\mathrm{keep}} &=
 \left\lceil |\mathcal{P}_{\mathrm{pool}}|
 \, r_{\mathrm{quality}} \right\rceil, \\
 \mathcal{P}_{\mathrm{selected}} &=
-\operatorname{TopK}(\mathcal{P}_{\mathrm{pool}}, Q, k_{\mathrm{keep}})
+\mathrm{TopK}(\mathcal{P}_{\mathrm{pool}}, Q, k_{\mathrm{keep}})
 \cup
-\operatorname{Reserve}(\mathcal{P}_{\mathrm{pool}}, r_{\mathrm{reserve}}).
+\mathrm{Reserve}(\mathcal{P}_{\mathrm{pool}}, r_{\mathrm{reserve}}).
 \end{aligned}
 $$
 
@@ -606,7 +560,7 @@ $$
 Cosine similarity can then be computed as an inner product:
 
 $$
-\operatorname{sim}(z_i, z_j) = z_i^\top z_j .
+\mathrm{sim}(z_i, z_j) = z_i^\top z_j .
 $$
 
 Supported extractors include UNI2, Virchow2, H-optimus-1, DINO/Bloom-style
@@ -627,13 +581,13 @@ good and bad references:
 
 $$
 \begin{aligned}
-G_i &= \operatorname{Agg}\left(
-  \operatorname{TopK}_{z \in Z^{+}}
-  \operatorname{sim}(z_i, z)
+G_i &= \mathrm{Agg}\left(
+  \mathrm{TopK}_{z \in Z^{+}}
+  \mathrm{sim}(z_i, z)
 \right), \\
-N_i &= \operatorname{Agg}\left(
-  \operatorname{TopK}_{z \in Z^{-}}
-  \operatorname{sim}(z_i, z)
+N_i &= \mathrm{Agg}\left(
+  \mathrm{TopK}_{z \in Z^{-}}
+  \mathrm{sim}(z_i, z)
 \right), \\
 M_i &= G_i - N_i, \\
 B_i &= \sigma(-\lambda M_i).
@@ -648,11 +602,11 @@ The available aggregation operators are:
 
 $$
 \begin{aligned}
-\operatorname{Agg}_{\mathrm{mean}}(s_{1:k}) &=
+\mathrm{Agg}_{\mathrm{mean}}(s_{1:k}) &=
 \frac{1}{k}\sum_{j=1}^{k}s_j, \\
-\operatorname{Agg}_{\max}(s_{1:k}) &=
+\mathrm{Agg}_{\max}(s_{1:k}) &=
 \max_{1 \leq j \leq k} s_j, \\
-\operatorname{Agg}_{\mathrm{weighted}}(s_{1:k}) &=
+\mathrm{Agg}_{\mathrm{weighted}}(s_{1:k}) &=
 \sum_{j=1}^{k} a_j s_j, \\
 a_j &= \frac{\exp(-j/3)}{\sum_{\ell=1}^{k}\exp(-\ell/3)} .
 \end{aligned}
@@ -670,14 +624,14 @@ bad-like likelihood:
 $$
 h_i =
 \begin{cases}
-\mathrm{good\_like}, &
+\mathrm{goodlike}, &
   M_i > \tau_M^{+}
   \land B_i < \tau_B^{+}
   \land g_i^{(1)} \geq n_i^{(1)} + \tau_{\Delta}^{+}, \\
-\mathrm{bad\_like}, &
+\mathrm{badlike}, &
   M_i \leq \tau_M^{-}
   \lor \mathrm{BadDominance}(g_i^{(1)}, n_i^{(1)}, B_i), \\
-\mathrm{uncertain}, & \text{otherwise}.
+\mathrm{uncertain}, & \mathrm{otherwise}.
 \end{cases}
 $$
 
@@ -703,45 +657,38 @@ the level-0 bounding box of `v`. In AML reference mode, very low
 dark/cellularity candidates may be excluded:
 
 $$
-p_i \in \mathcal{P}_v
-\quad\text{only if}\quad
-D_i \geq \tau_{\mathrm{dark}} .
+p_i \in \mathcal{P}_v \quad \mathrm{iff} \quad D_i \geq \tau_{\mathrm{dark}} .
 $$
 
 For each remaining tile:
 
 $$
-\begin{aligned}
-\Delta_i &= g^{(1)}_i - n^{(1)}_i, \\
-P^{\mathrm{qual}}_i &=
-  w_M M_i + w_\Delta \Delta_i, \\
-L^{\mathrm{bad}}_i &=
-  \operatorname{clip}_{[0,1]}
-  \left(\frac{B_i - b_0}{1 - b_0}\right), \\
-L^{\mathrm{match}}_i &=
-  \operatorname{clip}_{[0,1]}
-  \left(\frac{n^{(1)}_i - g^{(1)}_i + \delta}{\alpha}\right), \\
-L^{\mathrm{qual}}_i &=
-  w_{\mathrm{bad}} L^{\mathrm{bad}}_i
-  + w_{\mathrm{match}} L^{\mathrm{match}}_i .
-\end{aligned}
+Delta_i = g1_i - n1_i
 $$
 
-Here $g^{(1)}_i$ and $n^{(1)}_i$ are the top-1 good and bad reference
+$$
+P_qual_i = w_M M_i + w_Delta Delta_i
+$$
+
+$$
+L_bad_i = clip01((B_i - b_0) / (1 - b_0))
+$$
+
+$$
+L_match_i = clip01((n1_i - g1_i + delta) / alpha)
+$$
+
+$$
+L_qual_i = w_bad * L_bad_i + w_match * L_match_i
+$$
+
+Here `g1_i` and `n1_i` are the top-1 good and bad reference
 similarities, respectively.
 
 The combined candidate score is:
 
 $$
-\begin{aligned}
-S^{\mathrm{cand}}_i =
-&\; w_D z(D_i)
-+ w_G z(G_i)
-+ w_P z(P^{\mathrm{qual}}_i)
-- w_L L^{\mathrm{qual}}_i \\
-&+ w_S \mathbb{1}[\mathrm{strong\_good\_support}_i]
-+ w_R \mathbb{1}[\mathrm{inside\_dark\_region}_i] .
-\end{aligned}
+S_cand_i = w_D * z(D_i) + w_G * z(G_i) + w_P * z(P_qual_i) - w_L * L_qual_i + w_S * I[StrongGood_i] + w_R * I[DarkRegion_i]
 $$
 
 where $z(x) = (x - \mu_x)/(\sigma_x + \epsilon)$ is computed within the current
@@ -757,16 +704,15 @@ When the embedding index cannot provide candidates, the viewer falls back to a
 7-by-7 grid over the current rendered field. For each patch:
 
 $$
-\begin{aligned}
-F_{\mathrm{tissue}} &= \operatorname{mean}(\mathbb{1}[g < 0.92]), \\
-E_{\mathrm{edge}} &=
-\frac{
-  \operatorname{mean}(|\nabla_x g|)
-  + \operatorname{mean}(|\nabla_y g|)
-}{2}, \\
-S_{\mathrm{fallback}} &=
-0.70 F_{\mathrm{tissue}} + 0.30 E_{\mathrm{edge}} .
-\end{aligned}
+F_{\mathrm{tissue}} = \mathrm{mean}(\mathbb{1}[g < 0.92])
+$$
+
+$$
+E_{\mathrm{edge}} = \frac{\mathrm{mean}(|\nabla_x g|) + \mathrm{mean}(|\nabla_y g|)}{2}
+$$
+
+$$
+S_{\mathrm{fallback}} = 0.70 F_{\mathrm{tissue}} + 0.30 E_{\mathrm{edge}} .
 $$
 
 Patches with insufficient tissue or tissue-edge artifacts are skipped. The
@@ -803,22 +749,21 @@ ROI marking uses normalized coordinates in the current view. The center is
 mapped to level-0 slide coordinates:
 
 $$
-\begin{aligned}
-c^{(0)}_x &= x^{(0)}_{\mathrm{view}}
-+ \operatorname{round}\left(\frac{c^{(999)}_x}{999} w_{\mathrm{view}}\right), \\
-c^{(0)}_y &= y^{(0)}_{\mathrm{view}}
-+ \operatorname{round}\left(\frac{c^{(999)}_y}{999} h_{\mathrm{view}}\right).
-\end{aligned}
+c^{(0)}_x = x^{(0)}_{\mathrm{view}} + \mathrm{round}\left(\frac{c^{(999)}_x}{999} w_{\mathrm{view}}\right)
+$$
+
+$$
+c^{(0)}_y = y^{(0)}_{\mathrm{view}} + \mathrm{round}\left(\frac{c^{(999)}_y}{999} h_{\mathrm{view}}\right)
 $$
 
 The final evidence crop is a fixed square:
 
 $$
 \begin{aligned}
-s_{\mathrm{roi}} &= \text{fixed ROI side length}, \\
-x_0 &= \operatorname{clamp}
+s_{\mathrm{roi}} &= s_{\mathrm{fixed}}, \\
+x_0 &= \mathrm{clamp}
 \left(c^{(0)}_x - \frac{s_{\mathrm{roi}}}{2}, 0, W_S - s_{\mathrm{roi}}\right), \\
-y_0 &= \operatorname{clamp}
+y_0 &= \mathrm{clamp}
 \left(c^{(0)}_y - \frac{s_{\mathrm{roi}}}{2}, 0, H_S - s_{\mathrm{roi}}\right).
 \end{aligned}
 $$
@@ -826,7 +771,7 @@ $$
 Duplicate suppression uses center distance:
 
 $$
-\operatorname{duplicate}(r_a, r_b) =
+\mathrm{duplicate}(r_a, r_b) =
 \mathbb{1}\left[
   \lVert c_a - c_b \rVert_2 < 0.5 s_{\mathrm{roi}}
 \right].
@@ -848,7 +793,7 @@ $$
 with rejection when:
 
 $$
-\operatorname{mean}(\mathbb{1}_{\mathrm{flood}}) > 0.30 .
+\mathrm{mean}(\mathbb{1}_{\mathrm{flood}}) > 0.30 .
 $$
 
 ## Diagnostic Decision Rule
@@ -864,15 +809,15 @@ The binary morphology rule is:
 $$
 \hat{y} =
 \begin{cases}
-\text{Acute leukemia}, &
+\mathrm{AcuteLeukemia}, &
   \hat{b}_{\mathrm{global}} \geq 0.20
-  \land \text{diffuse immature morphology}, \\
-\text{Normal marrow}, &
+  \land \mathrm{DiffuseImmatureMorphology}, \\
+\mathrm{NormalMarrow}, &
   \hat{b}_{\mathrm{global}} < 0.05
-  \lor \text{heterogeneous maturation preserved}, \\
-\operatorname{closest\_binary\_label}, &
+  \lor \mathrm{HeterogeneousMaturationPreserved}, \\
+\mathrm{closestbinarylabel}, &
   0.05 \leq \hat{b}_{\mathrm{global}} < 0.20
-  \land \text{suspicious morphology}.
+  \land \mathrm{SuspiciousMorphology}.
 \end{cases}
 $$
 
@@ -886,8 +831,8 @@ rods when present.
 NPM1 prediction is gated by the AML decision:
 
 $$
-\operatorname{NPM1\_applicable} =
-\mathbb{1}[\hat{y} = \text{Acute leukemia}] .
+\mathrm{NPMOneApplicable} =
+\mathbb{1}[\hat{y} = \mathrm{AcuteLeukemia}] .
 $$
 
 When applicable, the model classifies `NPM1_mutated` versus `NPM1_wildtype`

@@ -49,9 +49,9 @@ view with level-0 bounding box $(x_v,y_v,w_v,h_v)$, a normalized point
 $(u,v)$ maps to slide coordinates:
 
 $$
-x^{(0)} = x_v + \operatorname{round}\left(\frac{u}{999}w_v\right),
-\qquad
-y^{(0)} = y_v + \operatorname{round}\left(\frac{v}{999}h_v\right).
+x^{(0)} = x_v + \mathrm{round}\left(\frac{u}{999}w_v\right),
+\quad
+y^{(0)} = y_v + \mathrm{round}\left(\frac{v}{999}h_v\right).
 $$
 
 This convention lets the VLM refer to visual regions without knowing the native
