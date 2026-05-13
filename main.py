@@ -1331,7 +1331,7 @@ async def finalize_and_start(run_id: str):
             run_id,
             run.slide_path,
             run.prompt or None,
-            normalized_agent_type,
+            run.agent_type,
             run.model_name,
             terminate_event,
             run.roi_input_path,

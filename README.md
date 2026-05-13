@@ -227,5 +227,5 @@ Detailed notes live in [evaluate/README.md](evaluate/README.md) under `Reference
 - [docs/AML_AGENT_PIPELINE_METHODOLOGY.md](docs/AML_AGENT_PIPELINE_METHODOLOGY.md): methodology and algorithmic description
 - [docs/AML_AGENT_PIPELINE_IMPLEMENTATION.md](/AML_AGENT_PIPELINE_IMPLEMENTATION.md): implementation details
 - [docs/AML_AGENT_TOOLS_APPENDIX.md](docs/AML_AGENT_TOOLS_APPENDIX.md): tool and navigation appendix
-- [docs/AML_PROMPTS_APPENDIX.md](AML_PROMPTS_APPENDIX.md): prompt appendix
+- [docs/AML_PROMPTS_APPENDIX.md](docs/AML_PROMPTS_APPENDIX.md): prompt appendix
 - [docs/EVALUATION_METRICS.md](docs/EVALUATION_METRICS.md): metric definitions
