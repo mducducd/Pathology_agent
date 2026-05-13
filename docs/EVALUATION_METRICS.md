@@ -39,10 +39,22 @@ For slide $i$:
 - $T_i = |A_i|$: number of tool calls in the trajectory.
 - $m_i$: number of accepted or marked ROIs.
 - $q_i$: bounded tool-flow score, with $q_i \in [0,1]$.
+- $p_i \in \{0,1\}$: parseability indicator, where $p_i=1$ if $\hat{y}_i$ is parseable.
 
 Let $\mathcal{G}$ be the set of slides with known ground truth and let
 $N_g = |\mathcal{G}|$. In the standard AML benchmark, all slides are expected
 to have ground truth, so typically $N_g=N$.
+
+Use $[N] = \{1,2,\ldots,N\}$ for index ranges.
+
+Let $\mathcal{P}$ be the set of slides with parseable final AML/Normal
+prediction:
+
+$$
+\mathcal{P}
+=
+\{i \in \mathcal{G} : p_i = 1\}
+$$
 
 ## Reported Headline Metrics
 
@@ -89,7 +101,7 @@ Formula:
 
 $$
 \text{evaluated}
-= \sum_{i \in \mathcal{G}} \mathbb{1}[\hat{y}_i \text{ is parseable}]
+= |\mathcal{P}|
 $$
 
 Interpretation:
@@ -114,7 +126,7 @@ Count:
 
 $$
 \text{correct}
-= \sum_{i \in \mathcal{G}} \mathrm{Correct}_i
+= \sum_{i \in \mathcal{P}} \mathrm{Correct}_i
 $$
 
 Rate:
@@ -122,10 +134,11 @@ Rate:
 $$
 \text{accuracy\_all\_pct}
 =
-100 \times \frac{\text{correct}}{N_g}
+100 \times \frac{\text{correct}}{|\mathcal{P}|}
 $$
 
-In the standard benchmark where all slides have ground truth:
+In the standard benchmark where all slides have ground truth and parseable
+predictions are expected for every slide:
 
 $$
 \text{accuracy\_all\_pct}
@@ -207,25 +220,25 @@ Definitions:
 $$
 \text{aml\_tp}
 =
-\sum_i \mathbb{1}[y_i=\mathrm{AML} \land \hat{y}_i=\mathrm{AML}]
+\sum_{i \in \mathcal{P}} \mathbb{1}[y_i=\mathrm{AML} \land \hat{y}_i=\mathrm{AML}]
 $$
 
 $$
 \text{aml\_fn}
 =
-\sum_i \mathbb{1}[y_i=\mathrm{AML} \land \hat{y}_i=\mathrm{Normal}]
+\sum_{i \in \mathcal{P}} \mathbb{1}[y_i=\mathrm{AML} \land \hat{y}_i=\mathrm{Normal}]
 $$
 
 $$
 \text{normal\_tn}
 =
-\sum_i \mathbb{1}[y_i=\mathrm{Normal} \land \hat{y}_i=\mathrm{Normal}]
+\sum_{i \in \mathcal{P}} \mathbb{1}[y_i=\mathrm{Normal} \land \hat{y}_i=\mathrm{Normal}]
 $$
 
 $$
 \text{normal\_fp}
 =
-\sum_i \mathbb{1}[y_i=\mathrm{Normal} \land \hat{y}_i=\mathrm{AML}]
+\sum_{i \in \mathcal{P}} \mathbb{1}[y_i=\mathrm{Normal} \land \hat{y}_i=\mathrm{AML}]
 $$
 
 Interpretation:
@@ -288,7 +301,7 @@ Slide-level definition:
 $$
 \mathrm{FlowPass}_i
 =
-\mathbb{1}[s_i=1 \land \hat{y}_i \text{ is parseable} \land m_i \ge 5 \land q_i \ge 0.75]
+\mathbb{1}[s_i=1 \land p_i=1 \land m_i \ge 5 \land q_i \ge 0.75]
 $$
 
 Count:
@@ -358,12 +371,20 @@ A slide is stable if all conditions are true:
 - the slide did not require a non-LLM/API retry,
 - the slide passed the bounded-flow criterion.
 
+Slide-level indicator:
+
+$$
+\mathrm{Stable}_i
+=
+\mathbb{1}[s_i=1 \land r_i=0 \land p_i=1 \land q_i \ge 0.75]
+$$
+
 Stable-set definition:
 
 $$
-\mathcal{T}_{\mathrm{stable}}
+\mathcal{I}_{\mathrm{stable}}
 =
-\{t_i : \mathrm{Stable}_i=1\}
+\{i \in [N] : \mathrm{Stable}_i=1\}
 $$
 
 Number of stable slides:
@@ -371,7 +392,7 @@ Number of stable slides:
 $$
 \text{stable\_elapsed\_n}
 =
-|\mathcal{T}_{\mathrm{stable}}|
+|\mathcal{I}_{\mathrm{stable}}|
 $$
 
 Stable average runtime:
@@ -379,8 +400,8 @@ Stable average runtime:
 $$
 \text{avg\_elapsed\_stable\_sec}
 =
-\frac{1}{|\mathcal{T}_{\mathrm{stable}}|}
-\sum_{t_i \in \mathcal{T}_{\mathrm{stable}}} t_i
+\frac{1}{|\mathcal{I}_{\mathrm{stable}}|}
+\sum_{i \in \mathcal{I}_{\mathrm{stable}}} t_i
 $$
 
 Interpretation:
@@ -403,9 +424,9 @@ has final OK status and no non-LLM/API retry failure.
 Successful-runtime set:
 
 $$
-\mathcal{T}_{\mathrm{ok}}
+\mathcal{I}_{\mathrm{ok}}
 =
-\{t_i : s_i=1 \land r_i=0\}
+\{i \in [N] : s_i=1 \land r_i=0\}
 $$
 
 Number of successful runs:
@@ -413,7 +434,7 @@ Number of successful runs:
 $$
 \text{elapsed\_ok\_n}
 =
-|\mathcal{T}_{\mathrm{ok}}|
+|\mathcal{I}_{\mathrm{ok}}|
 $$
 
 Median successful runtime:
@@ -421,7 +442,7 @@ Median successful runtime:
 $$
 \text{median\_elapsed\_all\_ok\_sec}
 =
-\operatorname{median}(\mathcal{T}_{\mathrm{ok}})
+\operatorname{median}(\{t_i : i \in \mathcal{I}_{\mathrm{ok}}\})
 $$
 
 Interpretation:
@@ -447,6 +468,12 @@ $$
 
 where $z_j$ is the ground-truth NPM1 label and $\widehat{z}_j$ is the predicted
 NPM1 label.
+
+Scored-case count:
+
+$$
+\text{npm1\_scored} = N_{\mathrm{npm1}}
+$$
 
 Count:
 
