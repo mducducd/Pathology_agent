@@ -532,6 +532,9 @@ def _agent_result(final_output: str, reasoning_content: Optional[str] = None) ->
     return SimpleNamespace(final_output=final_output, reasoning_content=reasoning_content)
 
 
+AML_ROI_COMPLETION_MESSAGE = "All ROI done."
+
+
 def _run_aml_roi(
     *,
     slide_path: str,
@@ -618,7 +621,7 @@ def _run_aml_roi(
     )
     write_roi_collection_json(collection, roi_collection_path)
 
-    final_text = result.final_output
+    final_text = AML_ROI_COMPLETION_MESSAGE
     reasoning = getattr(result, "reasoning_content", None)
 
     report_path = None
