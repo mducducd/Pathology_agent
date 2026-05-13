@@ -1,12 +1,11 @@
-# Slide Agent
+# Slide Morphology Triage Agent
 
-Open-source whole-slide pathology agent for AML ROI collection, morphology-first diagnosis, and interactive WSI exploration.
+Open-source whole-slide pathology agent for mophology triage ROI collection, morphology-first diagnosis, and interactive WSI exploration. Support general slides and Acute myeloid leukemia (AML) slides
 
 The project combines deterministic slide reduction, embedding-based candidate retrieval, and a vision-language model that navigates high-value regions instead of trying to reason over an entire gigapixel slide at once.
 
 ## Highlights
 
-- Two-stage AML workflow: collect strong ROIs first, then diagnose from those ROIs only.
 - Interactive FastAPI workbench for browser-based runs and live monitoring.
 - Headless evaluation scripts for single-slide, batch, and cache-precomputation workflows.
 - Support for standard WSI formats plus MIRAX files and server-local slide browsing.
@@ -32,7 +31,7 @@ source .venv/bin/activate
 
 If your model backend needs API keys or other runtime settings, create a `.env` file with the variables you use locally.
 
-The OpenAI-compatible client settings live in [configs/config.yaml](/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/configs/config.yaml) under the `agent` section:
+The OpenAI-compatible client settings live in [configs/config.yaml](configs/config.yaml) under the `agent` section:
 
 ```yaml
 agent:
@@ -47,7 +46,7 @@ export OPENAI_API_BASE="http://your-server/v1"
 export OPENAI_API_KEY="your-key"
 ```
 
-Update model exposure in [main.py](/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/main.py) and [wsi_core.py](/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/wsi_core.py) by setting `MODEL_NAME` and `ALLOWED_MODEL_NAMES`.
+Update model exposure in [main.py](main.py) and [wsi_core.py](wsi_core.py) by setting `MODEL_NAME` and `ALLOWED_MODEL_NAMES`.
 
 To expose server-local slide roots in the web Explorer, set `SERVER_SLIDE_ROOTS` before starting the app:
 
@@ -163,37 +162,15 @@ When prompted for MSI screening, the agent samples at least three distinct tumou
 
 ## CLI And Batch Runs
 
-The main headless entrypoints live under [`evaluate/`](/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/evaluate).
+See the dedicated CLI guide: [evaluate/README.md](evaluate/README.md).
 
-Single-slide examples:
+Main entrypoints:
 
-```bash
-# Full AML pipeline
-python evaluate/run_single_slide.py \
-    --slide /path/to/patient.mrxs \
-    --output-dir ./batch_outputs \
-    --agent aml_auto
-
-# ROI collection only
-python evaluate/run_single_slide.py \
-    --slide /path/to/patient.mrxs \
-    --output-dir ./batch_outputs \
-    --agent aml_roi
-
-# Diagnosis only from an existing ROI bundle
-python evaluate/run_single_slide.py \
-    --output-dir ./batch_outputs \
-    --agent aml_diagnosis \
-    --roi-input-path /path/to/roi_collection.json
-```
-
-Other useful scripts:
-
-- `evaluate/run_batch_aml.sh` for CSV-driven AML batches
-- `evaluate/run_batch_aml_suite.sh` for multi-run suites
-- `evaluate/preextract_hybrid_cache.py` for cache precomputation
-- `evaluate/preextract_hybrid_cache_suite.sh` for multi-extractor cache builds
-- `evaluate/benchmark_aml_vllm_speed.py` for latency benchmarking
+- `evaluate/run_single_slide.py`: single-case headless run
+- `evaluate/run_batch_aml.sh`: CSV-driven AML batch
+- `evaluate/run_batch_aml_suite.sh`: model/extractor suite
+- `evaluate/preextract_hybrid_cache.py`: feature-cache prewarm
+- `evaluate/preextract_hybrid_cache_suite.sh`: multi-extractor prewarm
 
 ## Performance Benchmarks
 
@@ -243,14 +220,13 @@ python -m wsi_core_pkg.embeddings.prebuild_reference_embeddings \
     --extractor reddino
 ```
 
-Detailed notes live in [REFERENCE_EMBEDDINGS.md](/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/REFERENCE_EMBEDDINGS.md).
+Detailed notes live in [evaluate/README.md](evaluate/README.md) under `Reference Embeddings`.
 
 ## Documentation Map
 
-- [REFERENCE_EMBEDDINGS.md](/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/REFERENCE_EMBEDDINGS.md): reference-tile organization, extractors, and cache management
-- [ROI_SELECTION_IMPROVEMENTS.md](/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/ROI_SELECTION_IMPROVEMENTS.md): notes on ROI ranking and selection changes
-- [docs/AML_AGENT_PIPELINE_METHODOLOGY.md](/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/docs/AML_AGENT_PIPELINE_METHODOLOGY.md): methodology and algorithmic description
+- [evaluate/README.md](evaluate/README.md): CLI workflows and reference-embedding setup
+- [docs/AML_AGENT_PIPELINE_METHODOLOGY.md](docs/AML_AGENT_PIPELINE_METHODOLOGY.md): methodology and algorithmic description
 - [docs/AML_AGENT_PIPELINE_IMPLEMENTATION.md](/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/docs/AML_AGENT_PIPELINE_IMPLEMENTATION.md): implementation details
-- [docs/AML_AGENT_TOOLS_APPENDIX.md](/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/docs/AML_AGENT_TOOLS_APPENDIX.md): tool and navigation appendix
-- [docs/AML_PROMPTS_APPENDIX.md](/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/docs/AML_PROMPTS_APPENDIX.md): prompt appendix
-- [docs/EVALUATION_METRICS.md](/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/docs/EVALUATION_METRICS.md): metric definitions
+- [docs/AML_AGENT_TOOLS_APPENDIX.md](docs/AML_AGENT_TOOLS_APPENDIX.md): tool and navigation appendix
+- [docs/AML_PROMPTS_APPENDIX.md](AML_PROMPTS_APPENDIX.md): prompt appendix
+- [docs/EVALUATION_METRICS.md](docs/EVALUATION_METRICS.md): metric definitions
