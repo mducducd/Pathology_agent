@@ -205,10 +205,10 @@ Results are averaged across available feature extractors. `roi5 %` is the percen
 
 | Model | Success % | roi5 % | Avg. tool calls |
 |---|---:|---:|---:|
-| [gemma-4-31B](https://huggingface.co/models?search=gemma-4-31B) | 100.00 | 71.30 | 21.24 |
-| [Qwen3.5-397B](https://huggingface.co/models?search=Qwen3.5-397B) | 99.66 | 99.26 | 25.07 |
+| [gemma-4-31B](https://huggingface.co/google/gemma-4-31B-it) | 100.00 | 71.30 | 21.24 |
+| [Qwen3.5-397B](https://huggingface.co/Qwen/Qwen3.5-397B-A17B-FP8) | 99.66 | 99.26 | 25.07 |
 | [DeepSeek-V4](https://huggingface.co/models?search=DeepSeek-V4) | 100.00 | 99.73 | 27.10 |
-| [GLM-4.6V](https://huggingface.co/models?search=GLM-4.6V) | 92.14 | 95.63 | 26.28 |
+| [GLM-4.6V](https://huggingface.co/zai-org/GLM-4.6V-FP8) | 92.14 | 95.63 | 26.28 |
 | [GPT-OSS-120B](https://huggingface.co/models?search=GPT-OSS-120B) | 99.63 | 23.99 | 37.36 |
 
 ### AML Detector Results
@@ -219,14 +219,14 @@ Prompt wording has some effect, but the results are not dominated by prompt chan
 
 | Model | Ext | Acc % | TP | FN | TN | FP | NPM1 % | HistSim |
 |---|---|---:|---:|---:|---:|---:|---:|---:|
-| [gemma-4-31B](https://huggingface.co/models?search=gemma-4-31B) | Dino | 70.16 | 234 | 85 | 27 | 26 | 74.43 | 0.889 |
-| [gemma-4-31B](https://huggingface.co/models?search=gemma-4-31B) | H-opt | 72.85 | 246 | 73 | 25 | 28 | 71.74 | 0.897 |
-| [gemma-4-31B](https://huggingface.co/models?search=gemma-4-31B) | UNI2 | 78.23 | 269 | 50 | 22 | 31 | 73.02 | 0.919 |
-| [gemma-4-31B](https://huggingface.co/models?search=gemma-4-31B) | Vir2 | 77.96 | 270 | 49 | 20 | 33 | 72.00 | 0.907 |
-| [Qwen3.5-397B](https://huggingface.co/models?search=Qwen3.5-397B) | Dino | 60.48 | 177 | 142 | 48 | 5 | 65.67 | 0.885 |
-| [Qwen3.5-397B](https://huggingface.co/models?search=Qwen3.5-397B) | H-opt | 61.02 | 182 | 137 | 45 | 8 | 65.96 | 0.896 |
-| [Qwen3.5-397B](https://huggingface.co/models?search=Qwen3.5-397B) | UNI2 | 69.09 | 215 | 104 | 42 | 11 | 64.15 | 0.915 |
-| [Qwen3.5-397B](https://huggingface.co/models?search=Qwen3.5-397B) | Vir2 | 66.13 | 207 | 112 | 39 | 14 | 67.88 | 0.906 |
+| [gemma-4-31B](https://huggingface.co/google/gemma-4-31B-it) | Dino | 70.16 | 234 | 85 | 27 | 26 | 74.43 | 0.889 |
+| [gemma-4-31B](https://huggingface.co/google/gemma-4-31B-it) | H-opt | 72.85 | 246 | 73 | 25 | 28 | 71.74 | 0.897 |
+| [gemma-4-31B](https://huggingface.co/google/gemma-4-31B-it) | UNI2 | 78.23 | 269 | 50 | 22 | 31 | 73.02 | 0.919 |
+| [gemma-4-31B](https://huggingface.co/google/gemma-4-31B-it) | Vir2 | 77.96 | 270 | 49 | 20 | 33 | 72.00 | 0.907 |
+| [Qwen3.5-397B](https://huggingface.co/Qwen/Qwen3.5-397B-A17B-FP8) | Dino | 60.48 | 177 | 142 | 48 | 5 | 65.67 | 0.885 |
+| [Qwen3.5-397B](https://huggingface.co/Qwen/Qwen3.5-397B-A17B-FP8) | H-opt | 61.02 | 182 | 137 | 45 | 8 | 65.96 | 0.896 |
+| [Qwen3.5-397B](https://huggingface.co/Qwen/Qwen3.5-397B-A17B-FP8) | UNI2 | 69.09 | 215 | 104 | 42 | 11 | 64.15 | 0.915 |
+| [Qwen3.5-397B](https://huggingface.co/Qwen/Qwen3.5-397B-A17B-FP8) | Vir2 | 66.13 | 207 | 112 | 39 | 14 | 67.88 | 0.906 |
 
 `HistSim` measures histogram similarity between clinician-selected ROIs and agent-selected ROIs.
 
