@@ -19,13 +19,13 @@ JSON morphology report.
 
 | Area | Main files |
 | --- | --- |
-| Runtime entrypoints | `main.py`, `evaluate/run_single_slide.py`, `evaluate/run_batch_aml.sh`, `evaluate/run_batch_aml_diagnosis.sh` |
+| Runtime entrypoints | `main.py`, `evaluate/run_single_slide.py`, `evaluate/run_batch_aml.sh`, `evaluate/run_batch_aml_suite.sh` |
 | Agent definitions | `wsi_core_pkg/agents.py` |
 | Pipeline runners and ROI collection | `wsi_core_pkg/runtime.py` |
 | Navigation tools | `wsi_core_pkg/tools.py` |
 | AML prompts (collection and diagnosis) | `wsi_core_pkg/prompts.py` |
 | Context/image injection | `wsi_core_pkg/context_injection.py` |
-| AML output validation | `wsi_core_pkg/aml_validation.py` |
+| AML output validation | `wsi_core_pkg/aml_output.py` |
 | Dark/cellularity overlay | `wsi_core_pkg/dark_regions.py` |
 | Tiling and embedding extraction | `wsi_core_pkg/embeddings/tiling.py` |
 | Raw tile quality heuristics | `wsi_core_pkg/embeddings/tile_prefilter.py` |
@@ -1017,7 +1017,7 @@ Important defaults from `configs/config.yaml`:
 | `BATCH_SIZE` | `512` | embedding batch size in suite defaults |
 | `ROI_SIZE_PX` | `2048` | final ROI crop/output side |
 | `ROI_CANDIDATE_TOP_K` | `72` | raw candidates per view |
-| `ROI_CANDIDATE_TOP_K_AML` | `30` | AML-facing candidate cap |
+| `ROI_CANDIDATE_TOP_K_AML` | `40` | AML-facing candidate cap |
 | `TARGET_ACCEPTED_ROIS` | `5` | preferred AML ROI count |
 | `MAX_ACCEPTED_ROIS` | `5` | hard AML ROI cap |
 | `CANDIDATE_NAV_FIELD_UM` | `600.0` | field width for candidate jump |
