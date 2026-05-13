@@ -5,9 +5,8 @@ from agents import Agent, ModelSettings, OpenAIChatCompletionsModel
 
 from .config import ENABLE_THINKING, MODEL_NAME, WSI_AGENT_TEMPERATURE, client_async
 from .prompts import (
-    DEFAULT_AML_PROMPT,
-    DEFAULT_AML_ROI_COLLECTION_PROMPT,
     DEFAULT_AML_DIAGNOSIS_PROMPT,
+    DEFAULT_AML_ROI_COLLECTION_PROMPT,
 )
 from .tools import (
     wsi_discard_last_roi,
@@ -206,26 +205,6 @@ WSITileSelectorAgent = Agent(
         wsi_pan_current,
         wsi_get_view_info,
         wsi_save_tile_norm,
-    ],
-)
-
-WSIAmlDetectorAgent = Agent(
-    name="WSIAmlDetectorAgent",
-    model=MODEL_NAME,
-    model_settings=_MODEL_SETTINGS,
-    instructions=DEFAULT_AML_PROMPT,
-    tools=[
-        wsi_get_overview_view,
-        wsi_zoom_current_norm,
-        wsi_zoom_full_norm,
-        wsi_pan_current,
-        wsi_get_view_info,
-        wsi_open_candidate,
-        wsi_mark_candidate,
-        wsi_mark_roi_norm,
-        wsi_save_tile_norm,
-        wsi_discard_last_roi,
-        wsi_rebuild_reference_index,
     ],
 )
 

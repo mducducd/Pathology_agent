@@ -59,17 +59,10 @@ JSON object with per-ROI blast ranges, global blast range, `final_decision`
 (`Normal marrow` or `Acute leukemia`), confidence, and NPM1 prediction when AML
 is established.
 
-### aml_auto / aml (full two-stage pipeline)
+### aml_auto (full two-stage pipeline)
 
 Chains Stage 1 then Stage 2: `_run_aml_roi()` → `roi_collection.json` →
 `_run_aml_diagnosis()`. The primary production mode.
-
-### WSIAmlDetectorAgent (`aml_detector` — legacy)
-
-Instructions: `DEFAULT_AML_PROMPT`
-
-Single-stage agent that combines navigation and diagnosis. Included for
-comparison and debugging; the two-stage `aml_auto` pipeline is the default.
 
 ## End-to-End Flow (aml_auto)
 
@@ -274,7 +267,7 @@ function ENSURE_ROI_INDEX(S, theta, mpp, cfg):
     Z <- EMBED_AND_L2_NORMALIZE(P, theta)
     D <- DARK_CELLULARITY_SCORE(P)
 
-    if cfg.agent_type == "aml":
+    if cfg.agent_type == "aml_roi":
         R_pos, R_neg <- LOAD_REFERENCE_TILES(cfg.example_tiles_root)
         Z_pos, Z_neg <- EMBED_AND_L2_NORMALIZE(R_pos, theta), EMBED_AND_L2_NORMALIZE(R_neg, theta)
         ref <- REFERENCE_RETRIEVAL_SCORES(Z, Z_pos, Z_neg, cfg)

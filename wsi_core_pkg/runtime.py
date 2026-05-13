@@ -38,7 +38,6 @@ from .context_injection import (
 )
 from .config import AmlRoiCollectionComplete
 from .prompts import (
-    DEFAULT_AML_PROMPT,
     DEFAULT_AML_DIAGNOSIS_PROMPT,
     DEFAULT_AML_ROI_COLLECTION_PROMPT,
     DEFAULT_TILE_PROMPT,
@@ -150,7 +149,7 @@ def _recover_final_output_from_tool_error(
     *,
     agent_type: str,
 ) -> Optional[str]:
-    if str(agent_type or "").lower() not in {"aml", "aml_auto", "aml_roi"}:
+    if str(agent_type or "").lower() not in {"aml_auto", "aml_roi"}:
         return None
 
     match = re.search(r"Tool\s+(.+?)\s+not found in agent\s+", str(exc), flags=re.IGNORECASE)
@@ -784,10 +783,6 @@ def _resolve_aml_auto_prompts(
         diagnosis_prompt = prompt
     if not str(diagnosis_prompt or "").strip():
         diagnosis_prompt = None
-    elif str(diagnosis_prompt).strip() == DEFAULT_AML_PROMPT.strip():
-        # Preserve split-stage defaults for legacy callers that still send the
-        # old combined AML prompt in aml_auto mode.
-        diagnosis_prompt = None
     return roi_prompt, diagnosis_prompt
 
 
@@ -851,7 +846,7 @@ def _run_aml_auto(
             "accepted_roi_count": saved_summary["accepted_roi_count"],
             "state": {
                 "run_id": config.run_id,
-                "agent_type": "aml",
+                "agent_type": "aml_roi",
                 "fallback_reason": fallback_reason,
             },
         }
@@ -924,10 +919,6 @@ def run_wsi_agent_for_web(
         default_mpp_um=default_mpp_um,
         candidate_nav_field_um=candidate_nav_field_um,
     )
-
-    # Legacy alias
-    if agent_type_l == "aml":
-        agent_type_l = "aml_auto"
 
     # ── AML pipeline modes ────────────────────────────────────────────
     if agent_type_l == "aml_auto":

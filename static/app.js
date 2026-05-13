@@ -100,7 +100,6 @@
 
   let defaultPrompts = {
     tile: "",
-    aml: "",
     aml_auto: "",
     aml_auto_stage_defaults: {
       roi_collection: "",
@@ -399,7 +398,6 @@
     if (!value) return false;
     return [
       defaultPrompts.tile,
-      defaultPrompts.aml,
       defaultPrompts.aml_auto,
       defaultPrompts.aml_roi,
       defaultPrompts.aml_diagnosis,
@@ -418,7 +416,6 @@
         : {};
       const nextPrompts = {
         tile: typeof prompts.tile === "string" ? prompts.tile : "",
-        aml: typeof prompts.aml === "string" ? prompts.aml : "",
         aml_auto: typeof prompts.aml_auto === "string" ? prompts.aml_auto : "",
         aml_auto_stage_defaults: {
           roi_collection: typeof amlAutoStageDefaults.roi_collection === "string" ? amlAutoStageDefaults.roi_collection : "",

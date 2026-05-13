@@ -26,7 +26,6 @@ from wsi_core_pkg.embeddings import (
 from wsi_core_pkg.aml_output import persist_aml_slide_bundle, resolve_aml_case_output_dir
 from wsi_core_pkg.prompts import (
     DEFAULT_AML_DIAGNOSIS_PROMPT,
-    DEFAULT_AML_PROMPT,
     DEFAULT_AML_ROI_COLLECTION_PROMPT,
     DEFAULT_TILE_PROMPT,
     DEFAULT_WSI_PROMPT,
@@ -694,7 +693,6 @@ def run_worker(
     run = RUNS.get(run_id)
     if run is None:
         return
-    normalized_agent_type = "aml_auto" if agent_type == "aml" else agent_type
     case_output_dir = Path(roi_collection_path).parent if roi_collection_path else None
     if terminate_event.is_set() or run.status == "terminated":
         run.status = "terminated"
@@ -711,7 +709,7 @@ def run_worker(
         result = run_wsi_agent_for_web(
             slide_path=slide_path,
             prompt=prompt,
-            agent_type=normalized_agent_type,
+            agent_type=agent_type,
             run_id=run_id,
             model_name=model_name,
             aml_auto_roi_prompt=aml_auto_roi_prompt,
@@ -755,7 +753,7 @@ def run_worker(
             run.reasoning_content = result.get("reasoning_content")
             run.report_path = result.get("report_path")
             run.slide_name = result.get("slide_name")
-            if case_output_dir is not None and normalized_agent_type.startswith("aml"):
+            if case_output_dir is not None and agent_type.startswith("aml"):
                 elapsed_sec = time.time() - started_at
                 persist_aml_slide_bundle(
                     case_output_dir=case_output_dir,
@@ -796,7 +794,7 @@ def run_worker(
             print("=== RUN ERROR ===")
             print(run.error_message)
             print(run.traceback)
-            if case_output_dir is not None and normalized_agent_type.startswith("aml"):
+            if case_output_dir is not None and agent_type.startswith("aml"):
                 try:
                     elapsed_sec = time.time() - started_at
                     persist_aml_slide_bundle(
@@ -943,7 +941,7 @@ def _build_aml_diagnosis_view_state(run: RunStatus) -> Dict[str, object]:
 
 
 def _merge_saved_aml_rois_into_view_state(run: RunStatus, wsi_state: Optional[Dict[str, object]]) -> Optional[Dict[str, object]]:
-    if run.agent_type not in {"aml", "aml_auto", "aml_roi"}:
+    if run.agent_type not in {"aml_auto", "aml_roi"}:
         return wsi_state
     # For aml_roi and aml_auto: don't preload old ROIs while actively collecting/generating new ones
     # (only preload after completion to avoid showing stale cached results during rerun)
@@ -980,7 +978,6 @@ def get_default_prompts():
     return {
         "prompts": {
             "tile": DEFAULT_TILE_PROMPT,
-            "aml": DEFAULT_AML_PROMPT,
             # aml_auto uses split stage defaults internally, so there is no
             # single prompt string that accurately represents the whole mode.
             "aml_auto": "",
@@ -1034,10 +1031,8 @@ async def create_run(
     output_path: str = Form("outputs/"),
 ):
     agent_type_lower = agent_type.lower()
-    if agent_type_lower == "aml":
-        agent_type_lower = "aml_auto"
-    if agent_type_lower not in {"tile", "wsi", "aml", "aml_auto", "aml_roi", "aml_diagnosis"}:
-        raise HTTPException(status_code=400, detail="agent_type must be 'tile', 'wsi', 'aml', 'aml_auto', 'aml_roi', or 'aml_diagnosis'")
+    if agent_type_lower not in {"tile", "wsi", "aml_auto", "aml_roi", "aml_diagnosis"}:
+        raise HTTPException(status_code=400, detail="agent_type must be 'tile', 'wsi', 'aml_auto', 'aml_roi', or 'aml_diagnosis'")
     if model_name not in ALLOWED_MODEL_NAMES:
         raise HTTPException(
             status_code=400,
@@ -1259,14 +1254,13 @@ async def finalize_and_start(run_id: str):
     run = RUNS.get(run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="Run not found")
-    normalized_agent_type = "aml_auto" if run.agent_type == "aml" else run.agent_type
     if run.status in {"pending", "running", "done", "terminated"}:
         raise HTTPException(status_code=400, detail=f"Run is already {run.status}.")
     if run.status == "error":
         raise HTTPException(status_code=400, detail="Run is in error state; create a new run.")
 
     # Handle aml_diagnosis mode: use roi_input_path instead of slide
-    if normalized_agent_type == "aml_diagnosis":
+    if run.agent_type == "aml_diagnosis":
         if not run.roi_input_path:
             raise HTTPException(status_code=400, detail="aml_diagnosis requires roi_input_path.")
         try:
@@ -1290,7 +1284,7 @@ async def finalize_and_start(run_id: str):
         run.roi_collection_path = str(case_output_dir / "roi_collection.json")
         run.status = "pending"
     else:
-        # Standard modes (tile, wsi, aml, aml_auto, aml_roi): require a slide
+        # Standard modes (tile, wsi, aml_auto, aml_roi): require a slide
         if run.source_mode == "server":
             if not run.selected_source_path:
                 raise HTTPException(status_code=400, detail="No server path has been selected for this run.")
@@ -1318,7 +1312,7 @@ async def finalize_and_start(run_id: str):
         run.status = "pending"
 
         # For aml_roi mode, set up output directories
-        if normalized_agent_type in {"aml_roi", "aml_auto"}:
+        if run.agent_type in {"aml_roi", "aml_auto"}:
             case_output_dir = resolve_aml_case_output_dir(run.output_root_path, run.slide_name or Path(slide_path).stem)
             case_output_dir.mkdir(parents=True, exist_ok=True)
             images_dir = case_output_dir / "images"
@@ -1457,7 +1451,7 @@ def get_aml_diagnosis_asset(run_id: str, path: str):
     run = RUNS.get(run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="Run not found")
-    if run.agent_type not in {"aml", "aml_auto", "aml_roi", "aml_diagnosis"}:
+    if run.agent_type not in {"aml_auto", "aml_roi", "aml_diagnosis"}:
         raise HTTPException(status_code=400, detail="AML assets are only available for AML runs.")
 
     try:

@@ -106,7 +106,7 @@ You can start a run from:
 
 ### Main Controls
 
-- **Agent**: `aml_auto`, `aml_roi`, `aml_diagnosis`, `aml_detector`, `tile`, or `wsi`
+- **Agent**: `aml_auto`, `aml_roi`, `aml_diagnosis`, `tile`, or `wsi`
 - **Model**: which VLM is exposed in the workbench
 - **Feature extractor**: embedding backbone used for ROI candidate preparation
 - **Tile size**: patch size for the extractor path
@@ -131,10 +131,9 @@ Tile filter modes:
 
 | `agent_type` | Purpose | Slide input | Output |
 |---|---|---|---|
-| `aml_auto` / `aml` | Full two-stage AML workflow | required | ROI bundle + diagnosis report |
+| `aml_auto` | Full two-stage AML workflow | required | ROI bundle + diagnosis report |
 | `aml_roi` | Stage 1 ROI collection only | required | `roi_collection.json` + ROI images |
 | `aml_diagnosis` | Stage 2 diagnosis from existing ROIs | not required | strict AML JSON diagnosis |
-| `aml_detector` | Legacy single-stage AML agent | required | combined navigation + diagnosis |
 | `tile` | Save good and bad tiles for curation or training | required | labeled tiles under `Selected_Tiles` |
 | `wsi` | General-purpose pathology exploration agent | required | task-shaped report and saved ROIs |
 
@@ -188,7 +187,7 @@ Results are averaged across available feature extractors. `roi5 %` is the percen
 | [GLM-4.6V](https://huggingface.co/zai-org/GLM-4.6V-FP8) | 92.14 | 95.63 | 26.28 |
 | [GPT-OSS-120B](https://huggingface.co/models?search=GPT-OSS-120B) | 99.63 | 23.99 | 37.36 |
 
-### AML Detector Results
+### AML Diagnosis Results
 
 Gemma-4 and Qwen3.5 were the main diagnosis models explored here: Gemma-4 showed stronger AML-morphology specificity, while Qwen3.5 was more general in blood-cell image understanding.
 
