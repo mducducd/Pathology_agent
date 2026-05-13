@@ -51,7 +51,7 @@ Update model exposure in [main.py](main.py) and [wsi_core.py](wsi_core.py) by se
 To expose server-local slide roots in the web Explorer, set `SERVER_SLIDE_ROOTS` before starting the app:
 
 ```bash
-export SERVER_SLIDE_ROOTS="/mnt/copernicus3/PATHOLOGY/others/private/haemadata/ALL_WSIs/:/some/other/root"
+export SERVER_SLIDE_ROOTS="/some/other/root"
 ```
 
 Supported sources:
@@ -226,7 +226,7 @@ Detailed notes live in [evaluate/README.md](evaluate/README.md) under `Reference
 
 - [evaluate/README.md](evaluate/README.md): CLI workflows and reference-embedding setup
 - [docs/AML_AGENT_PIPELINE_METHODOLOGY.md](docs/AML_AGENT_PIPELINE_METHODOLOGY.md): methodology and algorithmic description
-- [docs/AML_AGENT_PIPELINE_IMPLEMENTATION.md](/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/docs/AML_AGENT_PIPELINE_IMPLEMENTATION.md): implementation details
+- [docs/AML_AGENT_PIPELINE_IMPLEMENTATION.md](/AML_AGENT_PIPELINE_IMPLEMENTATION.md): implementation details
 - [docs/AML_AGENT_TOOLS_APPENDIX.md](docs/AML_AGENT_TOOLS_APPENDIX.md): tool and navigation appendix
 - [docs/AML_PROMPTS_APPENDIX.md](AML_PROMPTS_APPENDIX.md): prompt appendix
 - [docs/EVALUATION_METRICS.md](docs/EVALUATION_METRICS.md): metric definitions
