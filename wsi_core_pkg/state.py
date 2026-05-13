@@ -3,7 +3,7 @@ from typing import Any, Dict, List, Optional
 
 import openslide
 
-from .config import DEBUG_ROOT_DIR, DEFAULT_MPP_UM, DEFAULT_SLIDE_PATH, MAX_IMG_DIM, OUTPUTS_ROOT_DIR
+from .config import DEBUG_ROOT_DIR, DEFAULT_SLIDE_PATH, OUTPUTS_ROOT_DIR
 
 # ---------------------------------------------------------------------
 # GLOBAL STATE

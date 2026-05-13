@@ -6,7 +6,6 @@ from agents import Agent, ModelSettings, OpenAIChatCompletionsModel
 from .config import ENABLE_THINKING, MODEL_NAME, WSI_AGENT_TEMPERATURE, client_async
 from .prompts import (
     DEFAULT_AML_PROMPT,
-    DEFAULT_TILE_PROMPT,
     DEFAULT_AML_ROI_COLLECTION_PROMPT,
     DEFAULT_AML_DIAGNOSIS_PROMPT,
 )

@@ -904,7 +904,7 @@ def main() -> int:
             args.resolved_mpp_um = DEFAULT_MPP_UM_FALLBACK
             args.mpp_source = "not_applicable"
             args.default_mpp_um_fallback = DEFAULT_MPP_UM_FALLBACK
-            print(f"[MODE] aml_diagnosis (no slide needed)")
+            print("[MODE] aml_diagnosis (no slide needed)")
             print(f"[ROI_INPUT] {args.roi_input_path}")
 
         print(f"[RUN]   {run_id}")

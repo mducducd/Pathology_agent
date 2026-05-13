@@ -18,3 +18,5 @@ run_batch_aml.sh
 
 *.pyc
 __pycache__/
+
+.DS_Store

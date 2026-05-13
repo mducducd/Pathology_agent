@@ -1447,7 +1447,6 @@ def _attach_roi_candidates(info: Dict[str, Any], top_k: int = ROI_CANDIDATE_TOP_
     info["roi_candidate_prep"] = dict(state._roi_candidate_prep) if state._roi_candidate_prep else None
     info["roi_candidate_overlay_path"] = None
     extractor_label = _selected_extractor_label()
-    tile_prefilter_method = _selected_tile_prefilter_method()
 
     if aml_mode:
         info["roi_candidate_pipeline"] = (
@@ -2609,7 +2608,7 @@ def wsi_discard_last_roi(
             "ok": True,
             "discarded_roi_id": roi["roi_id"],
             "label": roi["label"],
-            "message": f"ROI discarded.",
+            "message": "ROI discarded.",
         }
         if next_rank_hint is not None:
             response["next_candidate_rank_hint"] = next_rank_hint

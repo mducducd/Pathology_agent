@@ -48,7 +48,7 @@ def main() -> None:
 
     print(f"# {len(chunks)} chunks × {len(args.extractors)} extractors")
     print(f"# Model: {args.model}")
-    print(f"# Assign one block per machine\n")
+    print("# Assign one block per machine\n")
 
     for i, chunk in enumerate(chunks, 1):
         print(f"# ── Machine {i} — {chunk.name} ({'–'.join(args.extractors)}) ──")

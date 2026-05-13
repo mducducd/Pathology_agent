@@ -267,7 +267,6 @@ def _embed_reference_tiles(
         return np.empty((0, 0), dtype=np.float32), np.empty((0,), dtype=np.str_), ()
 
     ref_paths = tuple(str(path) for path, _ in records)
-    ref_labels_list = [label for _, label in records]
 
     # Respect environment variable for embedding cache
     use_cache = use_cache and AML_REFERENCE_EMBEDDING_CACHE

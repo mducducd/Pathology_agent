@@ -22,7 +22,6 @@ from wsi_core_pkg.embeddings import (
     embedding_extractor_display_name,
     extract_wsi_features_by_tiles,
     save_tile_features_npz,
-    uni2,
 )
 from wsi_core_pkg.aml_output import persist_aml_slide_bundle, resolve_aml_case_output_dir
 from wsi_core_pkg.prompts import (
@@ -38,7 +37,6 @@ from wsi_core import (
     run_wsi_agent_for_web,
     clear_wsi_outputs_state,
     get_public_state_snapshot,
-    OUTPUTS_ROOT_DIR,
     DEBUG_ROOT_DIR,
     REPORT_ROOT_DIR,
     detect_dark_regions,

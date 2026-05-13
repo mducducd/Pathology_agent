@@ -40,7 +40,7 @@ def main() -> None:
 
     print(f"\nSplit {len(patients)} patients into {args.parts} chunks of ~{chunk_size}.")
     print("Run each chunk on a separate machine with:")
-    print(f"  bash evaluate/run_batch_aml.sh --csv <chunk.csv> --resume ...")
+    print("  bash evaluate/run_batch_aml.sh --csv <chunk.csv> --resume ...")
 
 
 if __name__ == "__main__":

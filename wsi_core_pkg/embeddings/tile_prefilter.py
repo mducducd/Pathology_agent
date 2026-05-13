@@ -701,7 +701,6 @@ def select_informative_tile_indices(
     tissue_fraction = np.asarray([m["tissue_fraction"] for m in metrics], dtype=np.float32)
     purple_fraction = np.asarray([m["purple_fraction"] for m in metrics], dtype=np.float32)
     rbc_fraction = np.asarray([m["rbc_fraction"] for m in metrics], dtype=np.float32)
-    focus_proxy = np.asarray([m["focus_proxy"] for m in metrics], dtype=np.float32)
     artifact_coarse = np.asarray([m["artifact_fraction_coarse"] for m in metrics], dtype=np.float32)
 
     # === CASCADE STAGE 2: Refinement features ===

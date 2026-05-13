@@ -104,7 +104,7 @@ if __name__ == "__main__":
         print(f"  type       : {part['type']}")
         print(f"  url prefix : {url[:30]}...")
         print(f"  url length : {len(url)} chars")
-        print(f"  encode: OK")
+        print("  encode: OK")
 
     # Step 2 — send to model if requested
     if args.model:

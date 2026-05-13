@@ -5,7 +5,6 @@ from dotenv import load_dotenv
 from openai import AsyncOpenAI, OpenAI
 
 from agents import (
-    enable_verbose_stdout_logging,
     set_default_openai_api,
     set_default_openai_client,
     set_tracing_disabled,
