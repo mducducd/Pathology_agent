@@ -272,6 +272,20 @@
     } catch {}
   }
 
+  function setHidden(el, hidden) {
+    if (el) el.hidden = !!hidden;
+  }
+
+  function clearElement(el) {
+    if (el) el.innerHTML = "";
+  }
+
+  async function fetchJson(url, init = { cache: "no-store" }) {
+    const res = await fetch(url, init);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.json();
+  }
+
   function normalizedTheme(value) {
     return value === "dark" || value === "light" ? value : null;
   }
@@ -311,19 +325,19 @@
 
   function hideUploadActionTip() {
     if (!uploadActionTip) return;
-    uploadActionTip.hidden = true;
+    setHidden(uploadActionTip, true);
   }
 
   function closeUploadActionMenu() {
     if (!uploadActionMenu || !uploadActionTrigger) return;
-    uploadActionMenu.hidden = true;
+    setHidden(uploadActionMenu, true);
     uploadActionTrigger.setAttribute("aria-expanded", "false");
     hideUploadActionTip();
   }
 
   function openUploadActionMenu() {
     if (!uploadActionMenu || !uploadActionTrigger) return;
-    uploadActionMenu.hidden = false;
+    setHidden(uploadActionMenu, false);
     uploadActionTrigger.setAttribute("aria-expanded", "true");
   }
 
@@ -356,7 +370,7 @@
   function showUploadActionTip(text, clientX, clientY) {
     if (!uploadActionTip) return;
     uploadActionTip.textContent = text || uploadActionDefaultHint;
-    uploadActionTip.hidden = false;
+    setHidden(uploadActionTip, false);
     positionUploadActionTip(clientX, clientY);
   }
 
@@ -397,11 +411,7 @@
 
   async function loadDefaultPrompts() {
     try {
-      const res = await fetch("/api/default_prompts", { cache: "no-store" });
-      if (!res.ok) {
-        throw new Error(`HTTP ${res.status}`);
-      }
-      const payload = await res.json();
+      const payload = await fetchJson("/api/default_prompts");
       const prompts = payload && payload.prompts ? payload.prompts : {};
       const amlAutoStageDefaults = prompts && typeof prompts.aml_auto_stage_defaults === "object" && prompts.aml_auto_stage_defaults
         ? prompts.aml_auto_stage_defaults
@@ -442,11 +452,7 @@
   async function loadEmbeddingExtractorOptions() {
     if (!extractorSelect) return;
     try {
-      const res = await fetch("/api/embedding_extractors", { cache: "no-store" });
-      if (!res.ok) {
-        throw new Error(`HTTP ${res.status}`);
-      }
-      const payload = await res.json();
+      const payload = await fetchJson("/api/embedding_extractors");
       const extractors = Array.isArray(payload && payload.extractors) ? payload.extractors : [];
       if (!extractors.length) return;
 
@@ -456,7 +462,7 @@
           ? payload.default_extractor
           : "uni2";
 
-      extractorSelect.innerHTML = "";
+      clearElement(extractorSelect);
       for (const item of extractors) {
         const name = item && typeof item.name === "string" ? item.name : "";
         if (!name) continue;
@@ -482,11 +488,7 @@
   async function loadModelOptions() {
     if (!modelSelect) return;
     try {
-      const res = await fetch("/api/models", { cache: "no-store" });
-      if (!res.ok) {
-        throw new Error(`HTTP ${res.status}`);
-      }
-      const payload = await res.json();
+      const payload = await fetchJson("/api/models");
       const rawModels = Array.isArray(payload && payload.models) ? payload.models : [];
       const models = [];
       for (const value of rawModels) {
@@ -504,7 +506,7 @@
       const fallbackValue = models.includes(currentValue) ? currentValue : models[0];
       const nextValue = (!modelSelectionTouched && models.includes(defaultModel)) ? defaultModel : fallbackValue;
 
-      modelSelect.innerHTML = "";
+      clearElement(modelSelect);
       for (const name of models) {
         const option = document.createElement("option");
         option.value = name;
@@ -555,19 +557,19 @@
     const isAmlAuto = isAmlAutoAgentType(agentType);
     const isAmlAgent = isAmlAgentType(agentType);
     if (singlePromptField) {
-      singlePromptField.hidden = isAmlAuto;
+      setHidden(singlePromptField, isAmlAuto);
     }
     if (amlAutoPromptsField) {
-      amlAutoPromptsField.hidden = !isAmlAuto;
+      setHidden(amlAutoPromptsField, !isAmlAuto);
     }
     if (roiInputField) {
-      roiInputField.hidden = !isAmlDiagnosis;
+      setHidden(roiInputField, !isAmlDiagnosis);
     }
     if (outputPathField) {
-      outputPathField.hidden = !isAmlAgent;
+      setHidden(outputPathField, !isAmlAgent);
     }
     if (dropzone) {
-      dropzone.hidden = isAmlDiagnosis;  // Hide dropzone for aml_diagnosis mode
+      setHidden(dropzone, isAmlDiagnosis);  // Hide dropzone for aml_diagnosis mode
     }
   }
 
@@ -1130,19 +1132,19 @@
     finalText.classList.toggle("waiting", !!waiting);
     const source = String(markdownText || "").trim();
     if (!source) {
-      finalText.innerHTML = "";
-      if (finalSection) finalSection.hidden = true;
+      clearElement(finalText);
+      setHidden(finalSection, true);
       return;
     }
     finalText.innerHTML = markdownToHtml(source);
-    if (finalSection) finalSection.hidden = waiting;
+    setHidden(finalSection, waiting);
   }
 
   function setReasoningContent(text) {
     if (!reasoningSection || !reasoningText) return;
     const content = String(text || "").trim();
     const hasContent = content.length > 0;
-    reasoningSection.hidden = !hasContent;
+    setHidden(reasoningSection, !hasContent);
     reasoningText.textContent = hasContent ? content : "";
     reasoningText.classList.remove("waiting");
   }
@@ -1225,14 +1227,14 @@
   }
 
   function setOverviewEmptyState(message) {
-    overviewEmpty.hidden = !String(message || "").trim();
+    setHidden(overviewEmpty, !String(message || "").trim());
   }
 
   function applyOverviewDisplaySource() {
     const nextSrc = baseOverviewImageUrl || "";
 
     if (!nextSrc) {
-      overviewImg.hidden = true;
+      setHidden(overviewImg, true);
       setImageSrcWithReveal(overviewImg, "");
       setOverviewEmptyState(OVERVIEW_EMPTY_TEXT);
       if (overviewCanvas) {
@@ -1242,14 +1244,14 @@
       return;
     }
 
-    overviewImg.hidden = false;
+    setHidden(overviewImg, false);
     setImageSrcWithReveal(overviewImg, nextSrc);
     setOverviewEmptyState("");
     renderOverviewRoiOverlay();
   }
 
   function clearDarkRegions() {
-    darkImg.hidden = true;
+    setHidden(darkImg, true);
     darkImg.src = "";
     darkMaskMode = false;
     darkBoxes = [];
@@ -1467,18 +1469,18 @@
     if (!statusPill) return;
     const normalized = String(status || "idle").toLowerCase();
     // Hide the idle pill to reduce header clutter; show for active/final states.
-    statusPill.hidden = (normalized === "idle" || normalized === "");
+    setHidden(statusPill, (normalized === "idle" || normalized === ""));
   }
 
   function closeStatusActionsMenu() {
     if (!statusActionsMenu || !btnActions) return;
-    statusActionsMenu.hidden = true;
+    setHidden(statusActionsMenu, true);
     btnActions.setAttribute("aria-expanded", "false");
   }
 
   function openStatusActionsMenu() {
     if (!statusActionsMenu || !btnActions) return;
-    statusActionsMenu.hidden = false;
+    setHidden(statusActionsMenu, false);
     btnActions.setAttribute("aria-expanded", "true");
   }
 
@@ -1526,7 +1528,7 @@
   }
 
   function render() {
-    filelist.innerHTML = "";
+    clearElement(filelist);
     if (serverSelection) {
       filelistMeta.textContent = "Server path";
 
@@ -1687,7 +1689,7 @@
     if (!explorerError) return;
     const text = String(message || "").trim();
     explorerError.textContent = text;
-    explorerError.hidden = !text;
+    setHidden(explorerError, !text);
   }
 
   function setExplorerBusyState(busy) {
@@ -1722,7 +1724,7 @@
 
   function renderExplorerBreadcrumbs() {
     if (!explorerBreadcrumbs) return;
-    explorerBreadcrumbs.innerHTML = "";
+    clearElement(explorerBreadcrumbs);
     for (let i = 0; i < explorerBreadcrumbItems.length; i++) {
       const crumb = explorerBreadcrumbItems[i];
       const btn = document.createElement("button");
@@ -1736,13 +1738,13 @@
 
   function renderExplorerList() {
     if (!explorerList) return;
-    explorerList.innerHTML = "";
+    clearElement(explorerList);
     const filter = explorerFilterText.toLowerCase();
     const visible = filter
       ? explorerEntries.filter((e) => (e.name || "").toLowerCase().includes(filter))
       : explorerEntries;
     if (explorerEmpty) {
-      explorerEmpty.hidden = visible.length > 0;
+      setHidden(explorerEmpty, visible.length > 0);
     }
 
     for (const entry of visible) {
@@ -1862,7 +1864,7 @@
     explorerRoots = Array.isArray(data.roots) ? data.roots : [];
 
     if (explorerRootSelect) {
-      explorerRootSelect.innerHTML = "";
+      clearElement(explorerRootSelect);
       for (const root of explorerRoots) {
         const opt = document.createElement("option");
         opt.value = root.path;
@@ -1952,7 +1954,7 @@
 
   async function openExplorer() {
     if (!explorerModal) return;
-    explorerModal.hidden = false;
+    setHidden(explorerModal, false);
     requestAnimationFrame(() => explorerModal.classList.add("is-open"));
     setExplorerError("");
     explorerEntries = [];
@@ -1976,7 +1978,7 @@
     if (!explorerModal) return;
     explorerModal.classList.remove("is-open");
     setExplorerError("");
-    const onEnd = () => { explorerModal.hidden = true; };
+    const onEnd = () => setHidden(explorerModal, true);
     explorerModal.addEventListener("transitionend", onEnd, { once: true });
   }
 
@@ -2002,7 +2004,7 @@
     li.style.background = "var(--bg)";
     li.style.boxShadow = "none";
 
-    li.innerHTML = "";
+    clearElement(li);
     const t = document.createElement("div");
     t.className = "logtitle";
     t.textContent = `LIVE. ${title}`;
@@ -2050,10 +2052,10 @@
       overlayRafId = null;
     }
 
-    errorBox.hidden = true;
+    setHidden(errorBox, true);
     errorText.textContent = "";
 
-    overviewImg.hidden = true;
+    setHidden(overviewImg, true);
     overviewImg.src = "";
     baseOverviewImageUrl = "";
     setOverviewEmptyState(OVERVIEW_EMPTY_TEXT);
@@ -2067,12 +2069,12 @@
 
     clearDarkRegions();
 
-    if (finalSection) finalSection.hidden = true;
+    setHidden(finalSection, true);
     renderFinalReportMarkdown("", false);
     setReasoningContent("");
     reportLink.textContent = "";
-    if (stepsEl) stepsEl.innerHTML = "";
-    roisEl.innerHTML = "";
+    clearElement(stepsEl);
+    clearElement(roisEl);
     roiListPinnedToBottom = true;
 
     lastRenderedStep = 0;
@@ -2674,44 +2676,44 @@
     if (!status || status === "idle") {
       // Idle with an available model should read as ready.
       runLoadingEl.classList.add("model-good");
-      runLoadingEl.hidden = false;
+      setHidden(runLoadingEl, false);
       return;
     }
 
     // "done" but LLM output indicates a slide/image load failure → show as red (bad)
     if (status === "done-warn") {
       runLoadingEl.classList.add("model-bad");
-      runLoadingEl.hidden = false;
+      setHidden(runLoadingEl, false);
       return;
     }
 
     if (status === "error") {
       runLoadingEl.classList.add("model-bad");
-      runLoadingEl.hidden = false;
+      setHidden(runLoadingEl, false);
       return;
     }
     if (status === "terminated") {
       runLoadingEl.classList.add("model-bad");
-      runLoadingEl.hidden = false;
+      setHidden(runLoadingEl, false);
       return;
     }
     if (status === "running") {
       runLoadingEl.classList.add("model-warn", "is-active");
-      runLoadingEl.hidden = false;
+      setHidden(runLoadingEl, false);
       return;
     }
     if (status === "created" || status === "uploading" || status === "pending") {
       runLoadingEl.classList.add("model-warn", "is-active");
-      runLoadingEl.hidden = false;
+      setHidden(runLoadingEl, false);
       return;
     }
     if (status === "done") {
       runLoadingEl.classList.add("model-good");
-      runLoadingEl.hidden = false;
+      setHidden(runLoadingEl, false);
       return;
     }
 
-    runLoadingEl.hidden = true;
+    setHidden(runLoadingEl, true);
   }
 
   function updateLivePrepProgress(run, st) {
@@ -2918,14 +2920,14 @@
       }
 
       if (run.status === "error") {
-        errorBox.hidden = false;
+        setHidden(errorBox, false);
         let msg = "";
         if (run.error_message) msg += "Error: " + run.error_message + "\n";
         if (run.traceback) msg += "\nTraceback:\n" + run.traceback;
         if (!msg) msg = "Unknown error (no message provided).";
         errorText.textContent = msg;
       } else {
-        errorBox.hidden = true;
+        setHidden(errorBox, true);
         errorText.textContent = "";
       }
 
@@ -2977,7 +2979,7 @@
           ? Number(incomingSteps[incomingSteps.length - 1].step_index)
           : 0;
         if (maxIncomingStep < lastRenderedStep) {
-          stepsEl.innerHTML = "";
+          clearElement(stepsEl);
           lastRenderedStep = 0;
         }
         for (const step of incomingSteps) {
@@ -3131,7 +3133,7 @@
       darkRegionsLoaded = true;
       darkBoxes = Array.isArray(data.boxes) ? data.boxes : [];
       darkMaskMode = Boolean(data.mask_url);
-      darkImg.hidden = true;
+      setHidden(darkImg, true);
       darkImg.onload = () => {
         renderDarkOverlay();
         renderOverviewRoiOverlay();
@@ -3140,7 +3142,7 @@
       applyOverviewDisplaySource();
     } catch (e) {
       darkRegionsLoaded = false;
-      darkImg.hidden = true;
+      setHidden(darkImg, true);
       darkImg.src = "";
       darkMaskMode = false;
       applyOverviewDisplaySource();
@@ -3299,7 +3301,7 @@
     syncStatusPillVisibility("created");
     upsertLiveStatusStep("Creating run", "Initializing run metadata…");
     syncStartButtonState(v);
-    errorBox.hidden = true;
+    setHidden(errorBox, true);
     errorText.textContent = "";
 
     try {
@@ -3376,10 +3378,10 @@
       runRequestedModel = null;
       syncStartButtonState(v);
       if (terminateRequested) {
-        errorBox.hidden = true;
+        setHidden(errorBox, true);
         errorText.textContent = "";
       } else {
-        errorBox.hidden = false;
+        setHidden(errorBox, false);
         errorText.textContent = String(e && e.message ? e.message : e);
       }
       return;

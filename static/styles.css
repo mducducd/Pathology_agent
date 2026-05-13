@@ -1213,12 +1213,6 @@ textarea:focus{
   gap:12px;
 }
 
-.left-card-flex{
-  /* no special flex needed — sticky-card handles scroll */
-}
-.left-card-scroll{
-  /* no special flex needed */
-}
 .run-actions{
   position: sticky;
   bottom: -6px;
@@ -1931,7 +1925,6 @@ textarea:focus{
   .explorer-entry-actions{
     flex-direction: column;
   }
-  .topbar-copy{ display:none; }
 }
 
 @media (prefers-reduced-motion: reduce){
