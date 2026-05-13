@@ -10,7 +10,7 @@ from PIL import Image, ImageDraw
 
 from . import state
 from .config import MAX_IMG_DIM, MAX_NATIVE_VIEW_DIM
-from .exceptions import AmlRoiCollectionComplete
+from .config import AmlRoiCollectionComplete
 from .tuning_config import tuning_value
 
 DEFAULT_MPP_FALLBACK_UM = float(tuning_value("tools.slide", "DEFAULT_MPP_UM"))

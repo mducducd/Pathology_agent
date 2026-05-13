@@ -35,7 +35,7 @@ from .context_injection import (
     CONTEXT_IMAGE_MAX_DIM,
     _encode_image_as_data_url,
 )
-from .exceptions import AmlRoiCollectionComplete
+from .config import AmlRoiCollectionComplete
 from .prompts import (
     DEFAULT_AML_PROMPT,
     DEFAULT_AML_DIAGNOSIS_PROMPT,

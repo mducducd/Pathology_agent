@@ -23,7 +23,7 @@ from .config import (
     TILE_SIZE_UM,
 )
 from .embeddings import embedding_extractor_display_name, get_embedding_extractor
-from .exceptions import AmlRoiCollectionComplete
+from .config import AmlRoiCollectionComplete
 from .embeddings.roi_ranker import (
     build_unsupervised_roi_index,
     select_topk_candidates_for_view,

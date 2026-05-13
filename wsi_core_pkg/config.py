@@ -99,3 +99,10 @@ EXAMPLE_ROIS_MAX_PER_CLASS = _cfg("EXAMPLE_ROIS_MAX_PER_CLASS", "agent", 2, int)
 
 CONTEXT_PREVIOUS_VIEWS_MAX = _cfg("CONTEXT_PREVIOUS_VIEWS_MAX", "context_injection.candidates", 0, int)
 CONTEXT_ROI_CANDIDATE_LINES_MAX = _cfg("CONTEXT_ROI_CANDIDATE_LINES_MAX", "context_injection.candidates", 8, int)
+
+
+# ---------- exceptions ----------
+
+
+class AmlRoiCollectionComplete(RuntimeError):
+    """Raised to stop AML ROI collection immediately once the hard ROI cap is reached."""
