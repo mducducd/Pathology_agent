@@ -225,21 +225,11 @@ roi_ranker:
     ROI_ADAPTIVE_MIN_SEPARATION_TILE_RATIO: 0.38
 
 aml_pipeline:
-  # Frontend/default AML mode used by the web UI and batch scripts.
-  DEFAULT_AML_AGENT_TYPE: "aml_auto"
-
   # Output conventions matching run_batch_aml_suite.sh / evaluate/run_single_slide.py.
   ROI_IMAGES_SUBDIR: "images"
   ROI_COLLECTION_FILENAME: "roi_collection.json"
-  ROI_IMAGE_GLOB: "roi_*.jpg"
   ROI_CANDIDATES_FILENAME: "roi_candidates.jpg"
-
-  # If empty, aml_roi/aml_auto writes ROI outputs under OUTPUTS_ROOT_DIR/<run_id>/aml_case/.
-  ROI_OUTPUT_ROOT: ""
-
-  # Allowed roots for loading ROI collections in aml_diagnosis.
-  # Empty means allow paths under OUTPUTS_ROOT_DIR and current experiment output dir.
-  ROI_INPUT_ROOTS: []
+  SLIDE_OVERVIEW_FILENAME: "slide_overview.jpg"
 
 context_injection:
   images:

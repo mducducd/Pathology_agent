@@ -1,471 +1,276 @@
 # AML Agent Benchmark Metrics
 
-This document defines the metrics reported for AML agent benchmark runs. The
-benchmark keeps the headline table compact: one diagnostic accuracy metric, a
-small number of ROI/tool-flow behavior metrics, one tool-count metric, runtime
-summaries, AML/Normal confusion counts, and optional NPM1 accuracy.
+This document describes the metrics currently exported by
+`evaluate/export_batch_results_stats.py`.
 
-## Expected AML Agent Workflow
+The exporter reads per-slide `summary.json` and `report.json` files, normalizes
+the final decision into a small label set, writes a per-slide CSV, and writes a
+summary CSV of aggregate classification metrics.
 
-The intended workflow is:
+## Scope
 
-$$
-\text{overview}
-\rightarrow
-(\text{open candidate}
-\rightarrow
-\text{local inspection}_{0\text{-}2}
-\rightarrow
-\text{mark ROI}) \times 5
-\rightarrow
-\text{final answer}
-$$
+The current exporter uses the following rules:
 
-A strong agent should finish with five accepted ROIs, avoid long exploratory
-loops, and produce the correct final AML/Normal diagnosis.
+- Ground truth is inferred from the slide directory name.
+- A name starting with `aml` is treated as ground-truth `AML`.
+- A name starting with `normaleskm` is treated as ground-truth `Normal marrow`.
+- The model prediction is normalized from `final_decision`.
+- `Acute leukemia` maps to predicted label `AML`.
+- `Normal marrow` maps to predicted label `Normal marrow`.
+- `Call for more diagnostics` stays `Call for more diagnostics`.
+- Any other or missing decision becomes `Unknown`.
+- If `summary_status == "ok"` but the decision is still missing, the exporter
+  coerces the prediction to `Call for more diagnostics`.
+- Slides with `summary_status == "error"` are excluded from the aggregate
+  statistics. All other slides remain in the denominator.
+
+## Exported Files
+
+The exporter writes:
+
+- `<prefix>_slides.csv`
+- `<prefix>_summary.csv`
+
+The per-slide CSV currently includes:
+
+- `slide_name`
+- `ground_truth`
+- `summary_status`
+- `tile_size_px`
+- `predicted_label`
+- `included_in_statistics`
+- `is_correct`
+- `error`
+- `elapsed_sec`
+
+The summary CSV currently includes:
+
+- `total_slides_all`
+- `slides_in_statistics`
+- `aml_slides`
+- `normal_slides`
+- `ok_runs`
+- `error_runs`
+- `call_for_more_diagnostics_predictions`
+- `correct_predictions`
+- `accuracy_all_nonerror_slides_pct`
+- `tp_aml_pred_aml`
+- `tn_normal_pred_normal`
+- `fp_normal_pred_aml`
+- `fn_aml_pred_normal`
+- `sensitivity_recall_aml_pct`
+- `specificity_normal_pct`
+- `precision_aml_pct`
+- `npv_normal_pct`
+- `f1_aml_pct`
+- `balanced_accuracy_pct`
 
 ## Notation
 
-Let an experiment contain $N$ slide-level runs.
+Let the experiment contain $N$ slide directories.
 
 For slide $i$:
 
-- $y_i$: ground-truth diagnostic label.
-- $\hat{y}_i$: final diagnostic label predicted by the model, if parseable.
-- $s_i \in \{0,1\}$: final completion indicator, where $s_i=1$ if the run completed successfully.
-- $r_i \in \{0,1\}$: counted retry-failure indicator, where $r_i=1$ if the run needed an automatic retry caused by a non-LLM/API error.
-- $t_i$: elapsed runtime in seconds.
-- $A_i = (a_{i1}, a_{i2}, \ldots, a_{iT_i})$: ordered tool-action trajectory.
-- $T_i = |A_i|$: number of tool calls in the trajectory.
-- $m_i$: number of accepted or marked ROIs.
-- $q_i$: bounded tool-flow score, with $q_i \in [0,1]$.
-- $p_i \in \{0,1\}$: parseability indicator, where $p_i=1$ if $\hat{y}_i$ is parseable.
+- $y_i$ is the inferred ground-truth label.
+- $\hat{y}_i$ is the normalized predicted label.
+- $s_i \in \{\texttt{ok}, \texttt{error}, \texttt{other}\}$ is the exported
+  run status.
 
-Let $\mathcal{G}$ be the set of slides with known ground truth and let
-$N_g = |\mathcal{G}|$. In the standard AML benchmark, all slides are expected
-to have ground truth, so typically $N_g=N$.
-
-Use $[N] = \{1,2,\ldots,N\}$ for index ranges.
-
-Let $\mathcal{P}$ be the set of slides with parseable final AML/Normal
-prediction:
+Let the non-error set be:
 
 $$
-\mathcal{P}
-=
-\{i \in \mathcal{G} : p_i = 1\}
+\mathcal{S} = \{ i \in [N] : s_i \neq \texttt{error} \}.
 $$
 
-## Reported Headline Metrics
+These are exactly the slides marked `included_in_statistics = true`.
 
-The headline benchmark table reports:
+## Slide Counts
 
-- `total_cases`
-- `evaluated`
-- `correct`, `accuracy_all_pct`
-- `task_success_count`, `task_success_pct`
-- `roi5_count`, `roi5_rate_pct`
-- `flow_pass_count`, `flow_pass_pct`
-- `avg_tool_calls`
-- `stable_elapsed_n`, `avg_elapsed_stable_sec`
-- `elapsed_ok_n`, `median_elapsed_all_ok_sec`
-- `aml_tp`, `aml_fn`, `normal_tn`, `normal_fp`
-- `npm1_scored`, `npm1_correct`, `npm1_accuracy_pct` when NPM1 ground truth is available
+Fields:
 
-## Total Cases
-
-Field: `total_cases`
-
-`total_cases` is the number of slide-level runs evaluated in one experiment.
-
-Formula:
-
-$$
-N_{\mathrm{cases}} = N
-$$
-
-Interpretation:
-
-A model run with fewer total cases may not be directly comparable to a full
-benchmark run. When comparing experiments, first check that `total_cases` is
-the same or understand why it differs.
-
-## Evaluated Cases
-
-Field: `evaluated`
-
-`evaluated` is the number of slides with known ground truth and a parseable
-final AML/Normal prediction.
-
-Formula:
-
-$$
-N_{\mathrm{eval}} = |\mathcal{P}|
-$$
-
-Interpretation:
-
-This count is shown next to `total_cases` so readers can see whether the
-diagnostic accuracy metric is based on the full benchmark set.
-
-## Diagnostic Accuracy
-
-Fields: `correct`, `accuracy_all_pct`
-
-Diagnostic accuracy measures whether the model produced the correct final
-AML/Normal diagnosis.
-
-Slide-level definition:
-
-$$
-\mathrm{Correct}_i = \mathbb{1}[\hat{y}_i = y_i]
-$$
-
-Count:
-
-$$
-C_{\mathrm{correct}} = \sum_{i \in \mathcal{P}} \mathrm{Correct}_i
-$$
-
-Rate:
-
-$$
-\mathrm{Acc}_{\mathrm{all}}(\%) = 100 \times \frac{C_{\mathrm{correct}}}{|\mathcal{P}|}
-$$
-
-In the standard benchmark where all slides have ground truth and parseable
-predictions are expected for every slide:
-
-$$
-\mathrm{Acc}_{\mathrm{all}}(\%) = 100 \times \frac{C_{\mathrm{correct}}}{N_{\mathrm{cases}}}
-$$
-
-Interpretation:
-
-Higher is better. This is the main diagnostic metric and answers: among the
-benchmark slides, what percentage were diagnosed correctly?
-
-Important detail:
-
-A failed, missing, or unparseable final prediction is not counted as correct.
-
-## Task Success Rate
-
-Fields: `task_success_count`, `task_success_pct`
-
-Task success measures whether the slide-level run completed successfully at the
-system level without any counted retry failure. It does not measure whether the
-final diagnosis was correct.
-
-A run is counted as task-successful if:
-
-- the final run status is OK,
-- no non-LLM/API retry failure occurred.
-
-Retries caused by LLM API, model availability, rate limit, or service
-availability errors are not counted against this metric.
-
-Count:
-
-$$
-C_{\mathrm{succ}} = \sum_{i=1}^{N} \mathbb{1}[s_i=1 \land r_i=0]
-$$
-
-Rate:
-
-$$
-R_{\mathrm{succ}}(\%) = 100 \times \frac{C_{\mathrm{succ}}}{N}
-$$
-
-Interpretation:
-
-Higher is better. This metric answers: how often did the agent finish the task
-without a terminal error and without needing a non-LLM/API retry?
-
-Relationship to error rate:
-
-The run-level error rate is the complement of task success:
-
-$$
-R_{\mathrm{err}}(\%) = 100 - R_{\mathrm{succ}}(\%)
-$$
-
-Important distinction:
-
-`task_success_pct` is about task execution. `accuracy_all_pct` is about the
-diagnostic decision. A run can finish successfully but still make the wrong
-diagnosis.
-
-## AML / Normal Confusion Counts
-
-Fields: `aml_tp`, `aml_fn`, `normal_tn`, `normal_fp`
-
-These counts summarize diagnostic outcomes by class. AML is treated as the
-positive class and Normal as the negative class.
+- `total_slides_all`
+- `slides_in_statistics`
+- `aml_slides`
+- `normal_slides`
+- `ok_runs`
+- `error_runs`
 
 Definitions:
 
 $$
-\mathrm{TP}_{\mathrm{AML}} = \sum_{i \in \mathcal{P}} \mathbb{1}[y_i=\mathrm{AML} \land \hat{y}_i=\mathrm{AML}]
+N_{\mathrm{all}} = N
 $$
 
 $$
-\mathrm{FN}_{\mathrm{AML}} = \sum_{i \in \mathcal{P}} \mathbb{1}[y_i=\mathrm{AML} \land \hat{y}_i=\mathrm{Normal}]
+N_{\mathrm{stats}} = |\mathcal{S}|
 $$
 
 $$
-\mathrm{TN}_{\mathrm{Normal}} = \sum_{i \in \mathcal{P}} \mathbb{1}[y_i=\mathrm{Normal} \land \hat{y}_i=\mathrm{Normal}]
+N_{\mathrm{AML}} = \sum_{i \in \mathcal{S}} \mathbb{1}[y_i = \mathrm{AML}]
 $$
 
 $$
-\mathrm{FP}_{\mathrm{Normal}} = \sum_{i \in \mathcal{P}} \mathbb{1}[y_i=\mathrm{Normal} \land \hat{y}_i=\mathrm{AML}]
+N_{\mathrm{Normal}} = \sum_{i \in \mathcal{S}} \mathbb{1}[y_i = \mathrm{NormalMarrow}]
 $$
 
-Interpretation:
-
-- High `aml_tp` is desirable because AML cases are correctly detected.
-- Low `aml_fn` is important because false-negative AML predictions are clinically concerning.
-- High `normal_tn` is desirable because Normal cases are correctly ruled out.
-- Low `normal_fp` is desirable because false-positive AML predictions indicate over-calling disease.
-
-## ROI Completion Rate
-
-Fields: `roi5_count`, `roi5_rate_pct`
-
-The AML workflow requires the agent to select five accepted ROIs. ROI
-completion measures whether the agent completed that requirement.
-
-Slide-level indicator:
-
 $$
-\mathrm{ROI5}_i = \mathbb{1}[m_i \ge 5]
+N_{\mathrm{ok}} = \sum_{i=1}^{N} \mathbb{1}[s_i = \texttt{ok}]
 $$
 
-Count:
-
 $$
-C_{\mathrm{roi5}} = \sum_{i=1}^{N} \mathrm{ROI5}_i
-$$
-
-Rate:
-
-$$
-R_{\mathrm{roi5}}(\%) = 100 \times \frac{C_{\mathrm{roi5}}}{N}
+N_{\mathrm{error}} = \sum_{i=1}^{N} \mathbb{1}[s_i = \texttt{error}]
 $$
 
 Interpretation:
 
-Higher is better. This metric answers: how often did the model collect the
-required five ROIs?
+- `slides_in_statistics` is the denominator for the main accuracy metric.
+- `ok_runs` and `error_runs` are raw run-status counts and are not restricted to
+  the non-error subset because they already summarize it directly.
 
-## Flow Pass Rate
+## Call-For-More Count
 
-Fields: `flow_pass_count`, `flow_pass_pct`
+Field: `call_for_more_diagnostics_predictions`
 
-Flow pass rate measures whether the agent completed the slide and followed the
-expected ROI-selection behavior well enough.
-
-A slide passes if all conditions are true:
-
-- the run completed successfully,
-- the final diagnosis is parseable,
-- at least five ROIs were marked,
-- the bounded tool-flow score is at least 0.75.
-
-Slide-level definition:
+This counts how often the normalized prediction is `Call for more diagnostics`
+within the non-error subset:
 
 $$
-\mathrm{FlowPass}_i = \mathbb{1}[s_i=1 \land p_i=1 \land m_i \ge 5 \land q_i \ge 0.75]
-$$
-
-Count:
-
-$$
-C_{\mathrm{flow}} = \sum_{i=1}^{N} \mathrm{FlowPass}_i
-$$
-
-Rate:
-
-$$
-R_{\mathrm{flow}}(\%) = 100 \times \frac{C_{\mathrm{flow}}}{N}
+C_{\mathrm{callmore}} =
+\sum_{i \in \mathcal{S}}
+\mathbb{1}[\hat{y}_i = \mathrm{CallForMoreDiagnostics}]
 $$
 
 Interpretation:
 
-Higher is better. This is stricter than ROI completion alone: the model must
-both collect enough ROIs and keep its tool trajectory within the expected
-bounded workflow.
+- Higher values indicate more non-binary or fallback outcomes among completed
+  runs.
+- Because these slides stay in `slides_in_statistics`, they lower the main
+  accuracy unless they are excluded manually downstream.
 
-## Average Tool Calls
+## Correct Predictions And Accuracy
 
-Field: `avg_tool_calls`
+Fields:
 
-`avg_tool_calls` is the average number of tool calls per slide among slides
-with available action trajectories.
+- `correct_predictions`
+- `accuracy_all_nonerror_slides_pct`
 
-Let $\mathcal{S}$ be the set of slides with available trajectories and
-$N_s = |\mathcal{S}|$.
+The exporter marks a slide as correct only when:
 
-Formula:
+- `summary_status == "ok"`,
+- the normalized prediction is either `AML` or `Normal marrow`,
+- and that prediction matches the inferred ground truth.
+
+Formally:
 
 $$
-\overline{T} = \frac{1}{N_s}\sum_{i \in \mathcal{S}} T_i
+\mathrm{Correct}_i =
+\mathbb{1}\left[
+  s_i = \texttt{ok}
+  \land \hat{y}_i \in \{\mathrm{AML}, \mathrm{NormalMarrow}\}
+  \land \hat{y}_i = y_i
+\right]
 $$
 
-Interpretation:
+$$
+C_{\mathrm{correct}} = \sum_{i \in \mathcal{S}} \mathrm{Correct}_i
+$$
 
-Lower is generally better when diagnostic accuracy, ROI completion, and flow
-pass rate are similar. Tool calls are a proxy for trajectory length, overhead,
-latency, and how directly the model follows the intended workflow.
+$$
+\mathrm{Acc}_{\mathrm{nonerror}}(\%) =
+100 \times \frac{C_{\mathrm{correct}}}{N_{\mathrm{stats}}}
+$$
 
 Important detail:
 
-This is the benchmark's single action-count metric. We do not separately
-report average step count because each recorded step corresponds to a tool call
-in this workflow.
+- The denominator is all non-error slides, not only binary-prediction slides.
+- Therefore `Call for more diagnostics`, `Unknown`, and other non-binary
+  completed outcomes reduce `accuracy_all_nonerror_slides_pct`.
 
-## Stable Average Runtime
+## Confusion Counts
 
-Fields: `stable_elapsed_n`, `avg_elapsed_stable_sec`
+Fields:
 
-Stable runtime estimates the average runtime under well-behaved conditions. It
-excludes task-error cases and major trajectory-failure cases.
+- `tp_aml_pred_aml`
+- `tn_normal_pred_normal`
+- `fp_normal_pred_aml`
+- `fn_aml_pred_normal`
 
-A slide is stable if all conditions are true:
-
-- the run completed successfully,
-- the final diagnosis is parseable,
-- the slide did not require a non-LLM/API retry,
-- the slide passed the bounded-flow criterion.
-
-Slide-level indicator:
+Definitions over the non-error subset:
 
 $$
-\mathrm{Stable}_i
-=
-\mathbb{1}[s_i=1 \land r_i=0 \land p_i=1 \land q_i \ge 0.75]
+\mathrm{TP} = \sum_{i \in \mathcal{S}} \mathbb{1}[y_i=\mathrm{AML} \land \hat{y}_i=\mathrm{AML}]
 $$
 
-Stable-set definition:
-
 $$
-\mathcal{I}_{\mathrm{stable}}
-=
-\{i \in [N] : \mathrm{Stable}_i=1\}
+\mathrm{TN} = \sum_{i \in \mathcal{S}} \mathbb{1}[y_i=\mathrm{NormalMarrow} \land \hat{y}_i=\mathrm{NormalMarrow}]
 $$
 
-Number of stable slides:
-
 $$
-N_{\mathrm{stable}} = |\mathcal{I}_{\mathrm{stable}}|
+\mathrm{FP} = \sum_{i \in \mathcal{S}} \mathbb{1}[y_i=\mathrm{NormalMarrow} \land \hat{y}_i=\mathrm{AML}]
 $$
 
-Stable average runtime:
-
 $$
-\overline{t}_{\mathrm{stable}} = \frac{1}{|\mathcal{I}_{\mathrm{stable}}|}\sum_{i \in \mathcal{I}_{\mathrm{stable}}} t_i
+\mathrm{FN} = \sum_{i \in \mathcal{S}} \mathbb{1}[y_i=\mathrm{AML} \land \hat{y}_i=\mathrm{NormalMarrow}]
 $$
 
-Interpretation:
+Important detail:
 
-Lower is better when diagnostic accuracy and flow quality are comparable. This
-metric answers: how long does the agent take on non-error, flow-passing cases?
+- `Call for more diagnostics` and `Unknown` are not folded into these four
+  confusion counts.
+- As a result, class-metric denominators can be smaller than
+  `slides_in_statistics`.
 
-Caveat:
+## Derived Classification Metrics
 
-Interpret `avg_elapsed_stable_sec` together with `stable_elapsed_n`. If few
-slides qualify as stable, the average may not represent the full benchmark.
+Fields:
 
-## Task-Success Median Runtime
+- `sensitivity_recall_aml_pct`
+- `specificity_normal_pct`
+- `precision_aml_pct`
+- `npv_normal_pct`
+- `f1_aml_pct`
+- `balanced_accuracy_pct`
 
-Fields: `elapsed_ok_n`, `median_elapsed_all_ok_sec`
-
-This measures typical runtime among task-successful runs. A task-successful run
-has final OK status and no non-LLM/API retry failure.
-
-Successful-runtime set:
-
-$$
-\mathcal{I}_{\mathrm{ok}}
-=
-\{i \in [N] : s_i=1 \land r_i=0\}
-$$
-
-Number of successful runs:
+Formulas:
 
 $$
-N_{\mathrm{ok}} = |\mathcal{I}_{\mathrm{ok}}|
+\mathrm{Sensitivity}(\%) = 100 \times \frac{\mathrm{TP}}{\mathrm{TP}+\mathrm{FN}}
 $$
 
-Median successful runtime:
-
 $$
-\widetilde{t}_{\mathrm{ok}} = \mathrm{median}(\{t_i : i \in \mathcal{I}_{\mathrm{ok}}\})
+\mathrm{Specificity}(\%) = 100 \times \frac{\mathrm{TN}}{\mathrm{TN}+\mathrm{FP}}
 $$
 
-Interpretation:
-
-Lower is better when outcome and flow quality are similar. Median is used
-because runtime can be skewed by a small number of very slow runs.
-
-## NPM1 Accuracy
-
-Fields: `npm1_scored`, `npm1_correct`, `npm1_accuracy_pct`
-
-NPM1 accuracy evaluates whether the agent correctly predicts NPM1 status for
-AML slides where NPM1 ground truth is available and the model's NPM1 prediction
-is parseable.
-
-For scored NPM1 case $j$:
-
 $$
-\mathrm{NPM1Correct}_j = \mathbb{1}[\widehat{z}_j=z_j]
+\mathrm{Precision}(\%) = 100 \times \frac{\mathrm{TP}}{\mathrm{TP}+\mathrm{FP}}
 $$
 
-where $z_j$ is the ground-truth NPM1 label and $\widehat{z}_j$ is the predicted
-NPM1 label.
-
-Scored-case count:
-
 $$
-N_{\mathrm{npm1,scored}} = N_{\mathrm{npm1}}
+\mathrm{NPV}(\%) = 100 \times \frac{\mathrm{TN}}{\mathrm{TN}+\mathrm{FN}}
 $$
 
-Count:
-
 $$
-C_{\mathrm{npm1}} = \sum_{j=1}^{N_{\mathrm{npm1}}} \mathrm{NPM1Correct}_j
+\mathrm{F1}(\%) = 100 \times \frac{2\mathrm{TP}}{2\mathrm{TP}+\mathrm{FP}+\mathrm{FN}}
 $$
 
-Accuracy:
-
 $$
-\mathrm{Acc}_{\mathrm{npm1}}(\%) = 100 \times \frac{C_{\mathrm{npm1}}}{N_{\mathrm{npm1,scored}}}
+\mathrm{BalancedAccuracy}(\%) =
+\frac{\mathrm{Sensitivity}(\%) + \mathrm{Specificity}(\%)}{2}
 $$
 
-Interpretation:
+The exporter leaves a metric blank when its denominator is zero.
 
-Higher is better. This metric is only meaningful for AML cases with available
-NPM1 labels, and it should always be interpreted with `npm1_scored`.
+## Runtime And Other Fields
 
-## Metrics Not Used In The Headline Table
+The per-slide CSV preserves `elapsed_sec`, but the current summary exporter does
+not compute aggregate runtime metrics.
 
-The headline table does not report separate retry rate, raw average flow score,
-average redundant calls, average step count, total
-elapsed runtime, or successful-run P90 runtime.
+The current exporter also does not compute:
 
-Retry status is still useful for debugging individual runs, but the headline
-benchmark focuses on final diagnostic accuracy, task success, ROI completion,
-bounded workflow pass rate, tool-call count, runtime, confusion counts, and
-optional NPM1 performance.
+- ROI completion metrics
+- tool-flow metrics
+- average tool-call counts
+- NPM1 accuracy summaries
 
-## Suggested Reporting Text
-
-We evaluated each VLM-agent run using compact outcome-level and trajectory-level
-metrics. Diagnostic performance was measured by accuracy and AML/Normal
-confusion counts. Task reliability was measured by completion success rate. ROI
-behavior was measured by the fraction of slides with five accepted ROIs and by
-flow pass rate, which requires a completed, parseable, five-ROI trajectory with
-bounded tool-flow quality. Efficiency was summarized with average tool calls
-and runtime among successful or stable runs. NPM1 accuracy was reported for AML
-slides with available NPM1 ground truth.
+Those metrics may still be derivable from raw artifacts such as `state.json`,
+but they are not part of the current `export_batch_results_stats.py` output.

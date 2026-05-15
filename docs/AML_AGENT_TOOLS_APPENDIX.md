@@ -29,7 +29,9 @@ the morphology-only reporting rules.
 | `wsi_save_tile_norm` | — | ✓ | ✓ | — |
 | `wsi_rebuild_reference_index` | — | — | ✓ | — |
 
-`WSIAmlDiagnosisAgent` has no tools — it runs as a direct chat-completion call. It accepts either a `roi_collection.json` file directly or an output slide folder containing one.
+`WSIAmlDiagnosisAgent` has no tools — it runs as a direct chat-completion call.
+It accepts a `roi_collection.json` file directly, an output slide folder
+containing one, or a single exported ROI image path.
 
 ## Tool Groups
 
@@ -76,7 +78,8 @@ the field, the VLM should inspect the local tissue and select an interpretable
 subregion.
 
 Expected use: move quickly between promising regions. Repeated calls without
-inspection indicate candidate hopping rather than evidence acquisition.
+inspection indicate candidate hopping rather than evidence acquisition. A strong
+opened region may yield more than one kept ROI before the agent moves on.
 
 ### `wsi_zoom_current_norm`
 
@@ -113,7 +116,8 @@ count.
 
 Expected use: accept a readable local field containing interpretable nucleated
 marrow cells. The ROI should be chosen for morphology, not merely because it is
-dark or highly stained.
+dark or highly stained. In AML modes, each accepted ROI is checkpointed to disk
+immediately.
 
 ### `wsi_mark_candidate`
 
@@ -132,6 +136,7 @@ conservative near the target ROI count to avoid endless replacement of
 borderline but interpretable fields.
 
 Expected use: immediately after marking, and only for clear failures.
+Discarding also refreshes the AML ROI checkpoint on disk.
 
 ### `wsi_get_view_info`
 
@@ -167,8 +172,9 @@ The preferred AML workflow is:
 2. wsi_open_candidate(rank)
 3. inspect the opened field with limited zoom or pan if needed
 4. wsi_mark_roi_norm
-5. repeat steps 2-4 until the target number of accepted ROIs is reached
-6. produce the final morphology report
+5. optionally keep another ROI from a different sub-area of the same candidate region
+6. repeat until the target number of accepted ROIs is reached
+7. produce the final morphology report
 ```
 
 An ideal run is compact:
@@ -178,20 +184,18 @@ overview
 open candidate 1
 local inspect
 mark ROI 1
+local inspect another sub-area
+mark ROI 2
 
 open candidate 2
 local inspect
-mark ROI 2
+mark ROI 3
 
 open candidate 3
 local inspect
-mark ROI 3
-
-open candidate 4
-local inspect
 mark ROI 4
 
-open candidate 5
+open candidate 4
 local inspect
 mark ROI 5
 
@@ -203,7 +207,8 @@ to one of three decisions:
 
 ```text
 readable cellular tissue -> mark ROI
-borderline but locally improvable -> zoom or pan once, then decide
+strong region with another distinct readable pocket -> mark another ROI in the same candidate region
+borderline but locally improvable -> zoom or pan once or twice, then decide
 unreadable or non-diagnostic -> open the next candidate
 ```
 
@@ -227,7 +232,8 @@ The tools enforce a bounded evidence-acquisition policy:
 2. Candidate regions are treated as search fields, not automatic diagnoses.
 3. Local search is deliberately limited to prevent over-exploration.
 4. Duplicate or near-duplicate ROI evidence is suppressed.
-5. The run should stop once the target number of accepted ROIs is reached.
+5. The run should stop once the target number of accepted ROIs is reached; the
+   hard cap is a final stop if it differs from the target.
 6. Final AML classification is based only on accepted ROI morphology.
 
 ## Failure Modes

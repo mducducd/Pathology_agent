@@ -25,7 +25,9 @@ Dynamic runtime values are shown with braces, for example `{kept_roi_count}` or 
 
 ### 1.2 Diagnosis
 
-`DEFAULT_AML_DIAGNOSIS_PROMPT` is used by `WSIAmlDiagnosisAgent` for Stage 2. It receives only ROI images and returns strict JSON.
+`DEFAULT_AML_DIAGNOSIS_PROMPT` is used by `WSIAmlDiagnosisAgent` for Stage 2.
+The active runtime supplies ROI images with simple ROI-id text labels and
+expects strict JSON back.
 
 ### 1.3 Legacy Prompt Removal
 

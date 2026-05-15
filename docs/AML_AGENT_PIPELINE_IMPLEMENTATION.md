@@ -10,9 +10,11 @@ The key design idea is not to ask the VLM to scan an entire gigapixel WSI
 unaided. The backend first builds a compact, morphology-aware candidate map from
 cheap stain heuristics, foundation-model embeddings, and curated ROI-quality
 references. Stage-1 (`WSIAmlRoiCollectorAgent`) acts like a pathologist using a
-digital slide viewer: it jumps to promising regions, inspects locally, and keeps
-exactly 5 interpretable ROIs. Stage-2 (`WSIAmlDiagnosisAgent`) receives only the
-ROI images — completely blind to filenames and metadata — and returns a strict
+digital slide viewer: it jumps to promising regions, inspects locally, and
+collects ROIs until the configured AML target is reached (default 5, bounded by
+`max_accepted_rois`). Stage-2 (`WSIAmlDiagnosisAgent`) receives the exported ROI
+images with lightweight ROI-id text labels, but without slide filename,
+coordinates, candidate ranks, or other slide metadata, and returns a strict
 JSON morphology report.
 
 ## Source Map
@@ -45,7 +47,8 @@ Tools: `wsi_get_overview_view`, `wsi_zoom_current_norm`, `wsi_zoom_full_norm`,
 `wsi_pan_current`, `wsi_get_view_info`, `wsi_open_candidate`, `wsi_mark_candidate`,
 `wsi_mark_roi_norm`, `wsi_discard_last_roi`
 
-Goal: Mark exactly 5 high-quality, distinct high-power ROIs. Produces
+Goal: Collect representative, high-quality high-power ROIs toward the
+configured target (default 5; hard-bounded by `max_accepted_rois`). Produces
 `roi_collection.json` and `images/roi_N.jpg` for the diagnosis stage.
 
 ### WSIAmlDiagnosisAgent (Stage 2 — `aml_diagnosis`)
@@ -54,10 +57,10 @@ Instructions: `DEFAULT_AML_DIAGNOSIS_PROMPT`
 
 Tools: none — direct chat-completion call at temperature 0.0.
 
-Goal: Receive ROI images (blind — no filenames or metadata) and return a strict
-JSON object with per-ROI blast ranges, global blast range, `final_decision`
-(`Normal marrow` or `Acute leukemia`), confidence, and NPM1 prediction when AML
-is established.
+Goal: Receive ROI images plus simple ROI-id text labels, but no slide filename
+or spatial metadata, and return a strict JSON object with per-ROI blast ranges,
+global blast range, `final_decision` (`Normal marrow` or `Acute leukemia`),
+confidence, and NPM1 prediction when AML is established.
 
 ### aml_auto (full two-stage pipeline)
 
@@ -107,27 +110,39 @@ Chains Stage 1 then Stage 2: `_run_aml_roi()` → `roi_collection.json` →
    saturated dark-blue flood artifacts, and guides the VLM toward the next
    unattempted candidate.
 
-10. The agent repeats until 5 ROIs are accepted. Navigation guards stop further
-    tool calls once the hard cap is reached.
+10. In AML mode, every accepted or discarded ROI is checkpointed immediately to
+    disk via `persist_current_aml_roi_collection()`, so the live
+    `roi_collection.json` stays in sync with `state._roi_marks`.
 
-11. `_run_aml_roi()` builds `roi_collection.json` from `state._roi_marks`,
+11. The agent repeats until `target_accepted_rois` is reached or the hard cap
+    is hit. Navigation guards stop further tool calls once finalization is
+    required.
+
+12. `_run_aml_roi()` rebuilds `roi_collection.json` from `state._roi_marks`,
     copies ROI images and overlay images into `<case_output_dir>/images/`, and
     writes a navigation report.
 
+13. If `aml_auto` hits the turn budget after some ROIs were already accepted,
+    `_run_aml_auto()` loads the saved ROI-collection checkpoint and still
+    continues into Stage 2 instead of discarding the collected evidence.
+
 ### Stage 2 — Diagnosis
 
-12. `_run_aml_diagnosis()` loads the `roi_collection.json` produced in Stage 1.
+14. `_run_aml_diagnosis()` loads the `roi_collection.json` produced in Stage 1.
     State is re-initialized minimally (no slide loaded).
 
-13. Each accepted ROI image is encoded as a base64 data URL. The diagnosis agent
-    receives only the encoded images — no filenames, no metadata, no ROI labels.
+15. Each accepted ROI image is encoded as a base64 data URL. The active
+    diagnosis path prefixes the images with simple `ROI #<id>` text labels, but
+    does not pass slide filename, ROI coordinates, candidate ranks, or other
+    navigation metadata.
 
-14. A single chat-completion call at temperature 0.0 returns the strict JSON
+16. A single chat-completion call at temperature 0.0 returns the strict JSON
     diagnosis. `_extract_json_from_text()` strips any prose wrapper.
 
-15. `write_markdown_report()` writes `report.md` and `report.txt`. CLI wrappers
-    also export `summary.json`, `report.json`, `final_output.txt`, ROI images,
-    and state.
+17. `write_markdown_report()` writes `report.md` and `report.txt`. CLI wrappers
+    also export `summary.json`, `report.json`, `final_output.txt`,
+    `roi_collection.json`, ROI images, and state. Successful `aml_diagnosis`
+    runs also write a `diagnosis_done` sentinel file.
 
 ## Methodology Overview
 
@@ -141,7 +156,7 @@ WSI input
   -> tile split at fixed physical size
   -> raw tile texture/stain/cellularity filtering
   -> foundation-model embeddings
-  -> curated good/bad reference retrieval
+  -> curated ROI-quality reference retrieval
   -> per-view top-K ROI candidates
   -> bounded VLM navigation and ROI marking
   -> strict morphology-only AML JSON report
@@ -170,7 +185,7 @@ section.
 | `P` | candidate tile set |
 | `p_i` | tile `i` |
 | `z_i = f_theta(p_i)` | L2-normalized embedding for tile `p_i` |
-| `R_pos`, `R_neg` | curated good and bad ROI-quality reference tiles |
+| `R_pos`, `R_neg` | curated good and optional bad ROI-quality reference tiles |
 | `D_i` | dark/cellularity score for tile `p_i` |
 | `Q_i` | deterministic tile quality score |
 | `M_i` | good-minus-bad reference margin |
@@ -702,6 +717,10 @@ weighted: aggregate = sum_i soft_weight_i * s_i
           soft_weight_i = exp(-i / 3) / sum_j exp(-j / 3)
 ```
 
+When `AML_DISABLE_BAD_REFERENCES` is enabled, the live ranker runs in
+good-reference-only mode and the bad-reference terms above are omitted from the
+tile-level quality decision.
+
 Candidate quality hints are derived from margin, top-1 good/bad similarities,
 and `bad_likelihood`:
 
@@ -951,7 +970,7 @@ stage.
 | --- | --- |
 | Tile cache ZIP | Persist selected image tiles for reuse |
 | Feature cache NPZ | Persist tile embeddings, coordinates, and dark ROI scores |
-| Reference embedding cache | Persist good/bad reference embeddings |
+| Reference embedding cache | Persist reference embeddings |
 | Reference HNSW cache | Persist HNSW index for reference lookup |
 | ROI index pickle | Persist full slide ROI ranker index |
 

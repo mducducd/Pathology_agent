@@ -18,6 +18,48 @@ The project combines deterministic slide reduction, embedding-based candidate re
 ![Workbench Demo](static/assets/demo.png)
 *Web workbench run view and result flow.*
 
+## Performance Benchmarks
+
+Evaluated on a private dataset of 372 bone marrow WSIs. VLMs were run in official FP8 quantized variants where available.
+
+### VLM Performance (ROI Collection)
+
+Results are averaged across available feature extractors. `roi5 %` is the percentage of runs where the model successfully reached the 5-ROI target.
+
+| Model | Success % | roi5 % | Avg. tool calls |
+|---|---:|---:|---:|
+| [Gemma-4-31B-it](https://huggingface.co/google/gemma-4-31B-it) | 100.00 | 71.30 | 21.24 |
+| [Qwen3.5-397B-A17B-FP8](https://huggingface.co/Qwen/Qwen3.5-397B-A17B-FP8) | 99.66 | 99.26 | 25.07 |
+| [DeepSeek-V4](https://huggingface.co/models?search=DeepSeek-V4) | 100.00 | 99.73 | 27.10 |
+| [GLM-4.6V-FP8](https://huggingface.co/zai-org/GLM-4.6V-FP8) | 92.14 | 95.63 | 26.28 |
+| [GPT-OSS-120B](https://huggingface.co/models?search=GPT-OSS-120B) | 99.63 | 23.99 | 37.36 |
+
+### AML Diagnosis Results
+
+Gemma-4-31B-it and Qwen3.5-397B-A17B-FP8 were the main diagnosis models explored here: Gemma-4-31B-it showed stronger AML-morphology specificity, while Qwen3.5-397B-A17B-FP8 was more general in blood-cell image understanding.
+
+Prompt wording has some effect, but the results are not dominated by prompt changes alone.
+
+<table>
+<thead>
+<tr>
+<th><sub>Model</sub></th><th><sub>Extractor</sub></th><th><sub>Acc %</sub></th><th><sub>TP/FN</sub></th><th><sub>TN/FP</sub></th><th><sub>NPM1 %</sub></th><th><sub>HistSim</sub></th>
+</tr>
+</thead>
+<tbody>
+<tr><td><sub><a href="https://huggingface.co/google/gemma-4-31B-it">Gemma-4-31B-it</a></sub></td><td><sub>DinoBloom</sub></td><td align="right"><sub>70.16</sub></td><td align="right"><sub>234/85</sub></td><td align="right"><sub>27/26</sub></td><td align="right"><sub>74.43</sub></td><td align="right"><sub>0.889</sub></td></tr>
+<tr><td><sub><a href="https://huggingface.co/google/gemma-4-31B-it">Gemma-4-31B-it</a></sub></td><td><sub>H-optimus-1</sub></td><td align="right"><sub>72.85</sub></td><td align="right"><sub>246/73</sub></td><td align="right"><sub>25/28</sub></td><td align="right"><sub>71.74</sub></td><td align="right"><sub>0.897</sub></td></tr>
+<tr><td><sub><a href="https://huggingface.co/google/gemma-4-31B-it">Gemma-4-31B-it</a></sub></td><td><sub>UNI2</sub></td><td align="right"><sub>78.23</sub></td><td align="right"><sub>269/50</sub></td><td align="right"><sub>22/31</sub></td><td align="right"><sub>73.02</sub></td><td align="right"><sub>0.919</sub></td></tr>
+<tr><td><sub><a href="https://huggingface.co/google/gemma-4-31B-it">Gemma-4-31B-it</a></sub></td><td><sub>Virchow2</sub></td><td align="right"><sub>77.96</sub></td><td align="right"><sub>270/49</sub></td><td align="right"><sub>20/33</sub></td><td align="right"><sub>72.00</sub></td><td align="right"><sub>0.907</sub></td></tr>
+<tr><td><sub><a href="https://huggingface.co/Qwen/Qwen3.5-397B-A17B-FP8">Qwen3.5-397B-A17B-FP8</a></sub></td><td><sub>DinoBloom</sub></td><td align="right"><sub>60.48</sub></td><td align="right"><sub>177/142</sub></td><td align="right"><sub>48/5</sub></td><td align="right"><sub>65.67</sub></td><td align="right"><sub>0.885</sub></td></tr>
+<tr><td><sub><a href="https://huggingface.co/Qwen/Qwen3.5-397B-A17B-FP8">Qwen3.5-397B-A17B-FP8</a></sub></td><td><sub>H-optimus-1</sub></td><td align="right"><sub>61.02</sub></td><td align="right"><sub>182/137</sub></td><td align="right"><sub>45/8</sub></td><td align="right"><sub>65.96</sub></td><td align="right"><sub>0.896</sub></td></tr>
+<tr><td><sub><a href="https://huggingface.co/Qwen/Qwen3.5-397B-A17B-FP8">Qwen3.5-397B-A17B-FP8</a></sub></td><td><sub>UNI2</sub></td><td align="right"><sub>69.09</sub></td><td align="right"><sub>215/104</sub></td><td align="right"><sub>42/11</sub></td><td align="right"><sub>64.15</sub></td><td align="right"><sub>0.915</sub></td></tr>
+<tr><td><sub><a href="https://huggingface.co/Qwen/Qwen3.5-397B-A17B-FP8">Qwen3.5-397B-A17B-FP8</a></sub></td><td><sub>Virchow2</sub></td><td align="right"><sub>66.13</sub></td><td align="right"><sub>207/112</sub></td><td align="right"><sub>39/14</sub></td><td align="right"><sub>67.88</sub></td><td align="right"><sub>0.906</sub></td></tr>
+</tbody>
+</table>
+
+`HistSim` measures histogram similarity between clinician-selected ROIs and agent-selected ROIs.
+
 ## Quick Start
 
 ### Install
@@ -139,7 +181,7 @@ Tile filter modes:
 
 ### AML ROI Collector
 
-`aml_roi` is the evidence-acquisition stage. It navigates the slide, opens ranked candidates, and marks exactly 5 acceptable high-power ROIs for downstream diagnosis.
+`aml_roi` is the evidence-acquisition stage. It navigates the slide, opens ranked candidates, and marks acceptable high-power ROIs toward the configured target of 5 for downstream diagnosis.
 
 Outputs include:
 
@@ -170,41 +212,6 @@ Main entrypoints:
 - `evaluate/run_batch_aml_suite.sh`: model/extractor suite
 - `evaluate/preextract_hybrid_cache.py`: feature-cache prewarm
 - `evaluate/preextract_hybrid_cache_suite.sh`: multi-extractor prewarm
-
-## Performance Benchmarks
-
-Evaluated on a private dataset of 372 bone marrow WSIs. VLMs were run in official FP8 quantized variants where available.
-
-### VLM Performance (ROI Collection)
-
-Results are averaged across available feature extractors. `roi5 %` is the percentage of runs where the model successfully reached the 5-ROI target.
-
-| Model | Success % | roi5 % | Avg. tool calls |
-|---|---:|---:|---:|
-| [gemma-4-31B](https://huggingface.co/google/gemma-4-31B-it) | 100.00 | 71.30 | 21.24 |
-| [Qwen3.5-397B](https://huggingface.co/Qwen/Qwen3.5-397B-A17B-FP8) | 99.66 | 99.26 | 25.07 |
-| [DeepSeek-V4](https://huggingface.co/models?search=DeepSeek-V4) | 100.00 | 99.73 | 27.10 |
-| [GLM-4.6V](https://huggingface.co/zai-org/GLM-4.6V-FP8) | 92.14 | 95.63 | 26.28 |
-| [GPT-OSS-120B](https://huggingface.co/models?search=GPT-OSS-120B) | 99.63 | 23.99 | 37.36 |
-
-### AML Diagnosis Results
-
-Gemma-4 and Qwen3.5 were the main diagnosis models explored here: Gemma-4 showed stronger AML-morphology specificity, while Qwen3.5 was more general in blood-cell image understanding.
-
-Prompt wording has some effect, but the results are not dominated by prompt changes alone.
-
-| Model | Ext | Acc % | TP | FN | TN | FP | NPM1 % | HistSim |
-|---|---|---:|---:|---:|---:|---:|---:|---:|
-| [gemma-4-31B](https://huggingface.co/google/gemma-4-31B-it) | Dino | 70.16 | 234 | 85 | 27 | 26 | 74.43 | 0.889 |
-| [gemma-4-31B](https://huggingface.co/google/gemma-4-31B-it) | H-opt | 72.85 | 246 | 73 | 25 | 28 | 71.74 | 0.897 |
-| [gemma-4-31B](https://huggingface.co/google/gemma-4-31B-it) | UNI2 | 78.23 | 269 | 50 | 22 | 31 | 73.02 | 0.919 |
-| [gemma-4-31B](https://huggingface.co/google/gemma-4-31B-it) | Vir2 | 77.96 | 270 | 49 | 20 | 33 | 72.00 | 0.907 |
-| [Qwen3.5-397B](https://huggingface.co/Qwen/Qwen3.5-397B-A17B-FP8) | Dino | 60.48 | 177 | 142 | 48 | 5 | 65.67 | 0.885 |
-| [Qwen3.5-397B](https://huggingface.co/Qwen/Qwen3.5-397B-A17B-FP8) | H-opt | 61.02 | 182 | 137 | 45 | 8 | 65.96 | 0.896 |
-| [Qwen3.5-397B](https://huggingface.co/Qwen/Qwen3.5-397B-A17B-FP8) | UNI2 | 69.09 | 215 | 104 | 42 | 11 | 64.15 | 0.915 |
-| [Qwen3.5-397B](https://huggingface.co/Qwen/Qwen3.5-397B-A17B-FP8) | Vir2 | 66.13 | 207 | 112 | 39 | 14 | 67.88 | 0.906 |
-
-`HistSim` measures histogram similarity between clinician-selected ROIs and agent-selected ROIs.
 
 ## Reference Embeddings
 

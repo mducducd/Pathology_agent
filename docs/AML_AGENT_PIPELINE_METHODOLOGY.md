@@ -43,7 +43,7 @@ WSI input
   -> fixed-physical-size tile extraction
   -> deterministic tile quality filtering
   -> foundation-model embedding extraction
-  -> curated good/bad ROI-quality retrieval
+  -> curated ROI-quality retrieval
   -> per-view top-K candidate ranking
   -> bounded VLM navigation and ROI marking
   -> morphology-only AML decision report
@@ -66,7 +66,7 @@ burden, and synthesizing the final morphology report.
 | $\mathcal{P} = \{p_i\}_{i=1}^{n}$ | set of candidate tiles |
 | $z_i = \mathrm{norm}_2(f_\theta(p_i))$ | L2-normalized embedding for tile $p_i$ |
 | $\mathcal{R}^{+}$ | curated good ROI-quality reference tiles |
-| $\mathcal{R}^{-}$ | curated bad ROI-quality reference tiles |
+| $\mathcal{R}^{-}$ | curated bad ROI-quality reference tiles when enabled |
 | $D_i$ | dark/cellularity score for tile $p_i$ |
 | $Q_i$ | deterministic tile quality score for $p_i$ |
 | $G_i$ | aggregated similarity from $p_i$ to good references |
@@ -740,8 +740,9 @@ fixed target. The model should select a readable high-cellularity field inside
 the opened view, not blindly mark the candidate center. Guardrails enforce an
 overview-first workflow, discourage repeated same-region navigation, warn on
 low-tissue fields, prevent duplicate ROIs, and require finalization after the
-ROI target or cap is reached. The default AML setting uses a target of five
-accepted ROIs and a hard cap of five accepted ROIs.
+ROI target or cap is reached. The runtime exposes `target_accepted_rois` and
+`max_accepted_rois` as configuration parameters; the tuned AML defaults are 5
+and 5 respectively.
 
 ## ROI Marking And Evidence Capture
 
@@ -795,6 +796,11 @@ with rejection when:
 $$
 \mathrm{mean}(\mathbb{1}_{\mathrm{flood}}) > 0.30 .
 $$
+
+In AML modes, accepted and discarded ROI changes are checkpointed immediately to
+`roi_collection.json` together with copied ROI images. This allows
+`aml_auto` to continue into diagnosis from the saved collection if ROI
+acquisition later terminates on the turn budget.
 
 ## Diagnostic Decision Rule
 
