@@ -1249,7 +1249,7 @@
 
   function clearDarkRegions() {
     setHidden(darkImg, true);
-    darkImg.src = "";
+    darkImg.removeAttribute("src");
     darkMaskMode = false;
     darkBoxes = [];
     const ctx = darkCanvas.getContext("2d");
@@ -2053,7 +2053,7 @@
     errorText.textContent = "";
 
     setHidden(overviewImg, true);
-    overviewImg.src = "";
+    overviewImg.removeAttribute("src");
     baseOverviewImageUrl = "";
     setOverviewEmptyState(OVERVIEW_EMPTY_TEXT);
     overviewCacheState = null;
@@ -2064,6 +2064,7 @@
       ctx.clearRect(0, 0, overviewCanvas.width, overviewCanvas.height);
     }
 
+    darkRegionsLoaded = false;
     clearDarkRegions();
 
     setHidden(finalSection, true);
@@ -2071,16 +2072,15 @@
     setReasoningContent("");
     reportLink.textContent = "";
     clearElement(stepsEl);
-    clearElement(roisEl);
+    // Preserve the static .rois-empty-hint placeholder so the empty state can
+    // reappear; only remove dynamic ROI items and the live preview node.
+    for (const node of Array.from(roisEl.querySelectorAll(".roi-item, #roi-live-item"))) {
+      node.remove();
+    }
     roiListPinnedToBottom = true;
 
     lastRenderedStep = 0;
     lastRenderedRoi = 0;
-    darkRegionsLoaded = false;
-    // Keep dark regions enabled state, just reset loaded state
-    if (darkRegionsEnabled) {
-      clearDarkRegions();
-    }
   }
 
   function appendLogItem(listEl, title, subText, imgUrl) {
@@ -3140,7 +3140,7 @@
     } catch (e) {
       darkRegionsLoaded = false;
       setHidden(darkImg, true);
-      darkImg.src = "";
+      darkImg.removeAttribute("src");
       darkMaskMode = false;
       applyOverviewDisplaySource();
     }
