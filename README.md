@@ -15,7 +15,7 @@ The project combines deterministic slide reduction, embedding-based candidate re
 ![Overview](static/assets/overview.png)
 *System overview and WSI workflow.*
 
-![Workbench Demo](static/assets/demo.png)
+<video src="https://github.com/mducducd/Pathology_agent/raw/main/static/assets/aml_agent_demo.mp4" controls width="100%"></video>
 *Web workbench run view and result flow.*
 
 ## Performance Benchmarks
@@ -24,7 +24,7 @@ Evaluated on a private dataset of 372 bone marrow WSIs. VLMs were run in officia
 
 ### VLM Performance (ROI Collection)
 
-Results are averaged across available feature extractors. `roi5 %` is the percentage of runs where the model successfully reached the 5-ROI target.
+Results are averaged across available feature extractors. `roi5 %` is the percentage of runs where the model successfully reached the 5-ROI target in our task.
 
 | Model | Success % | roi5 % | Avg. tool calls |
 |---|---:|---:|---:|
