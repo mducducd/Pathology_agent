@@ -81,10 +81,14 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("images", nargs="*", help="Image paths to encode")
     parser.add_argument("--model", default=None)
-    parser.add_argument("--base-url", default="http://pluto/v1")
-    parser.add_argument("--api-key", default="sk-y4X1YI9feTF_7KqflLuPPg")
+    parser.add_argument("--base-url", default=os.environ.get("OPENAI_API_BASE", "http://pluto/v1"))
+    parser.add_argument("--api-key", default=os.environ.get("OPENAI_API_KEY"))
     parser.add_argument("--prompt", default=DEFAULT_AML_DIAGNOSIS_PROMPT)
     args = parser.parse_args()
+
+    if args.model and not args.api_key:
+        print("ERROR: --api-key not provided and OPENAI_API_KEY env var not set", file=sys.stderr)
+        sys.exit(1)
 
     if not args.images:
         print("Usage: python image_utils.py image1.jpg [--model gemma-4-31B-it]")
@@ -125,76 +129,3 @@ if __name__ == "__main__":
             ],
         )
         print(f"  model reply: {response.choices[0].message.content}")
-
-# EXP_NAME="gemma-4-31B-it_DinoBloom-G_224px"
-
-# bash evaluate/run_batch_aml_diagnosis.sh \
-#   --exp-path "/mnt/bulk-neptune/nguyenmin/stamp-dev/experiments/Narmin/exp_diagnosis/${EXP_NAME}" \
-#   --output-root "/mnt/bulk-neptune/nguyenmin/stamp-dev/experiments/Narmin/exp_diagnosis" \
-#   --model "gemma-4-31B-it" \
-#   --chunks-dir "/mnt/bulk-neptune/nguyenmin/stamp-dev/experiments/Narmin/chunks4" \
-#   --chunk-index 3 \
-#   --resume
-
-#   bash evaluate/run_batch_aml_diagnosis.sh   --exp-path "/mnt/bulk-neptune/nguyenmin/stamp-dev/experiments/Narmin/exp_290425_aml_suite"   --output-root "/mnt/bulk-neptune/nguyenmin/stamp-dev/experiments/Narmin/exp_diagnosis_090525"   --model "gemma-4-31B-it"   --subdir-filter "gemma-4-31B-it_UNI2_224px,gemma-4-31B-it_Virchow2_224px,gemma-4-31B-it_H-optimus-1_224px,gemma-4-31B-it_DinoBloom-G_224px"   --parallel   --resume
-
-# bash /mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/evaluate/run_batch_aml_diagnosis.sh \
-#   --exp-path "/mnt/bulk-neptune/nguyenmin/stamp-dev/experiments/Narmin/exp_diagnosis" \
-#   --output-root "/mnt/bulk-neptune/nguyenmin/stamp-dev/experiments/Narmin/aml_diagnosis_100525" \
-#   --model "Qwen3.5-397B-A17B-FP8" \
-#   --subdir-filter "Qwen3.5-397B-A17B-FP8_UNI2_224px" \
-#   --chunks-dir "/mnt/bulk-neptune/nguyenmin/stamp-dev/experiments/Narmin/chunks" \
-#   --chunk-index 1 \
-#   --resume
-
-
-# bash /mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/evaluate/run_batch_aml_diagnosis.sh \
-#   --exp-path "/mnt/bulk-neptune/nguyenmin/stamp-dev/experiments/Narmin/exp_290425_aml_suite" \
-#   --output-root "/mnt/bulk-neptune/nguyenmin/stamp-dev/experiments/Narmin/aml_diagnosis_100525_3" \
-#   --model "GLM-4.6V-FP8" \
-#   --subdir-filter "GLM-4.6V-FP8_UNI2_224px,GLM-4.6V-FP8_H-optimus-1_224px,GLM-4.6V-FP8_Virchow2_224px,GLM-4.6V-FP8_DinoBloom-G_224px" \
-#   --parallel \
-#   --resume
-
-#   bash /mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/evaluate/run_batch_aml_diagnosis.sh \
-#   --exp-path "/mnt/bulk-neptune/nguyenmin/stamp-dev/experiments/Narmin/exp_diagnosis" \
-#   --output-root "/mnt/bulk-neptune/nguyenmin/stamp-dev/experiments/Narmin/aml_diagnosis_100525_1" \
-#   --model "Qwen3.5-397B-A17B-FP8" \
-#   --subdir-filter "Qwen3.5-397B-A17B-FP8_UNI2_224px,Qwen3.5-397B-A17B-FP8_H-optimus-1_224px,Qwen3.5-397B-A17B-FP8_Virchow2_224px,Qwen3.5-397B-A17B-FP8_DinoBloom-G_224px" \
-#   --parallel \
-#   --resume
-
-#   tmux new-session -d -s qwen 'bash /mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/evaluate/run_batch_aml_diagnosis.sh \
-#   --exp-path "/mnt/bulk-neptune/nguyenmin/stamp-dev/experiments/Narmin/exp_diagnosis" \
-#   --output-root "/mnt/bulk-neptune/nguyenmin/stamp-dev/experiments/Narmin/aml_diagnosis_100525_1" \
-#   --model "Qwen3.5-397B-A17B-FP8" \
-#   --subdir-filter "Qwen3.5-397B-A17B-FP8_UNI2_224px,Qwen3.5-397B-A17B-FP8_H-optimus-1_224px,Qwen3.5-397B-A17B-FP8_Virchow2_224px,Qwen3.5-397B-A17B-FP8_DinoBloom-G_224px" \
-#   --parallel \
-#   --resume'
-
-
-# CSV="/mnt/bulk-neptune/nguyenmin/stamp-dev/experiments/Narmin/AML_HEALTHY_SLIDE_TEST.csv"
-# SLIDES="/mnt/copernicus3/PATHOLOGY/others/private/haemadata/ALL_WSIs"
-# OUT_ROOT="/mnt/bulk-neptune/nguyenmin/stamp-dev/experiments/Narmin/exp_diagnosis"
-# SCRIPT="/mnt/bulk-neptune/nguyenmin/stamp-dev/Slide-Agent/temp/Pathology_agent/evaluate/run_batch_aml.sh"
-
-# for ext in uni2 virchow2 h_optimus_1 dinobloom_giant; do
-#   case "$ext" in
-#     dinobloom_giant) tag="DinoBloom-G" ;;
-#   esac
-
-#   bash "$SCRIPT" \
-#     --csv "$CSV" \
-#     --slides-root "$SLIDES" \
-#     --output-dir "${OUT_ROOT}/gemma-4-31B-it_${tag}_224px" \
-#     --experiment-root "$OUT_ROOT" \
-#     --model "gemma-4-31B-it" \
-#     --extractor "$ext" \
-#     --tile-filter hybrid \
-#     --tile-size-px 224 \
-#     --batch-size 512 \
-#     --roi-size-px 2048 \
-#     --default-mpp-um 0.159 \
-#     --agent aml_roi \
-#     --resume
-# done
