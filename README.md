@@ -15,7 +15,7 @@ The project combines deterministic slide reduction, embedding-based candidate re
 ![Overview](static/assets/overview.png)
 *System overview and WSI workflow.*
 
-<video src="https://github.com/mducducd/Pathology_agent/raw/main/static/assets/aml_agent_demo.mp4" controls width="100%"></video>
+![Workbench Demo](static/assets/aml_agent_demo.gif)
 *Web workbench run view and result flow.*
 
 ## Performance Benchmarks
