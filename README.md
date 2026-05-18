@@ -12,11 +12,15 @@ The project combines deterministic slide reduction, embedding-based candidate re
 
 ## Project Visuals
 
-![Overview](static/assets/overview.png)
-*System overview and WSI workflow.*
+<p align="center">
+  <img src="static/assets/overview.png" alt="Overview">
+  <br><em>System overview and WSI workflow.</em>
+</p>
 
-![Workbench Demo](static/assets/aml_agent_demo.gif)
-*Web workbench run view and result flow.*
+<p align="center">
+  <img src="static/assets/aml_agent_demo.gif" alt="Workbench Demo">
+  <br><em>Web workbench run view and result flow.</em>
+</p>
 
 ## Performance Benchmarks
 
